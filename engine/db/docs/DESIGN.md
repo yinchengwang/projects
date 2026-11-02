@@ -1232,9 +1232,9 @@ vindex  磁盘上的索引（checkpoint）  ← 可重建
 | **v0.9** | SPI 定稿 + 接线（blob 进 SQL） | blob 能被 SQL 扫；执行器无模态特判 | ✅ |
 | **v0.10** | 全局 latch（真并发） | 4 线程 × 500 行并发插入行数不丢；xid 不串号；崩溃恢复不丢已提交数据 | ✅ |
 | **v0.11** | 模态 2：图 | 10 万节点/100 万边，3 跳 p99 < 10ms | ✅ |
-| **v1.0** | 模态 3：向量（HNSW） | recall@10 对照 hnswlib 差 < 2 点 | |
-| **v1.1** | 向量化执行 + 规则 CBO | 扫描+过滤比火山模型快 ≥ 3 倍 | |
-| **v1.2** | 内核收尾（copy-out → 细粒度 latch → 页内 compact → checkpoint） | 细粒度 latch 吞吐 ≥ 大锁 2×（8:2 读写）；恢复时间只与 checkpoint 后日志量相关；碎片率 < 20% | |
+| **v1.0** | 模态 3：向量（HNSW） | recall@10 对照 hnswlib 差 < 2 点 | ✅ |
+| **v1.1** | 向量化执行 + 规则 CBO | 扫描+过滤比火山模型快 ≥ 3 倍 | ⚠️ 已完成（A2 未达标，实测 1.11×，SPI 批接口顺延到 v1.2 步骤 0） |
+| **v1.2** | 内核收尾（copy-out → 细粒度 latch → 页内 compact → checkpoint） | 细粒度 latch 吞吐 ≥ 大锁 2×（8:2 读写）；恢复时间只与 checkpoint 后日志量相关；碎片率 < 20% | 🚧 进行中（**步骤 0 已完成**：SPI 批接口落地，A9 达标 —— 扫描+过滤 5.52× ≥ 3×；步骤 1–7 待执行） |
 | **v1.3** | 模态 4：全文检索（Lucene segment） | 检索结果对照线性 BM25 全等；合并增量代价 O(N·log_f N) 可解释 | |
 | **v1.4** | 模态 5：地理空间（R-tree） | 窗口/KNN 对照暴力全等；1% 窗口 IO < 全扫 1/10 | |
 | **v1.5** | 模态 6：时序（Gorilla 压缩 + 分区） | 压缩解压全等；TTL 整分区回收；跨分区裁剪超集正确 | |
@@ -1416,6 +1416,11 @@ blob 的两张虚拟表接进了 SQL。详见 PLAN-v0.9.md。
 | 向量模态（列式存储 + HNSW） | `modalities/vector/{vstore,vindex,hnsw}.{h,c}` | ✅ | v1.0 步骤 2–4 |
 | 向量模态 AM 适配 | `modalities/vector/{vector_am,hnsw_am,vector_state}.{h,c}`（住在 modalities 而非 spi，见 PLAN §步骤 5） | ✅ | v1.0 步骤 5 |
 | 向量的公开 API | `db_vec.c` + `repl_vec.{h,c}`（REPL 的 VEC 命令） | ✅ | v1.0 步骤 5 |
+| v1.1 批处理执行 | `src/query/exec_batch.c` | ✅ | v1.1 |
+| v1.1 聚合执行 | `src/query/exec_agg.c` | ✅ | v1.1 |
+| v1.1 分组执行 | `src/query/exec_group.c` | ✅ | v1.1 |
+| v1.1 代价估算 | `src/query/exec_cost.c` | ✅ | v1.1 |
+| v1.1 统计信息 | `src/catalog/catalog_stats.c` | ✅ | v1.1 |
 | 全文模态 | `modalities/ft/{segment,dict,posting,bm25}.{h,c}` + `spi/ft_am.{h,c}` | | v1.3 |
 | 空间模态 | `modalities/geo/{rtree,zorder}.{h,c}` + `spi/geo_am.{h,c}` | | v1.4 |
 | 时序模态 | `modalities/ts/{partition,compress}.{h,c}` + `spi/ts_am.{h,c}` | | v1.5 |

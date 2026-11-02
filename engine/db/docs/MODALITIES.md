@@ -75,8 +75,8 @@ PLAN 保留版本时间线与分步执行计划，本文档保留机制设计与
 |---|---|---|---|---|---|---|---|---|
 | 0 | **关系** heap | PostgreSQL / SQLite | slotted page（变长记录） | 一个 tuple | **MVCC 版本链** | catalog 里的真表 | v0.1–v0.7 | ✅ 已落地 |
 | 1 | **blob** | S3 / MongoDB GridFS / Parquet chunk | 对象 → 帧 → 页（帧独占页） | 一帧 | **不可变对象**（xid=0） | `blob_frames` `blob_objects` | v0.8 | ✅ 已落地 |
-| 2 | **图** graph | Neo4j / NebulaGraph | 定长槽页（指针链） | 一个节点 / 一条边 | **锁 + WAL**（语句级） | `graph_nodes` `graph_edges` | v0.11 | 计划已定 |
-| 3 | **向量** vector | Milvus / Qdrant / Lance | **列式**向量页 | 一个向量 | **锁 + WAL**（语句级） | `vec_items` + `db_vec_knn` | v1.0 | 计划已定 |
+| 2 | **图** graph | Neo4j / NebulaGraph | 定长槽页（指针链） | 一个节点 / 一条边 | **锁 + WAL**（语句级） | `graph_nodes` `graph_edges` | v0.11 | ✅ 已落地 |
+| 3 | **向量** vector | Milvus / Qdrant / Lance | **列式**向量页 | 一个向量 | **锁 + WAL**（语句级） | `vec_items` + `db_vec_knn` | v1.0 | ✅ 已落地 |
 | 4 | **全文** ft | Elasticsearch / Lucene | **不可变 segment**（三页型） | 一个文档 | **锁 + WAL**（语句级） | `ft_docs` + `db_ft_search` | v1.3 | 计划已定 |
 | 5 | **空间** geo | PostGIS（GiST）/ R-tree | **MBR 嵌套树** | 一个几何对象 | **锁 + WAL**（语句级） | `geo_points` + `db_geo_window` | v1.4 | 计划已定 |
 | 6 | **时序** ts | InfluxDB / TimescaleDB | 活跃行式 → 封窗**列式压缩** | 一个数据点 | **锁 + WAL**（语句级） | `ts_partitions` + `db_ts_*` | v1.5 | 计划已定 |
@@ -209,7 +209,7 @@ slotted page（`storage/page.{h,c}`）：20B 页头 + 变长记录区 + 4B slot 
 | 项 | 内容 |
 |---|---|
 | **虚拟表** | 不用 —— 关系表在 catalog 里（持久化元数据），**不走注册表** |
-| **能力位** | `AM_CAP_SCAN \| INSERT \| UPDATE \| REMOVE \| PUSHDOWN \| VACUUM \| INDEX`（全给） |
+| **能力位** | `AM_CAP_SCAN \| INSERT \| UPDATE \| REMOVE \| PUSHDOWN \| VACUUM \| INDEX`（全给）+ `AM_CAP_BATCH_SCAN \| AM_CAP_BATCH_DECODE`（v1.2 步骤 0，见 §10.2.1） |
 | **下推** | `col op const` 全支持（值在 tuple 内，AM 逐行自滤 → 超集语义） |
 
 ### 2.6 与执行器的关系
@@ -674,13 +674,22 @@ Milvus / Qdrant / Weaviate / Lance。核心机制两条：**列式布局**（对
 
 ```
 向量页（PT_VEC_DATA）：
-  页头 8B（页类型 + 向量计数）
-  数据区：(4096-8) / (dim × 4) 个向量连续排列
+  页头 20B（页类型 + 向量计数）
+  数据区：(4096-20) / (dim × 4) 个向量连续排列
 
 标量页（PT_VEC_META 系列，普通定长槽页，同 gstore）：
   每行 = (row_id, label, ...) —— 向量的标量属性
   row_id = 全局序号，第 i 个向量 == 标量表第 i 行（列对齐）
 ```
+
+**页头为什么是 20B 而不是 8B**：8B 会**静默压坏两个公共字段** ——
+`H_LSN`（偏移 12，重放幂等判断读它）与 `H_CKSUM`（偏移 16，校验和固定写在这里）
+是**所有页类型共用**的，不归某个页类型自己支配。页头取 8B 的话，
+第 0 个向量从偏移 8 开始，前 10 个字节正好被 LSN 和校验和覆盖 ——
+**只坏每页的第一个向量，而且不报错**。
+所以页头取 20B（= `HDR_SIZE`），与 slotted page、定长槽页保持同一约定。
+代价：K 从 7.98 变成 7.96，对 128 维没有影响（都是 7）。
+完整论证见 `PLAN-v1.0.md` §3 步骤 2 的「① 规格里的"页头 8B"是错的，改成 20B」。
 
 ### 5.4 HNSW 实现要点
 
@@ -758,14 +767,20 @@ int (*knn)(IndexAM *am, const void *query, u32 k,
 ### 5.8 IO 可证
 
 复用 v0.9 的 `db_blob_page_reads` 模式 —— `db_vec_page_reads()` 前后对比：
-ANN 的页读数必须 **≪** 暴力扫描（10 万向量 = 1250 页）。
-验收标准：**ANN 查询页读数 < 暴力扫的 1/20**。
+ANN 的页读数必须 **≪** 暴力扫描（10 万向量 = 14286 页）。
+验收标准：**暴力扫一次 14286 页（10 万 ÷ 每页 7 个）vs ANN 查询 0 页**。
+分母为 0 时比值无意义，写成"1/999999"是自欺欺人；真实代价写在别处 ——
+**索引常驻约 93.3 MB**（向量副本 48.8 + 图结构上界 44.4）。
 
 ### 5.9 本版范围与不做项
 
 **做**：列式向量存储、HNSW（内存构建 + 落盘 + 增量插入）、
-`spi/vector_am.{h,c}` + `index_am` 的 `knn`、`vec_items` 虚拟表、
+`modalities/vector/vector_am.{h,c}` + `index_am` 的 `knn`、`vec_items` 虚拟表、
 过滤 + ANN 配合策略、recall 验收框架（暴力扫 GT + hnswlib 双重对照）。
+
+> **脚注**：AM 适配器住在 `modalities/vector/` 而不是 `spi/` ——
+> 分层规则（`spi/` 是 L3、`modalities/` 是 L4，L4 不得反向被依赖）逼得
+> 适配器必须住在 `modalities/vector/`；决策记录见 `PLAN-v1.0.md` §3 步骤 5 的判决①。
 
 | 不做 | 为什么 |
 |---|---|
@@ -1478,6 +1493,35 @@ IO 可证：**只取路径字段时不读全文** —— 页读计数对比（v0
 - `VACUUM` 只有真正有版本链的给（关系 + 文档）
 - `INDEX` 指的是"模态自带的加速结构"（btree 不算 —— 它是通用索引，另走 `IndexAM`）
 
+### 10.2.1 批能力（v1.2 步骤 0 新增）：可选加速，不是正确性前提
+
+| 模态 | `AM_CAP_BATCH_SCAN` | `AM_CAP_BATCH_DECODE` |
+|---|:-:|:-:|
+| 关系 heap | ✅ | ✅ |
+| blob | | |
+| 图 | | |
+| 向量 | | |
+| 全文 / 空间 / 时序 / 文档 | | （文档走 heap，随 heap） |
+
+**规律**：
+
+1. 批能力是**另一根轴**，与 §10.2 的表正交：
+   那张表管"这个模态支持什么**操作**"，批能力管"这个模态支持什么**访问形状**"。
+2. **指针为 NULL = 不支持**，执行器自动退回逐行路径 ——
+   所以没实现的模态**一行都不用改**（blob / graph / vector 各加两行 `= NULL`）。
+   这正是 v1.1 §1.2 担心被打脸的"那条底线"：能力协商本身是项目自有的机制。
+3. **heap 先做的理由**：它有 `RecLayout`（记录布局），批量解码不用每行重算布局；
+   其它模态的行格式各不相同，收益/复杂度比不划算。
+4. **契约**（`src/storage/batch.h`）：
+   - `batch_scan` 给一批原始行（`AmRowRef`：指针 + 长度 + RID）
+   - `batch_decode` 把一批行直接解进列数组（`AmBatchCol`），**不物化 `DbValue`**
+   - **行字节的有效期到下一次 `batch_scan` 调用为止** ——
+     heap 的批扫描是**零拷贝**的（行指针直接指向页内，页保持 pin），
+     换页时才释放上一页
+5. **零拷贝的安全边界**：目前靠全局 latch 兜着（整条语句期间不换页）。
+   v1.2 步骤 4 引入细粒度 latch 后，**解码窗口必须被页 latch 覆盖**，
+   否则页被换出就是悬空指针。这条已写进 `PLAN-v1.2.md` 步骤 4 的前置条件。
+
 ### 10.3 下推对照
 
 | 模态 | 什么能下推 | 什么**不能**下推 | 理由 |
@@ -1542,7 +1586,7 @@ IO 可证：**只取路径字段时不读全文** —— 页读计数对比（v0
 |---|---|---|
 | blob | 读整个对象比对 | 帧的随机访问等价于顺序读 |
 | 图 | 全边表扫 | 3 跳结果集全等 |
-| 向量 | **暴力扫**（GT） | recall@10 ≥ 0.95，且与 hnswlib 差 < 2 点 |
+| 向量 | **暴力扫**（GT） | 均匀随机分布：不低于 hnswlib 参照实现；聚簇分布：recall@10 ≥ 0.95；且不比 hnswlib 差 2 点以上 |
 | 全文 | 线性扫描 BM25 | top-k 结果与分数**全等** |
 | 空间 | 暴力扫 | 窗口 / KNN 结果**全等**（含边界点） |
 | 时序 | 未压缩数据 | 压缩解压**全等** + fuzz |
