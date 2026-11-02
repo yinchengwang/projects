@@ -23,10 +23,9 @@ cmake -B ../build/engineering -S . -DENABLE_COVERAGE=ON
 
 | 目录 | 说明 |
 |---|---|
-| `src/` | 库代码（db/, algo/, cpp/, redis/） |
+| `src/` | 库代码（db/, algo-prod/, cpp/, ds/, redis/, sdk/） |
 | `include/` | 公共头文件 |
 | `test/` | gtest 测试 |
-| `rag/` | RAG 系统 |
 | `sdk/` | 多语言 SDK |
 | `tools/` | 工程专用工具 |
 | `cmake/` | CMake 工具（ProjectUtils.cmake） |
@@ -35,7 +34,8 @@ cmake -B ../build/engineering -S . -DENABLE_COVERAGE=ON
 ## 资产归属
 
 `engine/` 是以下所有内容的唯一 canonical 位置：
-- 顶层 `rag/`、`sdk/`、Docker 文件——已迁入
+- 顶层 `sdk/`、Docker 文件——已迁入
+- RAG 系统——不在 `engine/rag/`，而在 `engine/src/db/executor/rag/`（随 db 执行器）
 - 根目录 `include/` 中工程头文件——已审计归入 `engine/include/`
 - 根目录 `test_data/` 中复用测试夹具——已迁入
 - 工程专用工具——从根 `tools/` 拆分迁入 `engine/tools/`

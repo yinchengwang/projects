@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **目标分支**：所有代码统一推送到 GitHub 远程仓库（`origin`）的 `main` 分支。
 2. **即时推送**：每次 commit 完成后，必须立即执行 `git push`，不得累积多个 commit 后批量推送。
-3. **远程仓库**：仅使用 `origin`（GitHub: `https://github.com/yinchengwang/book.git`），不再使用 Gitee。
+3. **远程仓库**：仅使用 `origin`（GitHub: `https://github.com/yinchengwang/projects.git`），不再使用 Gitee。
 
 ## 项目概述
 
@@ -63,10 +63,10 @@ C/C++ 算法与数据结构练习项目。CMake 3.20+、C11、C++17。无运行�
 
 ```
 engine/         # 工程轨道（默认构建）
-├── src/             # 库代码（db/algo/cpp/redis）
+├── src/             # 库代码（db/algo-prod/cpp/ds/redis/sdk）
+│   └── db/executor/rag/  # RAG 系统（在 db 执行器下，不在 engine 顶层）
 ├── include/         # 公共头文件
 ├── test/            # gtest 测试
-├── rag/             # RAG 系统
 ├── sdk/             # 多语言 SDK
 ├── tools/           # 工程专用工具
 ├── cmake/           # 工程 CMake 工具
@@ -362,4 +362,15 @@ log_level = 'info'
 
 ## 子项目规则
 
-本仓库含前端 monorepo 子项目 `frontend/`（Taro 3.6 + React 18 + Vite 5 的 H5 + 微信小程序双端学习追踪平台，统一管理 `knowledge_hub` / `games` / `digest` / `todo` 四个应用 + 共享 `common/`），其规则（项目铁律 / 工具位置 / OpenSpec 协作流程）与 C/C++ 主项目**不同**，详见 `frontend/CLAUDE.md`。
+前端已**原生化重写**（2026-10-22 完成）：原 Taro 3.6 + React 18 + Vite 5 的 `frontend/` monorepo
+已删除，对应的**零依赖、零构建**原生微信小程序（纯 JS + WXML + WXSS）迁至仓库根 `apps/`：
+
+| 应用 | 位置 |
+|---|---|
+| knowledge-hub（Reading Radar） | `apps/knowledge-hub/` |
+| games（游戏中心） | `apps/games/` |
+| programmer-workbench（DevBench） | `apps/programmer-workbench/` |
+| trip-log | `apps/trip-log/` |
+
+三者均无 pnpm / Taro / Vite 构建步骤，因此**没有独立的子项目规则文件**；
+C/C++ 主项目的构建纪律、产物目录规范、提交纪律同样适用于这些目录。
