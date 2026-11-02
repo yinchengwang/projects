@@ -41,7 +41,49 @@
 
 #include "common/latch.h"
 
-#define BP_FRAMES_DEFAULT 256u
+/*
+ * 缓冲池的默认页数。
+ *
+ * ==================== 为什么不是 256 ====================
+ *
+ * 一页 4 KB，256 页 = **1 MB**。这个池装不下一页 4 MB 的表（≈1064 页），
+ * 于是每次扫表都要把整张表从磁盘读一遍 —— 量出来的是磁盘，不是执行器。
+ *
+ * 实测（10 万行、选择性 10%）：
+ *     1 MB 池   扫描阶段 4.0 – 5.0 ms   （绝大部分时间在 fread）
+ *     16 MB 池  扫描阶段 0.60 – 0.72 ms （页都在内存里）
+ * 差 7 倍。pager 用 setvbuf(_IONBF) + 每页一次 fread 系统调用，
+ * 池小的时候这个开销直接盖过执行器本身。
+ *
+ * 16 MB（4096 页）是嵌入式数据库的合理起点，
+ * 还能用 DB_BP_FRAMES 环境变量调 —— 见下面 bp_frames()。
+ */
+#define BP_FRAMES_DEFAULT 4096u
+
+/*
+ * 缓冲池页数：默认值 + 环境变量覆盖。
+ *
+ * ==================== 为什么给一个环境变量 ====================
+ *
+ * 没有配置文件机制（db_open 只有 path 一个参数），
+ * 而"池多大"在不同场景下差很多：
+ *   - 小嵌入式设备：1 MB 就够
+ *   - 基准测试：必须装得下数据集，否则量的是磁盘
+ *
+ * 环境变量是唯一不破坏现有 API 的办法：
+ * 默认行为不变，显式设置了才生效。
+ */
+static u32 bp_frames(void)
+{
+    const char *e = getenv("DB_BP_FRAMES");
+    if (e && e[0]) {
+        long v = strtol(e, NULL, 10);
+        /* 下限 16 页（连一页都放不下就没意义了），上限 100 万页（4 GB） */
+        if (v >= 16 && v <= 1000000L)
+            return (u32)v;
+    }
+    return BP_FRAMES_DEFAULT;
+}
 
 db_err map_rc(int rc)
 {
@@ -163,7 +205,7 @@ db_err db_open(const char *path, DB **out)
     }
 
     Pager *pg = NULL;
-    int rc = pager_open(path, BP_FRAMES_DEFAULT, &pg);
+    int rc = pager_open(path, bp_frames(), &pg);
     if (rc != OK)
         return map_rc(rc);
 

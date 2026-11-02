@@ -28,6 +28,20 @@
  * 后两者由 SPI 的逐行接口决定（PLAN §1.2 的判决：攒批在执行器内部）。
  * 实测扫描 + 解码占整条查询的 81%，所以单靠批式求值拿不到 3 倍；
  * 详见 docs/PLAN-v1.1.md §3 的 R2 判定（SPI 批接口列入 v1.2）。
+ *
+ * ==================== v1.2 步骤 0：攒批改走 SPI 的批接口 ====================
+ *
+ * 本文件原来只能"一行一行问 SPI 要"（scan_next + decode），
+ * 然后自己转置成列批 —— 这正是 v1.1 只拿到 1.11× 的原因：
+ * 81% 的时间花在**每行一次的 SPI 调用**和**每行一次的 DbValue 物化**上。
+ *
+ * 现在多了一条路：模态声明了 AM_CAP_BATCH_SCAN / AM_CAP_BATCH_DECODE 时，
+ * 攒批改成"一次要一批原始行 + 一次解一批，直接进列数组"。
+ *
+ * 【两种路径必须给出完全一样的结果】
+ * 批式与火山的果集必须**逐格全等**（A1 门禁）。
+ * 两条路径共用同一套列数组、同一个 batch_cell、同一个投影逻辑 ——
+ * 差别只在于"列数组里的数是谁填的"。
  */
 
 #include "query/exec_batch.h"
@@ -48,7 +62,7 @@ static void *xcalloc(size_t n)
 void batch_ctx_free(BatchCtx *bc)
 {
     for (int c = 0; c < bc->ncols; c++) {
-        BatchCol *col = &bc->col[c];
+        AmBatchCol *col = &bc->col[c];
         free(col->nulls);
         free(col->ints);
         free(col->reals);
@@ -60,6 +74,7 @@ void batch_ctx_free(BatchCtx *bc)
     }
     free(bc->marks);
     free(bc->sel);
+    free(bc->refs);
     memset(bc, 0, sizeof(*bc));
 }
 
@@ -80,7 +95,7 @@ int batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u16 needed)
     bc->ncols = ncols;
 
     for (int c = 0; c < ncols; c++) {
-        BatchCol *col = &bc->col[c];
+        AmBatchCol *col = &bc->col[c];
         col->type = cols[c].type;
         col->used = ((needed >> c) & 1u) != 0;
         if (!col->used)
@@ -120,6 +135,17 @@ int batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u16 needed)
     if (!bc->marks || !bc->sel)
         return E_IO;
 
+    /*
+     * 批扫描的行引用缓冲（v1.2 步骤 0）。
+     *
+     * 一次给 AM 一批原始行 —— AM 把行字节码进自己的竞技场，
+     * 这里只存"指向竞技场里的哪一段"。用完立刻失效，
+     * 所以不需要在批之间保留。
+     */
+    bc->refs = xcalloc(sizeof(AmRowRef) * AM_BATCH_MAX_ROWS);
+    if (!bc->refs)
+        return E_IO;
+
     return OK;
 }
 
@@ -128,7 +154,7 @@ void batch_reset(BatchCtx *bc)
 {
     bc->nrows = 0;
     for (int c = 0; c < bc->ncols; c++) {
-        BatchCol *col = &bc->col[c];
+        AmBatchCol *col = &bc->col[c];
         if (!col->used)
             continue;
         col->n = 0;
@@ -145,7 +171,7 @@ int batch_add_row(BatchCtx *bc, const DbValue *row)
     u32 i = bc->nrows;
 
     for (int c = 0; c < bc->ncols; c++) {
-        BatchCol *col = &bc->col[c];
+        AmBatchCol *col = &bc->col[c];
         const DbValue *v = &row[c];
 
         if (!col->used)
@@ -158,7 +184,7 @@ int batch_add_row(BatchCtx *bc, const DbValue *row)
 
         if (v->external) {
             if (!col->exts) {
-                col->exts = xcalloc(sizeof(ExtRef) * VEC_BATCH);
+                col->exts = xcalloc(sizeof(AmExtRef) * VEC_BATCH);
                 if (!col->exts)
                     return E_IO;
             }
@@ -204,14 +230,14 @@ int batch_add_row(BatchCtx *bc, const DbValue *row)
  */
 void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out)
 {
-    const BatchCol *col = &bc->col[c];
+    const AmBatchCol *col = &bc->col[c];
 
     if (bit_get(col->nulls, i)) {
         val_null(out);
         return;
     }
     if (bit_get(col->extflag, i)) {
-        const ExtRef *e = &col->exts[i];
+        const AmExtRef *e = &col->exts[i];
         val_external_text(out, e->key, e->off, e->fn, e->ctx);
         return;
     }
@@ -266,6 +292,129 @@ static int project_batch(BatchCtx *bc, const Stmt *st, const TableCtx *tc,
 
 /* ---------------- 批式主流程 ---------------- */
 
+/*
+ * 这个模态支持批接口吗？
+ *
+ * 【能力协商】（见 spi/storage_am.h）
+ * caps 位 + 函数指针非 NULL，两个条件都满足才算支持。
+ *
+ * blob / graph / vector 三个模态的这两个指针保持 NULL ——
+ * 它们自动走逐行路径，一行都不用改。
+ */
+static bool am_supports_batch(const StorageAM *am)
+{
+    if (!am)
+        return false;
+    if ((am->caps & (AM_CAP_BATCH_SCAN | AM_CAP_BATCH_DECODE)) !=
+        (AM_CAP_BATCH_SCAN | AM_CAP_BATCH_DECODE))
+        return false;
+    return am->batch_scan != NULL && am->batch_decode != NULL;
+}
+
+/*
+ * 攒批（批接口路径）：一次要一批原始行 → 可见性过滤 → 一次解进列数组。
+ *
+ * ==================== 为什么这样能快 ====================
+ *
+ * 逐行路径每行两次 SPI 调用（scan_next + decode），外加一次 272 字节
+ * DbValue 的物化。批路径把 N 行压成 2 次调用，而且**根本没有 DbValue** ——
+ * 解码直接写进列数组。
+ *
+ * ==================== 可见性过滤放在哪 ====================
+ *
+ * 解码之前。不可见的行没必要解 —— 批路径白拿的一笔。
+ *
+ * ==================== 就地压缩 ====================
+ *
+ * 可见的行往前挪（refs[nvis++] = refs[i]），不额外开缓冲。
+ */
+static int fill_batch_via_am(const TableCtx *tc, BatchCtx *bc, AmScan *scan,
+                             const AmVisCtx *vis, bool *eof)
+{
+    *eof = false;
+
+    int n = 0;
+    int rc = tc->am->batch_scan(tc->am, scan, bc->refs, AM_BATCH_MAX_ROWS, &n);
+    if (rc == E_EOF) {
+        *eof = true;
+        return OK;
+    }
+    if (rc != OK)
+        return rc;
+    if (n <= 0)
+        return OK;
+
+    /* 可见性过滤：就地压缩 */
+    int nvis = 0;
+    for (int i = 0; i < n; i++) {
+        if (tc->am->visible(tc->am, bc->refs[i].data, bc->refs[i].len, vis))
+            bc->refs[nvis++] = bc->refs[i];
+    }
+    if (nvis == 0)
+        return OK;
+
+    /* 一次解一批，直接进列数组（写游标从 0 开始） */
+    AmBatch ab;
+    ab.ncols = bc->ncols;
+    ab.nrows = 0;
+    ab.cols = bc->col;
+
+    rc = tc->am->batch_decode(tc->am, bc->refs, nvis, &ab);
+    if (rc != OK)
+        return rc;
+
+    bc->nrows = ab.nrows;
+    return OK;
+}
+
+/*
+ * 攒批（逐行退路）：一行一行问 SPI 要 → 可见性 → 解码 → 转置进列批。
+ *
+ * ==================== 为什么还留着它 ====================
+ *
+ * 模态没声明批能力（blob / graph / vector），或者还没实现批解码。
+ *
+ * ==================== 语义只有一处实现 ====================
+ *
+ * 两条路径最后都填同一套列数组、同一套投影逻辑 ——
+ * 差别只在于"列数组里的数是谁填的"。
+ */
+static int fill_batch_rowwise(const TableCtx *tc, BatchCtx *bc, AmScan *scan,
+                              const AmVisCtx *vis, bool *eof)
+{
+    *eof = false;
+
+    u8 recbuf[PAGE_SIZE];
+    u16 reclen;
+    DbValue row[SQL_MAX_COLS];
+    Rid rid;
+
+    for (;;) {
+        int rc = tc->am->scan_next(tc->am, scan, &rid,
+                                   recbuf, sizeof(recbuf), &reclen);
+        if (rc == E_EOF) {
+            *eof = true;
+            break;
+        }
+        if (rc != OK)
+            return rc;
+
+        /* 可见性由模态判断（heap 走 MVCC，对象存储恒可见） */
+        if (!tc->am->visible(tc->am, recbuf, reclen, vis))
+            continue;
+        if (tc->am->decode(tc->am, recbuf, reclen, row) != OK)
+            continue;
+
+        int arc = batch_add_row(bc, row);
+        if (arc != OK)
+            return arc;
+
+        if (bc->nrows >= VEC_BATCH)
+            break;
+    }
+    return OK;
+}
+
 static int exec_select_batch(Db *db, Stmt *st, TableCtx *tc, Builder *b)
 {
     /* 只把用得上的列放进批 */
@@ -296,60 +445,62 @@ static int exec_select_batch(Db *db, Stmt *st, TableCtx *tc, Builder *b)
     AmVisCtx vis;
     make_vis_ctx(db, &vis);
 
-    u8 recbuf[PAGE_SIZE];
-    u16 reclen;
-    DbValue row[SQL_MAX_COLS];
-    Rid rid;
+    /* 模态支持批接口就走批路径，否则退回逐行 */
+    const bool use_batch = am_supports_batch(tc->am);
 
     for (;;) {
         batch_reset(&bc);
 
-        /* 攒批：逐行取 → 可见性 → 解码 → 转置进列批 */
-        while (bc.nrows < VEC_BATCH) {
-            rc = tc->am->scan_next(tc->am, scan, &rid,
-                                    recbuf, sizeof(recbuf), &reclen);
-            if (rc != OK)
-                break;
-            if (!tc->am->visible(tc->am, recbuf, reclen, &vis))
-                continue;
-            if (tc->am->decode(tc->am, recbuf, reclen, row) != OK)
-                continue;
+        /* 攒批 */
+        bool eof = false;
+        int frc = use_batch
+                  ? fill_batch_via_am(tc, &bc, scan, &vis, &eof)
+                  : fill_batch_rowwise(tc, &bc, scan, &vis, &eof);
 
-            int arc = batch_add_row(&bc, row);
-            if (arc != OK) {
+        /*
+         * 一批里可能**一行都不剩**（全是不可见的版本）。
+         *
+         * 【这里为什么不能因为"本批 0 行"就收工】
+         * 批路径一次只取一页的行，而一页里的行可能恰好全都不可见
+         * （MVCC：另一个事务插了还没提交 / 已删除已提交）。
+         * 此时后面还有页、还有可见的行 —— 收工就等于把结果截断了。
+         *
+         * 逐行路径没有这个问题：它一直取到 EOF 才会返回 0 行。
+         * 批路径必须靠 eof 判断，不靠 nrows 判断。
+         */
+        if (bc.nrows > 0) {
+            /* 列式求值 WHERE → 选择向量 */
+            u8 *marks = bc.marks;
+            int erc = eval_where(st->where, &bc, tc->cols, tc->ncols, marks, 0);
+            if (erc != OK) {
                 tc->am->scan_end(tc->am, scan);
                 batch_ctx_free(&bc);
-                return arc;
+                return erc;
+            }
+
+            int nsel = 0;
+            for (u32 i = 0; i < bc.nrows; i++) {
+                if (marks[i] == M_TRUE)
+                    bc.sel[nsel++] = (u16)i;
+            }
+
+            /* 投影 */
+            rc = project_batch(&bc, st, tc, b, bc.sel, nsel);
+            if (rc != OK) {
+                tc->am->scan_end(tc->am, scan);
+                batch_ctx_free(&bc);
+                return rc;
             }
         }
 
-        if (bc.nrows == 0)
-            break;
-
-        /* 列式求值 WHERE → 选择向量 */
-        u8 *marks = bc.marks;
-        int erc = eval_where(st->where, &bc, tc->cols, tc->ncols, marks, 0);
-        if (erc != OK) {
+        /* 扫描中途出的真错误：这一批已经吐完了，接着报 */
+        if (frc != OK) {
             tc->am->scan_end(tc->am, scan);
             batch_ctx_free(&bc);
-            return erc;
+            return frc;
         }
 
-        int nsel = 0;
-        for (u32 i = 0; i < bc.nrows; i++) {
-            if (marks[i] == M_TRUE)
-                bc.sel[nsel++] = (u16)i;
-        }
-
-        /* 投影 */
-        rc = project_batch(&bc, st, tc, b, bc.sel, nsel);
-        if (rc != OK) {
-            tc->am->scan_end(tc->am, scan);
-            batch_ctx_free(&bc);
-            return rc;
-        }
-
-        if (rc != OK)          /* 扫描结束（scan_next 报的错） */
+        if (eof)
             break;
     }
 

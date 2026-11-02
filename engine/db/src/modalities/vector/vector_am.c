@@ -462,6 +462,9 @@ int vector_am_build_items(VectorState *st, StorageAM *out, VectorAmCtx *ctx)
     out->scan_end = vec_scan_end;
     out->get = vec_am_get;
     out->decode = vec_am_decode;
+    /* 批能力：向量模态不支持（PLAN-v1.2 步骤 0：三个模态一行都不用改） */
+    out->batch_scan = NULL;
+    out->batch_decode = NULL;
     out->visible = vec_am_visible;
     out->insert = vec_am_insert;
     out->update = vec_am_update;

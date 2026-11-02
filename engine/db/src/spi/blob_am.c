@@ -540,6 +540,9 @@ static int blob_am_build(BlobStore *bs, StorageAM *out, BlobAmCtx *ctx,
     out->scan_end = blob_am_scan_end;
     out->get = blob_am_get;
     out->decode = blob_am_decode;
+    /* 批能力：blob 不支持（PLAN-v1.2 步骤 0：三个模态一行都不用改） */
+    out->batch_scan = NULL;
+    out->batch_decode = NULL;
     out->visible = blob_am_visible;
     out->insert = blob_am_insert;
     out->update = blob_am_update;

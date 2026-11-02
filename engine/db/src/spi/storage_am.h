@@ -4,6 +4,7 @@
 #include "common/error.h"
 #include "common/types.h"
 #include "spi/pushdown.h"
+#include "storage/batch.h"
 #include "storage/record.h"
 #include "storage/value.h"
 #include "txn/mvcc.h"
@@ -60,6 +61,28 @@ typedef struct AmScan    AmScan;
 #define AM_CAP_PUSHDOWN 0x20u   /* 支持谓词下推 */
 #define AM_CAP_VACUUM   0x40u   /* 支持版本回收 */
 #define AM_CAP_INDEX    0x80u   /* 支持建索引 / 重建索引 */
+
+/*
+ * ==================== v1.2 步骤 0：批能力 ====================
+ *
+ * 这两个是**可选**能力：caps 位 + 函数指针为 NULL = 不支持。
+ *
+ * 【为什么要加它们】
+ *
+ * v1.1 把执行器批式化了，但 A2（比火山快 ≥ 3 倍）只拿到 1.11×。
+ * 实测拆开来看：逐行 scan_next 占 38%，逐行 decode 占 43% ——
+ * **瓶颈在 SPI 的逐行接口**，不在求值。
+ *
+ * 批扫描省掉"每行一次 SPI 调用"，批解码省掉"每行物化一个 272 字节的 DbValue"。
+ *
+ * 【为什么不会破坏已有模态】
+ *
+ * blob / graph / vector 三个模态的这两个指针**保持 NULL**，
+ * 执行器看到 NULL 就自动退回逐行路径 —— 一行都不用改。
+ * 这正是 v1.1 §1.2 担心被打破的那条底线，而能力协商本来就是项目自己的机制。
+ */
+#define AM_CAP_BATCH_SCAN   0x100u  /* 支持一次给一批原始行 */
+#define AM_CAP_BATCH_DECODE 0x200u  /* 支持一次解一批，直接进列数组 */
 
 /* 版本回收（VACUUM）的统计 */
 typedef struct {
@@ -138,6 +161,32 @@ struct StorageAM {
      * out 是调用方给的数组，长度 = columns() 报的 ncols。
      */
     int (*decode)(StorageAM *am, const u8 *buf, u16 len, DbValue *out);
+
+    /*
+     * ==================== 批接口（v1.2 步骤 0，可选） ====================
+     *
+     * 两个指针都是 NULL 表示"这个模态不支持批"，
+     * 执行器自动退回逐行路径（scan_next + decode）。
+     *
+     * 【batch_scan】
+     *
+     * 一次给一批原始行。rows 由调用方给（至少 cap 项）。
+     * *n_out 是本批实际返回的行数（可能少于 cap —— 模态的竞技场装不下了）。
+     *
+     * 行的字节串由 AM 持有，**有效期到下一次 batch_scan 调用为止**。
+     * 所以调用方必须在下一次 batch_scan 之前把数据用掉。
+     *
+     * 返回 E_EOF 表示没有更多行（不是错误）。
+     *
+     * 【batch_decode】
+     *
+     * 把一批原始行直接解进列数组，**不物化 DbValue**。
+     * out->nrows 是写游标：调用前为这一批的起点，返回后前进 nrows 行。
+     *
+     * 只写 out->cols[c].used 为真的列。
+     */
+    int (*batch_scan)(StorageAM *am, AmScan *s, AmRowRef *rows, int cap, int *n_out);
+    int (*batch_decode)(StorageAM *am, const AmRowRef *rows, int nrows, AmBatch *out);
 
     /*
      * 这一行对当前快照可见吗？

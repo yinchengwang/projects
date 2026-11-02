@@ -50,7 +50,7 @@
 static int key_put_col(const BatchCtx *bc, int colidx, u32 row,
                        u8 *buf, u32 cap, u32 *off)
 {
-    const BatchCol *col = &bc->col[colidx];
+    const AmBatchCol *col = &bc->col[colidx];
 
     /* NULL：类型字节 0（排在最前，与 SQLite 的 NULL < 数值 < 文本 一致） */
     if (bit_get(col->nulls, row)) {

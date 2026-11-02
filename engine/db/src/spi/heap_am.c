@@ -21,28 +21,9 @@
 
 #include "index/btree.h"
 #include "index/index_key.h"
+#include "spi/heap_am_internal.h"
 #include "txn/mvcc.h"
 #include "txn/vacuum.h"
-
-/* ---------------- 扫描状态 ---------------- */
-
-/*
- * 两种扫描共用一个结构。
- *
- * 为什么要合一：SPI 的 scan_next / scan_end 是**固定的函数指针**，
- * 没法按扫描类型分派。所以状态里带一个 kind，取行时看它走哪条路。
- */
-typedef enum {
-    SCAN_FULL = 0,      /* 全表扫 */
-    SCAN_PUSH           /* 索引下推：游标 + 回表 */
-} ScanKind;
-
-typedef struct {
-    ScanKind kind;
-    HeapScan *full;         /* SCAN_FULL */
-    BtCursor *cursor;       /* SCAN_PUSH */
-    Heap     *heap;         /* SCAN_PUSH：回表用 */
-} HeapScanState;
 
 /* ---------------- 工具 ---------------- */
 
@@ -134,10 +115,17 @@ static int heap_am_scan_begin(StorageAM *am, AmScan **out)
     return OK;
 }
 
-static int heap_am_scan_next(StorageAM *am, AmScan *s, Rid *rid,
-                             u8 *buf, u16 cap, u16 *len)
+/*
+ * 取下一行。逐行路径与批路径共用这一份逻辑。
+ *
+ * 【为什么要共用】
+ * 批路径如果自己写一遍"全表扫 / 下推扫"的分支，两份逻辑迟早走偏 ——
+ * 而这种偏差只在特定数据下才显形，极难查。
+ */
+int heap_am_scan_next_row(HeapAmCtx *c, AmScan *s, Rid *rid,
+                          u8 *buf, u16 cap, u16 *len)
 {
-    (void)am;
+    (void)c;
     HeapScanState *st = (HeapScanState *)s;
 
     if (st->kind == SCAN_FULL)
@@ -157,6 +145,15 @@ static int heap_am_scan_next(StorageAM *am, AmScan *s, Rid *rid,
     }
 }
 
+static int heap_am_scan_next(StorageAM *am, AmScan *s, Rid *rid,
+                             u8 *buf, u16 cap, u16 *len)
+{
+    HeapAmCtx *c = ctx_of(am);
+    if (!c)
+        return E_INVAL;
+    return heap_am_scan_next_row(c, s, rid, buf, cap, len);
+}
+
 static int heap_am_scan_end(StorageAM *am, AmScan *s)
 {
     (void)am;
@@ -169,6 +166,7 @@ static int heap_am_scan_end(StorageAM *am, AmScan *s)
     else if (st->cursor)
         btree_cursor_close(st->cursor);
 
+    free(st->arena);
     free(st);
     return OK;
 }
@@ -573,13 +571,16 @@ int heap_am_build(Heap *heap, const ColDesc *cols, int ncols,
     am_out->name = "heap";
     am_out->caps = AM_CAP_SCAN | AM_CAP_INSERT | AM_CAP_UPDATE |
                    AM_CAP_REMOVE | AM_CAP_VACUUM | AM_CAP_INDEX |
-                   AM_CAP_PUSHDOWN;
+                   AM_CAP_PUSHDOWN |
+                   AM_CAP_BATCH_SCAN | AM_CAP_BATCH_DECODE;
     am_out->columns = heap_am_columns;
     am_out->scan_begin = heap_am_scan_begin;
     am_out->scan_next = heap_am_scan_next;
     am_out->scan_end = heap_am_scan_end;
     am_out->get = heap_am_get;
     am_out->decode = heap_am_decode;
+    am_out->batch_scan = heap_am_batch_scan;
+    am_out->batch_decode = heap_am_batch_decode;
     am_out->visible = heap_am_visible;
     am_out->insert = heap_am_insert;
     am_out->update = heap_am_update;

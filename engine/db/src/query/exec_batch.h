@@ -2,6 +2,7 @@
 #define DB_QUERY_EXEC_BATCH_H
 
 #include "query/exec_internal.h"
+#include "storage/batch.h"
 
 /*
  * 批式（列式）执行路径（v1.1 步骤 2）的内部接口。
@@ -9,6 +10,15 @@
  * 拆成两个 .c：
  *   exec_batch.c —— 攒批、转置、投影、主循环、逐行退路
  *   exec_eval.c  —— 列式表达式求值（形状检查 + 比较 + 三值逻辑）
+ *
+ * ==================== v1.2 步骤 0：列批的类型搬到 storage/ ====================
+ *
+ * 批的列布局（AmBatchCol）原来定义在这里（BatchCol）。
+ * 现在搬到 storage/batch.h —— 因为它变成了 **SPI 的契约**：
+ * 模态往里写，执行器从里面读，两边必须是同一套内存布局。
+ *
+ * 理由与 DbValue 一样（见 storage/value.h）：放在 query/ 会让 spi/ 反过来
+ * 依赖 query/，层次就倒了。
  *
  * 【为什么批里不存 DbValue】
  * DbValue 一个 272 字节（VAL_TEXT_MAX=256 + 若干字段）。
@@ -28,56 +38,17 @@
 #define M_TRUE  1u
 #define M_NULL  2u
 
-/*
- * 外部值（blob 模态）：内容不在库里，只记"去哪儿取"。
- *
- * 批里必须能装下它 —— blob 模态的表也要走批式路径，
- * 而执行器不许认模态（硬规则），所以只能通用地装下。
- */
-typedef struct {
-    u64       key;
-    u64       off;
-    DetoastFn fn;
-    void     *ctx;
-} ExtRef;
-
-/* 一列的批数据 */
-typedef struct {
-    u8      type;      /* ColType：这一列的类型（一批内不变） */
-    bool    used;      /* 这一列要不要进批（只进用得上的列） */
-    u16     n;         /* 本批的行数 */
-    u8     *nulls;     /* NULL 位图 */
-    i64    *ints;      /* T_INT4 / T_INT8 / T_BOOL */
-    double *reals;     /* T_REAL */
-    u32    *toff;      /* T_TEXT（内联）：文本池里的偏移 */
-    u16    *tlen;      /* T_TEXT（内联）：长度 */
-    u8     *tpool;     /* 文本池 */
-    u32     tused;
-    u32     tcap;
-    u8     *extflag;   /* 位图：1 = 该行是外部值 */
-    ExtRef *exts;      /* 外部句柄（用到才分配） */
-} BatchCol;
-
 typedef struct {
     int      ncols;
     u16      nrows;     /* 本批行数 */
-    BatchCol col[SQL_MAX_COLS];
+    AmBatchCol col[SQL_MAX_COLS];
 
     u8      *marks;     /* MARK_DEPTH × VEC_BATCH 的标记层栈（一次分配） */
     u16     *sel;       /* 选择向量：匹配的行号 */
+
+    /* 批扫描的行引用缓冲（v1.2 步骤 0）：一次给 AM 一批原始行 */
+    AmRowRef *refs;
 } BatchCtx;
-
-/* ---------------- 位图小工具 ---------------- */
-
-static inline void bit_set(u8 *bm, u32 i)
-{
-    bm[i >> 3] |= (u8)(1u << (i & 7u));
-}
-
-static inline bool bit_get(const u8 *bm, u32 i)
-{
-    return ((bm[i >> 3] >> (i & 7u)) & 1u) != 0;
-}
 
 /* ---------------- 批的自身（exec_batch.c） ---------------- */
 

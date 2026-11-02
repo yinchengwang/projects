@@ -163,6 +163,9 @@ static int ga_build(Graph *g, StorageAM *out, GraphAmCtx *ctx, bool is_nodes)
     out->scan_end = ga_scan_end;
     out->get = ga_get;
     out->decode = ga_decode;
+    /* 批能力：图模态不支持（PLAN-v1.2 步骤 0：三个模态一行都不用改） */
+    out->batch_scan = NULL;
+    out->batch_decode = NULL;
     out->visible = ga_visible;
     out->insert = ga_insert;
     out->update = ga_update;

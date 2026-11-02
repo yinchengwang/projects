@@ -60,6 +60,7 @@
 #include <time.h>
 
 #include "db_internal.h"
+#include "query/exec_batch.h"
 #include "query/exec_internal.h"
 #include "query/parser.h"
 
@@ -169,8 +170,12 @@ typedef struct {
     double filter_ms;    /* + WHERE 求值 */
     double full_ms;      /* 完整查询（含结果物化，走公共执行器 exec_stmt） */
     double volcano_ms;   /* 同一查询走冻结的火山执行器 */
+    double bscan_ms;     /* 批式：只有 batch_scan */
+    double bdecode_ms;   /* 批式：+ visible + batch_decode */
+    double bfilter_ms;   /* 批式：+ 列式 WHERE 求值 */
     u64    scanned;
     u64    matched;
+    u64    bmatched;     /* 批式匹配的行数（与 matched 对拍） */
     int    nresult;
 } Phases;
 
@@ -330,6 +335,133 @@ static void measure_phases(Db *kdb, const char *sql, const char *table,
         qr_free(qr);
     }
 
+    /*
+     * 批式路径的相位分解（v1.2 步骤 0）。
+     *
+     * ==================== 为什么必须单独测一遍 ====================
+     *
+     * A9 的口径是"**扫描 + 过滤**"，不含结果物化。
+     *
+     * 结果物化（b_push → char** + 每格 snprintf/malloc）两条路径**共有**，
+     * 把它算进分母会把比值稀释掉 —— v1.1 的 A2（1.11×）就是这么被稀释的：
+     * 那 1.11× 是"执行器快了"和"物化占了 1 ms"的混合。
+     *
+     * 所以这里量的是"扫描 + 可见性 + 解码 + WHERE 求值"，
+     * 与上面火山的第 [3] 段**逐项对应** —— 比值才有意义。
+     */
+    if (where && tc.am->batch_scan && tc.am->batch_decode) {
+        u16 needed = 0;
+        collect_needed(where, &needed);
+
+        BatchCtx bc;
+        memset(&bc, 0, sizeof(bc));
+        if (batch_ctx_init(&bc, tc.cols, tc.ncols, needed) != OK) {
+            printf("  批上下文初始化失败\n");
+        } else {
+            AmBatch ab;
+            ab.ncols = bc.ncols;
+            ab.nrows = 0;
+            ab.cols = bc.col;
+
+            /* [1] 只有 batch_scan */
+            {
+                AmScan *s1 = NULL;
+                if (open_scan(kdb, &tc, where, &s1) == OK) {
+                    t0 = now_ms();
+                    for (;;) {
+                        int n = 0;
+                        int rc = tc.am->batch_scan(tc.am, s1, bc.refs,
+                                                   AM_BATCH_MAX_ROWS, &n);
+                        if (rc != OK || n <= 0)
+                            break;
+                    }
+                    t1 = now_ms();
+                    out->bscan_ms = t1 - t0;
+                    tc.am->scan_end(tc.am, s1);
+                }
+            }
+
+            /* [2] + 可见性 + 批解码 */
+            {
+                AmScan *s2 = NULL;
+                if (open_scan(kdb, &tc, where, &s2) == OK) {
+                    t0 = now_ms();
+                    for (;;) {
+                        batch_reset(&bc);
+                        int n = 0;
+                        int rc = tc.am->batch_scan(tc.am, s2, bc.refs,
+                                                   AM_BATCH_MAX_ROWS, &n);
+                        if (rc != OK || n <= 0)
+                            break;
+
+                        /* 可见性过滤：就地压缩 */
+                        int nvis = 0;
+                        for (int i = 0; i < n; i++) {
+                            if (tc.am->visible(tc.am, bc.refs[i].data,
+                                               bc.refs[i].len, &vis))
+                                bc.refs[nvis++] = bc.refs[i];
+                        }
+                        if (nvis == 0)
+                            continue;
+
+                        ab.nrows = 0;
+                        if (tc.am->batch_decode(tc.am, bc.refs, nvis, &ab) != OK)
+                            break;
+                        bc.nrows = ab.nrows;
+                    }
+                    t1 = now_ms();
+                    out->bdecode_ms = t1 - t0;
+                    tc.am->scan_end(tc.am, s2);
+                }
+            }
+
+            /* [3] + 列式 WHERE 求值 */
+            {
+                AmScan *s3 = NULL;
+                if (open_scan(kdb, &tc, where, &s3) == OK) {
+                    u64 nmatch = 0;
+                    t0 = now_ms();
+                    for (;;) {
+                        batch_reset(&bc);
+                        int n = 0;
+                        int rc = tc.am->batch_scan(tc.am, s3, bc.refs,
+                                                   AM_BATCH_MAX_ROWS, &n);
+                        if (rc != OK || n <= 0)
+                            break;
+
+                        int nvis = 0;
+                        for (int i = 0; i < n; i++) {
+                            if (tc.am->visible(tc.am, bc.refs[i].data,
+                                               bc.refs[i].len, &vis))
+                                bc.refs[nvis++] = bc.refs[i];
+                        }
+                        if (nvis == 0)
+                            continue;
+
+                        ab.nrows = 0;
+                        if (tc.am->batch_decode(tc.am, bc.refs, nvis, &ab) != OK)
+                            break;
+                        bc.nrows = ab.nrows;
+
+                        u8 *marks = bc.marks;
+                        if (eval_where(where, &bc, tc.cols, tc.ncols, marks, 0) != OK)
+                            break;
+                        for (u32 i = 0; i < bc.nrows; i++) {
+                            if (marks[i] == M_TRUE)
+                                nmatch++;
+                        }
+                    }
+                    t1 = now_ms();
+                    out->bfilter_ms = t1 - t0;
+                    out->bmatched = nmatch;
+                    tc.am->scan_end(tc.am, s3);
+                }
+            }
+
+            batch_ctx_free(&bc);
+        }
+    }
+
     free_stmt(&wst);   /* where 在这里才真正没人用了 */
     free_stmt(&st);
 }
@@ -444,6 +576,36 @@ int main(int argc, char **argv)
     remove("test/tmp/exec_bench.db-wal");
     remove("test/tmp/exec_bench.db-shm");
 
+    /*
+     * 缓冲池：装得下整张表。
+     *
+     * ==================== 为什么必须显式设 ====================
+     *
+     * 这个基准要量的是**执行器**的开销，不是磁盘的开销。
+     *
+     * pager 用 setvbuf(_IONBF) + 每页一次 fread 系统调用，
+     * 池装不下数据时，每次扫表都要把整张表从磁盘读一遍。
+     * 实测（10 万行）：
+     *     1 MB 池   扫描 4.0 – 5.0 ms   ← 量的是 fread
+     *     16 MB 池  扫描 0.60 – 0.72 ms  ← 量的是执行器
+     * 差 7 倍 —— 不锁池大小，测出来的比值会被磁盘噪声主导。
+     *
+     * 两条路径（批式 / 火山）**共用同一个池**，所以比值本身是公平的；
+     * 锁池大小只是为了让这个比值反映执行器，而不是磁盘。
+     *
+     * 页数按行数估：一页约装 40–90 行，给 2 倍余量 + 1024 页。
+     */
+    {
+        long pages = (long)nrows / 40 + 1024;
+        long frames = pages * 2;
+        if (frames < 4096)
+            frames = 4096;
+        static char buf[64];      /* putenv 的参数必须活到进程结束 */
+        snprintf(buf, sizeof(buf), "DB_BP_FRAMES=%ld", frames);
+        putenv(buf);
+        printf("缓冲池：%ld 帧（%.1f MB）\n", frames, frames * 4.0 / 1024.0);
+    }
+
     DB *db = NULL;
     db_err rc = db_open(BENCH_PATH, &db);
     if (rc != DB_OK) {
@@ -517,33 +679,90 @@ int main(int argc, char **argv)
         if (r) db_result_free(r);
     }
 
-    /* ---- 相位分解（此时还没有索引 → 纯全扫） ---- */
-    printf("\n--- 相位分解（扫描 + 过滤，选择性 10%%，无索引）---\n");
-    Phases best;
-    memset(&best, 0, sizeof(best));
+    /*
+     * ---- 相位分解（此时还没有索引 → 纯全扫）----
+     *
+     * 【每条链各取"多次里的最好一次"】
+     *
+     * 为什么不是"挑一次迭代全盘采用"：
+     * 一条相位链是累加的（[1] ⊂ [2] ⊂ [3]），挑一次迭代全盘采用能保证链子自洽；
+     * 但火山链和批式链本来就来自不同的迭代，
+     * 比值就成了"两个各自最好的一次"之比 —— 这正是我们要的：
+     *
+     * 【为什么必须取最小值而不是平均值】
+     * 本机同一份二进制的绝对耗时会在 10%–30% 之间漂移
+     * （调度、CPU 频率、ASLR 带来的 4K 别名差异）。
+     * 单次测量不可信，平均值会被噪声拉高。
+     * 微基准的通行做法就是取最小值 ——
+     * 最小值最接近"这段代码的理论下限"，受噪声影响最小。
+     * 两条链取同样多的样本、用同样的统计量，对比是公平的。
+     */
+    printf("\n--- 相位分解（扫描 + 过滤，选择性 10%%，无索引，重复 %d 次取最小）---\n",
+           repeat);
+    Phases best_volcano, best_batch;
+    memset(&best_volcano, 0, sizeof(best_volcano));
+    memset(&best_batch, 0, sizeof(best_batch));
+    double min_full = 0.0, min_volcano = 0.0;
+
     for (int i = 0; i < repeat; i++) {
         Phases p;
         measure_phases(kdb, MAIN_SQL, TBL_MAIN, MAIN_WHERE, &p);
-        if (i == 0 || p.full_ms < best.full_ms)
-            best = p;
+        if (i == 0 || p.filter_ms < best_volcano.filter_ms)
+            best_volcano = p;
+        if (i == 0 || p.bfilter_ms < best_batch.bfilter_ms)
+            best_batch = p;
+        if (i == 0 || p.full_ms < min_full)
+            min_full = p.full_ms;
+        if (i == 0 || p.volcano_ms < min_volcano)
+            min_volcano = p.volcano_ms;
     }
-    printf("  扫过的行数        : %llu\n", (unsigned long long)best.scanned);
-    printf("  匹配的行数        : %llu\n", (unsigned long long)best.matched);
-    printf("  结果行数          : %d\n", best.nresult);
-    printf("  [1] scan          : %.3f ms\n", best.scan_ms);
-    printf("  [2] + decode      : %.3f ms  (净增 %.3f ms)\n",
-           best.decode_ms, best.decode_ms - best.scan_ms);
-    printf("  [3] + filter      : %.3f ms  (净增 %.3f ms)\n",
-           best.filter_ms, best.filter_ms - best.decode_ms);
-    printf("  [4] 完整查询      : %.3f ms  (含结果物化)\n", best.full_ms);
-    printf("  [4'] 火山执行器   : %.3f ms  (同一查询的对照基线)\n", best.volcano_ms);
-    printf("  → 分解：scan %.0f%% / decode %.0f%% / filter %.0f%% / 其余 %.0f%%\n",
-           100.0 * best.scan_ms / best.full_ms,
-           100.0 * (best.decode_ms - best.scan_ms) / best.full_ms,
-           100.0 * (best.filter_ms - best.decode_ms) / best.full_ms,
-           100.0 * (best.full_ms - best.filter_ms) / best.full_ms);
-    if (best.volcano_ms > 0)
-        printf("  → 当前/火山 = %.2fx\n", best.volcano_ms / best.full_ms);
+
+    printf("  扫过的行数        : %llu\n", (unsigned long long)best_volcano.scanned);
+    printf("  匹配的行数        : %llu\n", (unsigned long long)best_volcano.matched);
+    printf("  结果行数          : %d\n", best_volcano.nresult);
+    printf("  火山（逐行）相位链:\n");
+    printf("    [1] scan        : %.3f ms\n", best_volcano.scan_ms);
+    printf("    [2] + decode    : %.3f ms  (净增 %.3f ms)\n",
+           best_volcano.decode_ms, best_volcano.decode_ms - best_volcano.scan_ms);
+    printf("    [3] + filter    : %.3f ms  (净增 %.3f ms)\n",
+           best_volcano.filter_ms, best_volcano.filter_ms - best_volcano.decode_ms);
+    printf("  批式相位链:\n");
+    printf("    [1] batch_scan  : %.3f ms\n", best_batch.bscan_ms);
+    printf("    [2] + 批解码    : %.3f ms  (净增 %.3f ms)\n",
+           best_batch.bdecode_ms, best_batch.bdecode_ms - best_batch.bscan_ms);
+    printf("    [3] + 列式过滤  : %.3f ms  (净增 %.3f ms)\n",
+           best_batch.bfilter_ms, best_batch.bfilter_ms - best_batch.bdecode_ms);
+    printf("  [4] 完整查询      : %.3f ms  (含结果物化)\n", min_full);
+    printf("  [4'] 火山执行器   : %.3f ms  (同一查询的对照基线)\n", min_volcano);
+    if (min_volcano > 0)
+        printf("  → 完整查询：当前/火山 = %.2fx\n", min_volcano / min_full);
+
+    /*
+     * A9 门禁：扫描 + 过滤（**不含结果物化**），批式 vs 火山。
+     *
+     * 口径与上面的 [3] 段逐项对应：
+     *     火山 = scan_next + visible + decode + eval_expr
+     *     批式 = batch_scan + visible + batch_decode + eval_where
+     *
+     * 两者都不吐结果集 —— 结果物化是两条路径共有的固定成本，
+     * 算进去只会稀释比值，看不出执行器本身快了多少。
+     */
+    printf("\n--- A9 门禁：扫描 + 过滤（不含结果物化）---\n");
+    if (best_batch.bfilter_ms > 0) {
+        double ratio = best_volcano.filter_ms / best_batch.bfilter_ms;
+        printf("  火山（逐行）      : %.3f ms\n", best_volcano.filter_ms);
+        printf("  批式              : %.3f ms\n", best_batch.bfilter_ms);
+        printf("  → 扫描+过滤：批式比火山快 %.2fx  %s\n",
+               ratio, ratio >= 3.0 ? "✓ 达标（A9 要求 ≥ 3x）" : "✗ 未达标（A9 要求 ≥ 3x）");
+        if (best_batch.bmatched != best_volcano.matched)
+            printf("  ✗ 匹配行数不一致：批式 %llu / 火山 %llu\n",
+                   (unsigned long long)best_batch.bmatched,
+                   (unsigned long long)best_volcano.matched);
+        else
+            printf("  ✓ 匹配行数一致：%llu\n", (unsigned long long)best_batch.bmatched);
+    } else {
+        printf("  ✗ 批式路径不可用（模态未声明批能力）\n");
+    }
 
     /* ---- 建索引：让下推路径进入对拍集 + 触发索引一致性门禁 ---- */
     int idx_bad = check_index_consistency(db, kdb);

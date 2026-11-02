@@ -68,6 +68,29 @@ u16  page_fragmentation(const u8 *pg);  /* (used-live)/used，百分比 0..100 *
 u16  page_slot_count(const u8 *pg);     /* 已分配 slot 数（含空洞） */
 bool page_slot_alive(const u8 *pg, u16 slot);
 
+/*
+ * slot 目录的原始访问（行内联）。
+ *
+ * 【为什么要单独开这两个】
+ *
+ * 批扫描是热路径：每一行都要问"这个 slot 的记录在哪、多长"。
+ * 走 page_get 是一次函数调用（10 万行 = 10 万次栈帧进出），
+ * 走这两个内联是两次读。
+ *
+ * 【与 page_get 的关系】
+ * 语义完全一致，调用方自己判空洞（len == 0）与越界（off < HDR_SIZE）。
+ * page_get 保留给"一次取一行"的路径用。
+ */
+static inline u16 page_slot_off_raw(const u8 *pg, u16 i)
+{
+    return get_u16(pg + HDR_SIZE + (u32)i * SLOT_SIZE);
+}
+
+static inline u16 page_slot_len_raw(const u8 *pg, u16 i)
+{
+    return get_u16(pg + HDR_SIZE + (u32)i * SLOT_SIZE + 2u);
+}
+
 /* ---- 叶子链：heap 页链、overflow 链共用 ---- */
 u32  page_next(const u8 *pg);
 void page_set_next(u8 *pg, u32 next_page);

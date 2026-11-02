@@ -141,7 +141,7 @@ bool where_supported(const Expr *e, const ColDesc *cols, int ncols,
  *   - 任一边是 REAL → 按 double 比
  *   - 其余 → 按 i64 比
  */
-static void cmp_col_lit(const BatchCol *col, const DbValue *lit, int op,
+static void cmp_col_lit(const AmBatchCol *col, const DbValue *lit, int op,
                         u8 *dst, u32 n)
 {
     if (lit->is_null) {
@@ -224,7 +224,7 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols, int ncols,
             return OK;
         }
         if (e->op == EX_OP_ISNULL || e->op == EX_OP_ISNOTNULL) {
-            const BatchCol *col = &bc->col[e->l->col_idx];
+            const AmBatchCol *col = &bc->col[e->l->col_idx];
             bool want_null = (e->op == EX_OP_ISNULL);
             for (u32 i = 0; i < bc->nrows; i++) {
                 bool isnull = bit_get(col->nulls, i);
