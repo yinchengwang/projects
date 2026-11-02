@@ -65,6 +65,7 @@ C/C++ 算法与数据结构练习项目。CMake 3.20+、C11、C++17。无运行�
 engine/         # 工程轨道（默认构建）
 ├── src/             # 库代码（db/algo-prod/cpp/ds/redis/sdk）
 │   └── db/executor/rag/  # RAG 系统（在 db 执行器下，不在 engine 顶层）
+├── db/              # 独立多模态数据库内核（自带 Makefile，不入 CMake 图，见下）
 ├── include/         # 公共头文件
 ├── test/            # gtest 测试
 ├── sdk/             # 多语言 SDK
@@ -350,7 +351,7 @@ log_level = 'info'
 
 - **新数据结构/算法** → 在 `engine/src/<库>/` 下添加 `.c`/`.h`，在 `engine/include/<库>/` 下添加公共头文件
 - **新测试** → 在 `engine/test/<库>/` 下添加 `.cpp`（学习轨题解测试已随独立仓迁出）
-- **新独立项目** → 在 `engine/` 下创建直属目录及自带 `CMakeLists.txt`
+- **新独立项目** → 在 `engine/` 下创建直属目录及自带 `CMakeLists.txt`（例外：`engine/db/` 自带 `Makefile`，不入 CMake 图）
 - **新库** → 创建 `engine/src/<库名>/CMakeLists.txt`（推荐用 `add_project_library()`），在 `engine/include/<库名>/` 放头文件
 
 ## 测试约定
@@ -361,6 +362,45 @@ log_level = 'info'
 - 测试二进制和产物统一输出到 `build/<项目或轨道>/` 和 `test-results/<项目或轨道>/`，**不再输出到源码目录**
 
 ## 子项目规则
+
+### 独立多模态内核（`engine/db/`）
+
+`engine/db/` 是一个**从零手写的多模态数据库内核**，与 `engine/src/db/`（PostgreSQL 风格内核）
+是两个独立项目。它**自带 `Makefile`，不在 CMake 构建图内**（根 `CMakeLists.txt` 只引入 `engine/`，
+`engine/CMakeLists.txt` 只引入 `src/` `tools/` `test/`，均不含 `db/`）——这是有意的例外，
+因为它有自己独立的分层门禁、编译门禁与测试协议。
+
+**构建与测试（需 MinGW 工具链 + Git Bash）：**
+
+```bash
+export PATH="/c/mingw64/bin:$PATH"   # Windows 下 Makefile 强制 SHELL := sh（依赖 find/rm）
+cd engine/db
+mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror，零警告
+sh test/run.sh                           # 38 个测试文件，50 处断言，期望 0 FAIL
+sh tools/check_deps.sh                   # 依赖方向门禁，期望 ✓ 依赖方向正确
+mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
+```
+
+**分层铁律（由 `tools/check_deps.sh` 强制，改动后必跑）：**
+
+```
+L0 common/                      不依赖任何层
+L1 storage/  wal/               只依赖 common
+L2 index/  txn/  catalog/       禁依赖 query / spi / modalities
+L3 query/  spi/                 禁依赖 modalities
+L4 modalities/                  模态之间禁互相 include
+```
+
+**专属纪律：**
+
+- 编译门禁是 `-Werror`（比工程轨更严），**零警告**是硬要求
+- 新文件不超过 800 行；例外 `index/btree.c` 与 `catalog/catalog.c` 已记在 v1.2 计划里
+- 公开 API 前缀 `db_<模态>_<动作>`；内部错误码 `E_*`，公开层映射为 `DB_E_*`
+- 新入口必须成对 `latch_lock()` / `latch_unlock()`；xid 必须显式传参，不得藏进共享对象
+- 注释用中文，坑用 `M<层>-<序号>` 编号（汇总在 `engine/db/docs/MODALITIES.md`）
+- 新测试放 `engine/db/test/unit/` 或 `engine/db/test/integration/`，命名 `test_*.c` 即被 `test/run.sh` 自动收集
+
+### 前端子项目（`apps/`）
 
 前端已**原生化重写**（2026-10-22 完成）：原 Taro 3.6 + React 18 + Vite 5 的 `frontend/` monorepo
 已删除，对应的**零依赖、零构建**原生微信小程序（纯 JS + WXML + WXSS）迁至仓库根 `apps/`：

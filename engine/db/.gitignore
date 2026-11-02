@@ -1,0 +1,13 @@
+build/
+db
+db.exe
+*.o
+*.d
+
+# 运行时产物
+*.db
+*.db-wal
+*.db-shm
+*.wal
+test/tmp/
+bench/tmp/

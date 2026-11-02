@@ -69,7 +69,46 @@
 - **分布式事务**：2PC 两阶段提交（`engine/src/db/distributed/txn/`）、Percolator（`engine/src/db/distributed/percolator/`）
 - **高可用**：副本复制（`engine/src/db/replication/`）、全局时间戳（`engine/src/db/distributed/tso/`）
 
+### 5. 独立多模态数据库内核（`engine/db/`）
+
+一个**从零手写**的多模态数据库内核，与 `engine/src/db/`（PostgreSQL 风格内核）是两个独立项目：
+前者用 Makefile 构建、**不入 CMake 图**，后者是本仓 CMake 工程轨的主体。
+
+| 项 | 值 | 核实方式 |
+|---|-----|----------|
+| C 源码规模 | **169 个 `.c`/`.h`，39,694 行** | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db` |
+| 测试 | **38 个测试文件**（unit 25 + integration 13），**50 处断言全绿 / 0 FAIL** | `sh test/run.sh` |
+| 依赖方向门禁 | `sh tools/check_deps.sh` → `✓ 依赖方向正确` | 该脚本 |
+| 计划文档 | `engine/db/docs/` 下 **21 篇**（`PLAN-v0.1` ~ `PLAN-v1.6` + `DESIGN.md` + `MODALITIES.md`） | `Get-ChildItem engine/db/docs` |
+
+**强制分层（L0 → L4，`tools/check_deps.sh` 门禁）**：
+
+```
+L0 common/     不依赖任何层
+L1 storage/ wal/    只依赖 common
+L2 index/ txn/ catalog/   禁依赖 query / spi / modalities
+L3 query/ spi/    禁依赖 modalities
+L4 modalities/   模态之间禁互相 include（graph/ 与 vector/ 各自独立）
+```
+
+**模态进度**：关系（v0.x）+ Blob（v0.9）+ 图（v0.11）+ 向量（v1.0）已落地；
+v1.1（向量化执行 + 规则 CBO）已完成；**下一个版本是 v1.2（内核收尾：copy-out → 细粒度 latch → 页内 compact → checkpoint）**；
+v1.3 ~ v1.6 依次为全文检索、地理空间、时序、文档/JSON 四模态（计划已生成，未执行）。
+
+**构建与测试**（独立于 CMake 工程轨，需 MinGW 工具链 + Git Bash）：
+
+```bash
+export PATH="/c/mingw64/bin:$PATH"       # Windows 下 Makefile 强制用 sh（find/rm）
+cd engine/db
+mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror 零警告
+sh test/run.sh                           # 38 个测试文件全绿
+sh tools/check_deps.sh                   # 依赖方向门禁
+mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
+```
+
 ---
+
+
 
 ## 📁 项目结构
 
@@ -89,6 +128,7 @@ projects/
 │   │   ├── ds/           # 数据结构
 │   │   ├── redis/        # Redis 核心移植（sds / adlist / skiplist / zmalloc）
 │   │   └── sdk/          # 对外 SDK（aggregation / vectors / text / graph / ...）
+│   ├── db/               # 🆕 独立多模态数据库内核（Makefile 构建，不入 CMake 图）
 │   ├── include/          # 公共头文件
 │   ├── test/             # gtest 测试（8 个子目录，367 个 .c/.cpp 测试源文件）
 │   ├── sdk/              # 多语言 SDK（go / python / tests）
@@ -169,6 +209,7 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 | 工程轨测试源文件 | **367** | `git ls-files 'engine/test/**'` 下的 `.c` / `.cpp`（db 289、sdk 36、algo 13、smoke 13、index 8、kbase 7、self_made_cpp 1） |
 | 工程轨 ctest 用例 | **835** | 已配置构建目录 `engine/build/base` 下 `ctest -N` 报告的用例总数（gtest 用例逐条展开） |
 | RAG 相关测试源文件 | **4** | `engine/test/db/rag`（1）+ `engine/test/sdk/rag`（3） |
+| 独立内核测试文件 | **38** | `engine/db/test/`（unit 25 + integration 13），由 `sh test/run.sh` 驱动，50 处断言全绿 |
 
 > 学习轨的测试与题解**已随学习轨迁出**，统计在 `../learning/` 仓，本仓不再重复计数。
 > `engine/build/` 是本地构建产物目录（未纳入版本控制），上面的 835 来自该目录中最近一次配置；
@@ -221,6 +262,25 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 > 学习轨的 spec（`openspec/specs/learning/`）已于 **2026-10-26** 迁出
 > （本仓 `openspec/specs/` 下已无 `learning/` 目录）。
 > 本仓不再新增学习轨内容，CI 也不再构建学习轨道。
+
+> ### ⛔ `engine/db/` 的分层门禁与构建方式（勿用 CMake 构建，勿跨层 include）
+>
+> `engine/db/` 是独立的多模态内核，**不在 CMake 构建图内**（根 `CMakeLists.txt` 只 `add_subdirectory(engine)`，
+> 而 `engine/CMakeLists.txt` 只引入 `src/` `tools/` `test/`）。
+> 它用自带 `Makefile` 构建，Windows 下必须 `SHELL := sh`（Git Bash），
+> 依赖 `find`/`rm`，且编译门禁是 `-Wall -Wextra -Werror`（**零警告**，比工程轨更严）。
+>
+> 分层由 `engine/db/tools/check_deps.sh` 强制：
+> **L0 `common/`** 不依赖任何层 → **L1 `storage/` `wal/`** 只依赖 common →
+> **L2 `index/` `txn/` `catalog/`** 禁依赖 query/spi/modalities →
+> **L3 `query/` `spi/`** 禁依赖 modalities → **L4 `modalities/`** 模态之间禁互相 include。
+> 改动后必须跑 `sh tools/check_deps.sh`（期望输出 `✓ 依赖方向正确`）与 `sh test/run.sh`（期望 0 FAIL）。
+>
+> ⚠️ 向量模态的适配器住在 `modalities/vector/vector_am.{h,c}` 而**不是** `spi/vector_am.{h,c}` ——
+> 因为 `spi/`（L3）不许依赖 `modalities/`（L4）。`engine/db/docs/MODALITIES.md` 中仍有旧路径表述，修复中。
+>
+> ⚠️ 向量页页头是 **20B**，不是 8B：8B 会静默压坏 `H_LSN`(12) 与 `H_CKSUM`(16)，只坏每页第一个向量且不报错。
+> `engine/db/docs/PLAN-v1.0.md` 与 `MODALITIES.md` 的存储布局小节仍有 8B 表述，修复中。
 
 ---
 
@@ -277,6 +337,9 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 | 4 个小程序 | `Get-ChildItem apps -Directory` |
 | 38 个 skill | `skills-lock.json` 的 `skills` 键计数 |
 | 95 个第三方 submodule（reference 仓） | `Select-String reference/.gitmodules '^\[submodule '` |
+| 独立内核 169 个 `.c`/`.h`、39,694 行 | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db` |
+| 独立内核 38 个测试文件 / 50 处断言 | `Get-ChildItem -Recurse -File engine/db/test -Filter '*.c'`；`sh test/run.sh` |
+| 独立内核 21 篇计划与设计文档 | `Get-ChildItem engine/db/docs -Filter '*.md'` |
 
 ---
 
