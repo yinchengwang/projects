@@ -53,4 +53,110 @@ void latch_unlock(void);
  */
 int latch_depth(void);
 
+/*
+ * ==================== v1.2 步骤 2：按域的 latch 框架 ====================
+ *
+ * 从"一把大锁"走向"编号的一组小锁"的第一步：**先把纪律立起来**，
+ * 再一把一把地换（步骤 3 换 catalog，步骤 4 换 txn / wal / freelist / frame）。
+ *
+ * 【本步骤只做两件事】
+ *
+ *   1. **记账**：当前线程持有哪些域的锁（**线程本地**，不是共享状态）
+ *   2. **全序断言**：获取顺序必须符合全序，违反 → 立刻 abort
+ *
+ * **本步骤不加真实互斥** —— 真实互斥在步骤 3/4 接线（那时才改调用点）。
+ * 所以这一步对现有行为是**零变化**：现有代码一行都不用动。
+ *
+ * 【获取全序（绝不逆序）】
+ *
+ *     catalog → txn → wal → freelist → frame
+ *
+ * 顺序来源：真实调用路径 ——
+ * 绑定先查 catalog → 开事务碰 txn → 写路径先 wal 后页。
+ *
+ * 【编号 = 获取序号】
+ *
+ * 计划（PLAN-v1.2 §1.3）里 frame 记作 L4、freelist 记作 L5，
+ * 但**全序**是 freelist 在 frame 之前 ——
+ * 本实现按**获取序号**编号（= 全序位置），对应关系：
+ *
+ *     L1 catalog → LATCH_CATALOG  = 1
+ *     L2 txn     → LATCH_TXN      = 2
+ *     L3 wal     → LATCH_WAL      = 3
+ *     L5 freelist→ LATCH_FREELIST = 4
+ *     L4 frame   → LATCH_FRAME    = 5
+ *
+ * 【为什么断言比测试可靠】
+ *
+ * 测试是**抽样**（跑一万次不一定撞上那个时序），
+ * 断言是**全量**（每一次获取都检查）。
+ * "死锁不可能发生"要有机器证明 —— 断言就是那个证明。
+ *
+ * 【断言一直开，没有调试/发布之分】
+ *
+ * 开销是每个域 5 次整数比较 —— 可以忽略。
+ * 一个能抓到逆序的断言，不该在发布版里消失。
+ */
+
+/* 域编号（按获取全序排列，值 = 获取序号） */
+typedef enum {
+    LATCH_CATALOG  = 1,   /* L1：表/列/索引元数据缓存（读写锁） */
+    LATCH_TXN      = 2,   /* L2：next_xid、clog、活跃表（独占，很短） */
+    LATCH_WAL      = 3,   /* L3：日志缓冲、LSN 计数、append（独占） */
+    LATCH_FREELIST = 4,   /* L5：空闲页链（独占，很短） */
+    LATCH_FRAME    = 5,   /* L4：单页数据 + pin_count（每帧一把，极短） */
+    LATCH_NDOMAIN  = 6
+} LatchId;
+
+/*
+ * 违反全序时的处理。
+ *
+ * 默认行为：**打印 + abort()** —— 死锁"不可能发生"要有机器证明，
+ * 抓不到就等于没证明。
+ *
+ * 装上自己的处理函数之后，返回值才可能非 OK ——
+ * **测试专用**（用来断言"确实被拦住了"而不杀死测试进程）。
+ */
+typedef void (*LatchViolationFn)(LatchId id, const char *msg);
+
+/* 装违规处理函数（传 NULL 恢复默认的 abort）。测试专用。 */
+void latch_set_violation_handler(LatchViolationFn fn);
+
+/*
+ * 获取 / 释放一个域的锁（**记账 + 全序断言**）。
+ *
+ * 返回 OK 或 E_INVAL（被断言拦下时）。
+ * 默认配置下不会返回 E_INVAL —— 直接 abort 了。
+ *
+ * 可重入：同一个域重复获取 → 计数 +1，不算逆序。
+ */
+int latch_order_acquire(LatchId id);
+int latch_order_release(LatchId id);
+
+/*
+ * 合法例外：**crabbing**（锁降级）。
+ *
+ * B+tree 分裂时的路径是"先锁子页再锁父页" ——
+ * 页与页之间的获取序按**树高从大到小**，与全局全序冲突。
+ * 这条路径必须显式声明，不能默默绕过断言。
+ *
+ * **约束**：只能用于**同域内** —— 手里握的必须已经是这个域的锁。
+ * 手里是别的域还来 crabbing，就是**跨域逆序**，那是普通违规。
+ *
+ * 说明：域级别的检查**管不到**同域内部的顺序（域只看"frame 这个域"），
+ * 所以它在域级别等价于普通获取 ——
+ * 它的价值是**在代码里留下显式标记**：
+ * 让读代码的人知道这条路径是经过论证的例外，而不是随手写的。
+ * 页与页之间的树高顺序，由步骤 4 的 per-frame 检查真正管。
+ */
+int latch_order_acquire_crabbing(LatchId id);
+
+/* 查询当前线程的持锁情况（调试 / 测试用） */
+bool latch_order_held(LatchId id);       /* 这个域持着吗 */
+int  latch_order_count(LatchId id);      /* 持有了几次（可重入计数） */
+int  latch_order_depth(void);            /* 一共持有几个域 */
+
+/* 域的名字（错误信息用） */
+const char *latch_domain_name(LatchId id);
+
 #endif /* DB_COMMON_LATCH_H */
