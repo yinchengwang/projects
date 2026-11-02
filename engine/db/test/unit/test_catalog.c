@@ -80,11 +80,11 @@ int main(void)
     CHECK(catalog_find_table(cat, "users", &tmp) == OK);
     CHECK(tmp == users_tid);
 
-    /* ---- 3) 列定义往返 ---- */
+    /* ---- 3) 列定义往返（copy-out：拷进自己的缓冲区） ---- */
     {
-        const ColDesc *cols = NULL;
+        ColDesc cols[8];
         int n = 0;
-        CHECK(catalog_table_cols(cat, users_tid, &cols, &n) == OK);
+        CHECK(catalog_table_cols(cat, users_tid, cols, 8, &n) == OK);
         CHECK(n == N_USERS);
         if (n == N_USERS) {
             CHECK(strcmp(cols[0].name, "id") == 0);
@@ -156,9 +156,9 @@ int main(void)
     CHECK(catalog_next_table_id(cat) == logs_tid + 1);
 
     {
-        const ColDesc *cols = NULL;
+        ColDesc cols[8];
         int n = 0;
-        CHECK(catalog_table_cols(cat, users_tid, &cols, &n) == OK);
+        CHECK(catalog_table_cols(cat, users_tid, cols, 8, &n) == OK);
         CHECK(n == N_USERS);
         if (n == N_USERS) {
             CHECK(strcmp(cols[1].name, "name") == 0);

@@ -199,9 +199,9 @@ int main(void)
 
     /* 列定义还在 */
     {
-        const ColDesc *cols = NULL;
+        ColDesc cols[8];
         int n = 0;
-        CHECK(catalog_table_cols(cat, users_tid, &cols, &n) == OK);
+        CHECK(catalog_table_cols(cat, users_tid, cols, 8, &n) == OK);
         CHECK(n == N_UCOLS);
         if (n == N_UCOLS) {
             CHECK(strcmp(cols[1].name, "name") == 0);

@@ -54,6 +54,27 @@ typedef struct {
     u32           tid;         /* catalog 表 id；虚拟表为 0 */
     bool          is_virtual;
 
+    /*
+     * ---------------- v1.2 步骤 1：自持的副本 ----------------
+     *
+     * cols / idxs 原来直接指向 catalog 内部的数组。
+     * 那是**真悬空**：catalog 建表时 realloc 表项数组、
+     * 建索引时 realloc 索引数组 —— 另一个连接一改，指针就废了。
+     *
+     * 现在改成：解析表时把内容**拷进下面这两个缓冲区**，
+     * cols / idxs 一律指向自己的副本。
+     * 副本的代价是每条语句拷几十个字节，换来的是
+     * "catalog 之后怎么变都与本次执行无关"。
+     *
+     * 缓冲区大小用 SQL_MAX_COLS（=16）：
+     *   - 列数上限就是 16（parser 层已卡）
+     *   - 索引数上限也卡到 16（见 exec_create_index 的显式报错）
+     */
+    ColDesc       cols_buf[SQL_MAX_COLS];
+    IndexInfo     idxs_buf[SQL_MAX_COLS];
+    const IndexInfo *idxs;
+    int           nidx;
+
     /* 关系模态专用 */
     Heap         *heap;
     HeapAmCtx     am_ctx;

@@ -200,17 +200,26 @@ int resolve_table(Db *db, const char *name, TableCtx *tc,
         if (!tc->heap)
             return E_CORRUPT;
 
-        int rc = catalog_table_cols(db->cat, tid, &tc->cols, &tc->ncols);
+        /*
+         * 列定义 / 索引列表都**拷进 TableCtx 自带的缓冲区**（v1.2 步骤 1）。
+         * 拷贝之后，本次执行看到的表结构就是**这一份**，
+         * 别的连接随后建表 / 建索引都影响不到它。
+         */
+        int ncols = 0;
+        int rc = catalog_table_cols(db->cat, tid, tc->cols_buf, SQL_MAX_COLS, &ncols);
         if (rc != OK)
             return rc;
+        tc->cols = tc->cols_buf;
+        tc->ncols = ncols;
 
-        const IndexInfo *idxs = NULL;
         int nidx = 0;
-        rc = catalog_table_indexes(db->cat, tid, &idxs, &nidx);
+        rc = catalog_table_indexes(db->cat, tid, tc->idxs_buf, SQL_MAX_COLS, &nidx);
         if (rc != OK)
             return rc;
+        tc->idxs = tc->idxs_buf;
+        tc->nidx = nidx;
 
-        rc = heap_am_build(tc->heap, tc->cols, tc->ncols, idxs, nidx,
+        rc = heap_am_build(tc->heap, tc->cols, tc->ncols, tc->idxs, tc->nidx,
                            &tc->am_storage, &tc->am_ctx);
         if (rc != OK)
             return rc;
@@ -226,9 +235,23 @@ int resolve_table(Db *db, const char *name, TableCtx *tc,
         tc->am = am;
         tc->is_virtual = true;
         tc->tid = 0;
-        int rc = am->columns(am, &tc->cols, &tc->ncols);
+
+        /*
+         * 模态给的列定义是**模态自己的**数组（静态常量或实例级稳定），
+         * 本身不会悬空 —— 但还是拷一份，
+         * 这样"tc->cols 永远指向自己的缓冲区"这条规则就没有例外。
+         */
+        const ColDesc *vcols = NULL;
+        int vn = 0;
+        int rc = am->columns(am, &vcols, &vn);
         if (rc != OK)
             return rc;
+        if (vn > SQL_MAX_COLS)
+            return E_NOSPACE;
+        if (vn > 0 && vcols)
+            memcpy(tc->cols_buf, vcols, (size_t)vn * sizeof(ColDesc));
+        tc->cols = tc->cols_buf;
+        tc->ncols = vn;
         return OK;
     }
 
@@ -246,17 +269,21 @@ int resolve_table_id(Db *db, u32 tid, TableCtx *tc)
     if (!tc->heap)
         return E_CORRUPT;
 
-    int rc = catalog_table_cols(db->cat, tid, &tc->cols, &tc->ncols);
+    int ncols = 0;
+    int rc = catalog_table_cols(db->cat, tid, tc->cols_buf, SQL_MAX_COLS, &ncols);
     if (rc != OK)
         return rc;
+    tc->cols = tc->cols_buf;
+    tc->ncols = ncols;
 
-    const IndexInfo *idxs = NULL;
     int nidx = 0;
-    rc = catalog_table_indexes(db->cat, tid, &idxs, &nidx);
+    rc = catalog_table_indexes(db->cat, tid, tc->idxs_buf, SQL_MAX_COLS, &nidx);
     if (rc != OK)
         return rc;
+    tc->idxs = tc->idxs_buf;
+    tc->nidx = nidx;
 
-    rc = heap_am_build(tc->heap, tc->cols, tc->ncols, idxs, nidx,
+    rc = heap_am_build(tc->heap, tc->cols, tc->ncols, tc->idxs, tc->nidx,
                        &tc->am_storage, &tc->am_ctx);
     if (rc != OK)
         return rc;

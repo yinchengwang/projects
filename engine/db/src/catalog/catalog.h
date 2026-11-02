@@ -79,10 +79,32 @@ int  catalog_create_table(Catalog *cat, u32 xid, const char *name,
                           const ColDesc *cols, int ncols, u32 *table_id_out);
 
 int  catalog_find_table(Catalog *cat, const char *name, u32 *table_id_out);
-int  catalog_table_meta(Catalog *cat, u32 table_id, const TableMeta **out);
 
-/* 取列定义。指针归 catalog 所有，关闭前有效。 */
-int  catalog_table_cols(Catalog *cat, u32 table_id, const ColDesc **cols, int *ncols);
+/*
+ * ---------------- v1.2 步骤 1：copy-out ----------------
+ *
+ * 下面三个接口原来返回的是 **catalog 内部的指针**。
+ * 那是 v0.10 "锁只能画粗" 的根因之一：
+ * 函数返回后锁就放了，catalog 随后扩容 / 重建 → 指针悬空。
+ *
+ * 现在统一改成 **拷贝出参**：调用方给缓冲区，函数把内容拷进去。
+ * 拷出来之后，**catalog 之后怎么变都与这份副本无关**。
+ *
+ * 【两段式用法】（缓冲区该多大，事先不知道）
+ *
+ *     int n = 0;
+ *     catalog_table_cols(cat, tid, NULL, 0, &n);   // 先问要多少
+ *     ColDesc buf[SQL_MAX_COLS];
+ *     rc = catalog_table_cols(cat, tid, buf, SQL_MAX_COLS, &n);
+ *
+ * 缓冲区不够 → E_NOSPACE（*ncols 仍然报实际需要的个数）。
+ */
+
+/* 取表元数据（拷贝一份到 out）。out 不能为 NULL。 */
+int  catalog_table_meta(Catalog *cat, u32 table_id, TableMeta *out);
+
+/* 取列定义（拷贝到 buf）。 */
+int  catalog_table_cols(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols);
 
 /* 取某张表的堆表句柄，用于行操作。 */
 Heap *catalog_heap(Catalog *cat, u32 table_id);
@@ -94,9 +116,9 @@ Heap *catalog_heap(Catalog *cat, u32 table_id);
 int  catalog_create_index(Catalog *cat, u32 xid, const char *name, u32 table_id,
                           u32 col_no, u32 *index_id_out);
 
-/* 取某张表的所有索引（含已打开的 btree）。 */
+/* 取某张表的所有索引（含已打开的 btree）—— 拷贝到 buf。 */
 int  catalog_table_indexes(Catalog *cat, u32 table_id,
-                           const IndexInfo **out, int *n_out);
+                           IndexInfo *buf, int cap, int *n_out);
 
 /* 给所有表的堆注册 WAL 钩子（v0.6 起每条修改都写日志） */
 void catalog_set_wal(Catalog *cat, HeapWalFn fn, void *ctx);

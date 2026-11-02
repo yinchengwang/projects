@@ -789,26 +789,53 @@ int catalog_find_table(Catalog *cat, const char *name, u32 *table_id_out)
     return E_NOTFOUND;
 }
 
-int catalog_table_meta(Catalog *cat, u32 table_id, const TableMeta **out)
+/*
+ * 取表元数据 —— **拷贝出参**（v1.2 步骤 1）。
+ *
+ * 原来返回的是 &e->meta —— 那是 TableEnt 数组里的一个元素，
+ * 而 cat->t 会在建表时 realloc（见 ent_add）→ 指针悬空。
+ */
+int catalog_table_meta(Catalog *cat, u32 table_id, TableMeta *out)
 {
     if (!cat || !out)
         return E_INVAL;
     TableEnt *e = catalog_ent_by_id(cat, table_id);
     if (!e)
         return E_NOTFOUND;
-    *out = &e->meta;
+    *out = e->meta;
     return OK;
 }
 
-int catalog_table_cols(Catalog *cat, u32 table_id, const ColDesc **cols, int *ncols)
+/*
+ * 取列定义 —— **拷贝出参**（v1.2 步骤 1）。
+ *
+ * e->cols 本身是"每表一份 malloc"，扩容时不会被 realloc，
+ * 所以它**恰好**是稳定的 —— 但那是个隐含前提：
+ * "只要没人 free 它"（只有 catalog_close 会 free）。
+ * 步骤 3/4 之后 catalog 的锁会放开，这个前提就不再由锁兜底了，
+ * 所以统一改成拷贝：调用方拿到的是**自己的**副本。
+ *
+ * 两段式：buf = NULL 且 cap = 0 → 只报需要多少列。
+ */
+int catalog_table_cols(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols)
 {
-    if (!cat || !cols || !ncols)
+    if (!cat || !ncols)
         return E_INVAL;
+    if (!buf && cap > 0)
+        return E_INVAL;
+
     TableEnt *e = catalog_ent_by_id(cat, table_id);
     if (!e || !e->cols)
         return E_NOTFOUND;
-    *cols = e->cols;
+
     *ncols = e->ncols;
+    if (!buf)
+        return OK;                     /* 只是问长度 */
+
+    if (cap < e->ncols)
+        return E_NOSPACE;              /* 缓冲区不够 */
+
+    memcpy(buf, e->cols, (size_t)e->ncols * sizeof(ColDesc));
     return OK;
 }
 
@@ -928,16 +955,38 @@ int catalog_create_index(Catalog *cat, u32 xid, const char *name, u32 table_id,
     return OK;
 }
 
+/*
+ * 取索引列表 —— **拷贝出参**（v1.2 步骤 1）。
+ *
+ * te->idxs 会在建索引时 realloc（见 catalog_create_index），
+ * 原来返回的 e->idxs 因此是**真悬空**：另一个连接建个索引，
+ * 这里拿着的指针就指向 freed 内存。
+ *
+ * 拷贝的是 IndexInfo 结构本身（浅拷贝）——
+ * 里面的 BTree* / FreeList* 指向的对象归 catalog 所有，
+ * 索引不会被删，所以那些指针照样有效。
+ */
 int catalog_table_indexes(Catalog *cat, u32 table_id,
-                          const IndexInfo **out, int *n_out)
+                          IndexInfo *buf, int cap, int *n_out)
 {
-    if (!cat || !out || !n_out)
+    if (!cat || !n_out)
         return E_INVAL;
+    if (!buf && cap > 0)
+        return E_INVAL;
+
     TableEnt *e = catalog_ent_by_id(cat, table_id);
     if (!e)
         return E_NOTFOUND;
-    *out = e->idxs;
+
     *n_out = e->nidx;
+    if (!buf)
+        return OK;
+
+    if (cap < e->nidx)
+        return E_NOSPACE;
+
+    if (e->nidx > 0)
+        memcpy(buf, e->idxs, (size_t)e->nidx * sizeof(IndexInfo));
     return OK;
 }
 

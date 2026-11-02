@@ -35,9 +35,9 @@
 /* AM 的私有状态：这张表是什么 */
 typedef struct {
     Heap            *heap;
-    const ColDesc   *cols;      /* 归 catalog 所有 */
+    const ColDesc   *cols;      /* 归调用方所有（v1.2 步骤 1：TableCtx 的副本） */
     int              ncols;
-    const IndexInfo *idxs;      /* 归 catalog 所有 */
+    const IndexInfo *idxs;      /* 归调用方所有（v1.2 步骤 1：TableCtx 的副本） */
     int              nidx;
 
     /*
@@ -56,7 +56,9 @@ typedef struct {
  * ctx_out 由调用方持有（通常是 TableCtx 里的一个字段）。
  * 两者都必须活到这次查询结束。
  *
- * heap / cols / idxs 都不被拷贝 —— 它们由 catalog 拥有，生命周期更长。
+ * heap / cols / idxs 都不被拷贝 —— 调用方（执行器）保证它们活到这次查询结束。
+ * （v1.2 步骤 1 之后，cols / idxs 已经是执行器自己拷下来的副本，
+ *  不再是 catalog 的内部指针 —— 见 query/exec_internal.h 的 TableCtx。）
  */
 int heap_am_build(Heap *heap, const ColDesc *cols, int ncols,
                   const IndexInfo *idxs, int nidx,

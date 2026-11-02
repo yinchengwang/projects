@@ -512,6 +512,19 @@ int exec_create_index(Db *db, Stmt *st, QueryResult **out, char *err, int errcap
     }
 
     u32 iid = 0;
+    /*
+     * 索引数上限 = SQL_MAX_COLS（v1.2 步骤 1）。
+     *
+     * 原因是执行器解析表时会把索引列表拷进一个固定大小的缓冲区
+     * （TableCtx.idxs_buf）。超限的话不是"拷不下"这么温和，
+     * 而是那条查询直接失败 —— 与其让它在查询时炸，
+     * 不如在建索引时就明确报错。
+     */
+    if (tc.nidx >= SQL_MAX_COLS) {
+        snprintf(err, (size_t)errcap, "索引过多：每张表最多 %d 个", SQL_MAX_COLS);
+        return E_NOSPACE;
+    }
+
     rc = catalog_create_index(db->cat, db->cur_xid, st->index_name, tc.tid,
                               (u32)col, &iid);
     if (rc != OK) {
@@ -604,17 +617,13 @@ int exec_rebuild_indexes(Db *db, bool force)
         if (resolve_table_id(db, tid, &tc) != OK)
             continue;
 
-        const IndexInfo *idxs = NULL;
-        int nidx = 0;
-        if (catalog_table_indexes(db->cat, tid, &idxs, &nidx) != OK)
-            continue;
-
-        for (int k = 0; k < nidx; k++) {
-            if (!force && btree_format_ok(idxs[k].bt))
+        /* 索引列表已经在 resolve_table_id 里拷进 tc.idxs_buf（v1.2 步骤 1） */
+        for (int k = 0; k < tc.nidx; k++) {
+            if (!force && btree_format_ok(tc.idxs[k].bt))
                 continue;              /* 格式没变 → 不用动 */
 
             /* 索引是派生物：从表数据重建（AM 自己知道怎么重建） */
-            (void)tc.am->reindex(tc.am, idxs[k].meta.index_id, NULL);
+            (void)tc.am->reindex(tc.am, tc.idxs[k].meta.index_id, NULL);
         }
     }
     return OK;

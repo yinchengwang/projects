@@ -17,6 +17,13 @@
  * 这也是 v1.2「catalog copy-out 重构」的铺路：
  * 到时候要把"返回内部指针"的读接口全改成"拷出来"，
  * 那些接口的边界正好沿着这个头划。
+ *
+ * 【v1.2 步骤 1 已完成】
+ * 三个读接口（catalog_table_meta / catalog_table_cols / catalog_table_indexes）
+ * 已经改成拷贝出参 —— 外部拿不到这里面的指针了。
+ * 这个头现在只剩两个用处：
+ *   1. catalog.c 与 catalog_stats.c 共享内部结构
+ *   2. 测试（test/integration/test_copyout.c）要**证明**旧指针确实会悬空
  */
 
 typedef struct {
