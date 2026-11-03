@@ -1,6 +1,8 @@
 #ifndef DB_TXN_TXN_H
 #define DB_TXN_TXN_H
 
+#include <stdatomic.h>
+
 #include "common/error.h"
 #include "common/types.h"
 
@@ -86,28 +88,60 @@ typedef enum {
     ISO_REPEATABLE_READ      /* RR：事务级快照 */
 } TxnIsolation;
 
-/* clog 里存的 2 bit 状态值 */
+/* clog 里存的状态值（v1.2 步骤 4 起：每个 xid 一字节，不再 2bit 打包） */
 #define TXN_CLOG_INPROGRESS 0u
 #define TXN_CLOG_COMMITTED  1u
 #define TXN_CLOG_ABORTED    2u
 
 #define TXN_MAX_ACTIVE 64
 
-/* clog 环形窗口大小（必须是 4 的倍数，一个字节存 4 个状态） */
+/* clog 环形窗口大小（槽位数；每个槽位一字节） */
 #define TXN_CLOG_SLOTS 4096u
 
 typedef struct {
-    u32  xid;
-    u8   state;
+    _Atomic u32 xid;
+    _Atomic u8  state;
 } TxnEntry;
 
+/*
+ * ==================== v1.2 步骤 4：txn 域的并发保护 ====================
+ *
+ * 事务表是**实例级共享**的（xid 必须全局唯一），所以它是 txn 域要保护的东西。
+ *
+ * 【写路径：域锁（互斥）】
+ *
+ *   next_xid 分配、活跃表增删、clog 写入 —— 一律在 txn 域的锁里做。
+ *   域锁是**进程级**的一把互斥量（txn.c 里的静态锁）：
+ *   一个进程里同时开两个库的情况极少，而进程级锁换来的是
+ *   "不需要 init/destroy、不需要改任何调用点"的干净实现。
+ *
+ * 【读路径：无锁（原子）】
+ *
+ *   **可见性判断每读一行就要查一次 clog** —— 这是整个内核最热的读路径。
+ *   如果每次查 clog 都取一次 rwlock，10 万行的扫描会多花几毫秒，
+ *   A9 的门槛（扫描 + 过滤 ≥ 3×）会直接破。
+ *   所以读路径走**原子读**，一把锁都不取。
+ *
+ *   为此 clog 改成**每个 xid 一字节**（原来是一个字节存 4 个 2bit 状态）：
+ *   - 2bit 打包的话，两个线程改同一字节里的**不同** xid 会互相覆盖
+ *     （读-改-写竞争）→ 提交状态丢失 → "已提交的数据读不出来"。
+ *   - 一字节一 xid 之后，每个 xid 的状态独占一个字节 → 只存不读改，
+ *     原子读写不会丢更新。
+ *   代价：clog 从 1 KB 变成 4 KB（4096 个槽位）。微不足道。
+ *
+ * 【发布顺序不能反】
+ *
+ *   分配 xid 时：**先**把 clog[xid] 标成"进行中"，**再**发布 next_xid。
+ *   反过来的话，读者可能看到 "xid < next_xid"（像是已分配）
+ *   但 clog 还是默认值 → 被判成"已提交" → **脏读**。
+ */
 typedef struct TxnTable {
-    TxnEntry active[TXN_MAX_ACTIVE];   /* 活跃事务 */
-    int       n_active;
-    u32       next_xid;                /* 下一个可分配的 xid */
-    u32       committed_xmax;          /* 已提交事务的最大 xid（诊断用） */
-    u32       aborted_xmax;            /* 已中止事务的最大 xid（诊断用） */
-    u8        clog[TXN_CLOG_SLOTS / 4]; /* 环形提交日志 */
+    TxnEntry  active[TXN_MAX_ACTIVE];   /* 活跃事务 */
+    _Atomic int n_active;                /* 活跃事务数 */
+    _Atomic u32 next_xid;                /* 下一个可分配的 xid */
+    _Atomic u32 committed_xmax;          /* 已提交事务的最大 xid（诊断用） */
+    _Atomic u32 aborted_xmax;            /* 已中止事务的最大 xid（诊断用） */
+    _Atomic u8  clog[TXN_CLOG_SLOTS];    /* 环形提交日志：每个 xid 一字节 */
 } TxnTable;
 
 void txn_table_init(TxnTable *t, u32 start_xid);
