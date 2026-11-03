@@ -63,6 +63,7 @@ REF_EXE         := $(OBJ_DIR)/hnswlib_ref.exe
 EXEC_BENCH_EXE  := $(OBJ_DIR)/exec_bench.exe
 LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench.exe
 LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock.exe
+FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench.exe
 else
 VEC_BENCH_EXE   := $(OBJ_DIR)/vec_bench
 GRAPH_BENCH_EXE := $(OBJ_DIR)/graph_bench
@@ -70,6 +71,7 @@ REF_EXE         := $(OBJ_DIR)/hnswlib_ref
 EXEC_BENCH_EXE  := $(OBJ_DIR)/exec_bench
 LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench
 LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock
+FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench
 endif
 
 # ==================== A3：latch 吞吐基准（细粒度 vs 大锁基线） ====================
@@ -111,6 +113,14 @@ GRAPH_BENCH_OBJS := $(OBJ_DIR)/bench/graph_bench.o
 EXEC_BENCH_OBJS  := $(OBJ_DIR)/bench/exec_bench.o $(OBJ_DIR)/bench/exec_volcano.o \
                    $(OBJ_DIR)/bench/exec_agg_ref.o $(OBJ_DIR)/bench/exec_bench_diff.o
 
+# v1.3 步骤 5：全文检索的基准（A4 合并代价 + A5 IO 可证）。
+#   ft_bench.c        A4 与入口
+#   ft_bench_a5.c     A5（单 term 检索的页读）
+#   ft_bench_corpus.c 语料生成（可复现）
+FT_BENCH_OBJS := $(OBJ_DIR)/bench/ft_bench.o $(OBJ_DIR)/bench/ft_bench_a4.o \
+                 $(OBJ_DIR)/bench/ft_bench_a5.o \
+                 $(OBJ_DIR)/bench/ft_bench_corpus.o
+
 # 基准要连主库的全部对象（但不能连 main.o —— 它自己带 main）
 LIB_OBJS   := $(filter-out $(OBJ_DIR)/main.o,$(OBJS))
 
@@ -151,7 +161,10 @@ $(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
-bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE)
+bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE)
+
+$(FT_BENCH_EXE): $(FT_BENCH_OBJS) $(LIB_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(FT_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
 
 $(VEC_BENCH_EXE): $(VEC_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(VEC_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
