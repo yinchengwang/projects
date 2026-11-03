@@ -168,7 +168,7 @@ static int ft_hit_better(double score, u32 doc_id, const FtHit *old)
  * 为什么不能一遍搞定：idf 依赖语料级的 df，而 df 要等所有文档都切过才知道。
  */
 static int ft_linear_scan(const FtDocText *docs, u32 n_docs, const FtToken *query, u32 n_query,
-                           u32 top_k, FtHit *out, u32 *n_out, int use_bm25)
+                           u32 top_k, u32 max_out, FtHit *out, u32 *n_out, int use_bm25)
 {
     FtToken *buf = NULL;
     u32 buf_cap = 0;
@@ -186,18 +186,32 @@ static int ft_linear_scan(const FtDocText *docs, u32 n_docs, const FtToken *quer
     if (n_out == NULL) {
         return E_INVAL;
     }
+    *n_out = 0;
+
     if (docs == NULL && n_docs > 0) {
         return E_INVAL;
     }
     if (query == NULL && n_query > 0) {
         return E_INVAL;
     }
-    if (out == NULL && top_k > 0) {
-        /* 约定 out 的容量 >= top_k；连 out 都没有就无处可写 */
+    if (out == NULL) {
+        /*
+         * 没有结果缓冲区：top_k 非 0 就是没地方放结果 → E_NOSPACE；
+         * top_k 为 0（不要结果）时这个参数本身就没意义 → E_INVAL。
+         */
+        return (top_k > 0) ? E_NOSPACE : E_INVAL;
+    }
+    if (top_k > max_out) {
+        /*
+         * 装不下 top_k 条 → **明确报错，不静默截断**。
+         *
+         * 静默截断出来的结果"看起来对其实错"：调用方以为拿到了
+         * top_k 条，实际只有 max_out 条，少的往往是排名靠后的那些。
+         * 这种错不会报错，只会让人以为排序有问题 —— 比报错坏得多。
+         * （和 config.h 里 MAX_GROUPS 的"不能静默截断"是同一条方针。）
+         */
         return E_NOSPACE;
     }
-
-    *n_out = 0;
 
     if (n_docs == 0 || n_query == 0 || top_k == 0) {
         return OK;
@@ -318,13 +332,13 @@ done:
 }
 
 int ft_score_linear_bm25(const FtDocText *docs, u32 n_docs, const FtToken *query, u32 n_query,
-                         u32 top_k, FtHit *out, u32 *n_out)
+                         u32 top_k, u32 max_out, FtHit *out, u32 *n_out)
 {
-    return ft_linear_scan(docs, n_docs, query, n_query, top_k, out, n_out, 1);
+    return ft_linear_scan(docs, n_docs, query, n_query, top_k, max_out, out, n_out, 1);
 }
 
 int ft_score_linear_tfidf(const FtDocText *docs, u32 n_docs, const FtToken *query, u32 n_query,
-                          u32 top_k, FtHit *out, u32 *n_out)
+                          u32 top_k, u32 max_out, FtHit *out, u32 *n_out)
 {
-    return ft_linear_scan(docs, n_docs, query, n_query, top_k, out, n_out, 0);
+    return ft_linear_scan(docs, n_docs, query, n_query, top_k, max_out, out, n_out, 0);
 }

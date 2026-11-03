@@ -39,7 +39,11 @@ enum {
     PT_VEC_DATA    = 0x0B,  /* 向量数据页（列式：一页 K 个向量） */
     PT_VEC_META    = 0x0C,  /* 向量标量属性页（定长槽页，走 gstore） */
     PT_VEC_INDEX   = 0x0D,  /* HNSW 索引头页（v1.0 步骤 4） */
-    PT_VEC_LINK    = 0x0E   /* HNSW 邻接表页（定长槽页，每节点一条记录） */
+    PT_VEC_LINK    = 0x0E,  /* HNSW 邻接表页（定长槽页，每节点一条记录） */
+
+    PT_FT_HEAD     = 0x0F,  /* 全文检索的段头页（v1.3） */
+    PT_FT_DICT     = 0x10,  /* 全文检索的字典页（v1.3） */
+    PT_FT_POST     = 0x11   /* 全文检索的倒排页（v1.3） */
 };
 
 /* buffer pool：帧数必须是 2 的幂，Clock 算法取模更快 */

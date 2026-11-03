@@ -1,13 +1,14 @@
 /*
  * test_ft_bm25.c —— 评分公式必须和手算逐位一致（v1.3 步骤 1）
  *
- * 6 项：
+ * 7 项：
  *   1. BM25 单词贡献 == 手算值（Lucene 式 idf，k1=1.2、b=0.75）
  *   2. BM25 的长度归一：同样命中，长文档分数更低
  *   3. TF-IDF 对照 == 手算值（教科书式 idf，**不做**长度归一）
  *   4. 线性扫描 BM25 == 按公式逐条累加
  *   5. 线性扫描 TF-IDF == 按公式逐条累加；且与 BM25 的排序**不同**
  *   6. top-k 截断、平局按 doc_id 升序、无命中、以及 avgdl=0 的防护
+ *   7. max_out 容量：容量 < top_k 时报 E_NOSPACE，**不静默截断**
  *
  * 【为什么分数要写死】
  *
@@ -207,7 +208,7 @@ static void t4_linear_bm25(void)
     memcpy(query[1].text, "fox", 3);
     query[1].text[3] = '\0';
 
-    rc = ft_score_linear_bm25(docs, 3, query, 2, 8, hits, &n);
+    rc = ft_score_linear_bm25(docs, 3, query, 2, 8, 8, hits, &n);
     CHECK(rc == OK);
     /* doc1 没命中 → 不进结果 */
     CHECK(n == 2);
@@ -275,7 +276,7 @@ static void t5_linear_tfidf(void)
     memcpy(query[1].text, "fox", 3);
     query[1].text[3] = '\0';
 
-    rc = ft_score_linear_tfidf(docs, 3, query, 2, 8, hits, &n);
+    rc = ft_score_linear_tfidf(docs, 3, query, 2, 8, 8, hits, &n);
     CHECK(rc == OK);
     CHECK(n == 2);
 
@@ -332,7 +333,7 @@ static void t6_topk_and_edges(void)
     query[0].text[5] = '\0';
 
     /* 全部命中：2 条，平局按 doc_id 升序 */
-    rc = ft_score_linear_bm25(docs, 3, query, 1, 8, hits, &n);
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 8, 8, hits, &n);
     CHECK(rc == OK);
     CHECK(n == 2);
     if (n == 2) {
@@ -343,7 +344,7 @@ static void t6_topk_and_edges(void)
     }
 
     /* top_k=1 → 只留最好的那条（平局里 doc_id 小的赢） */
-    rc = ft_score_linear_bm25(docs, 3, query, 1, 1, hits, &n);
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 1, 8, hits, &n);
     CHECK(rc == OK);
     CHECK(n == 1);
     if (n == 1) {
@@ -351,7 +352,7 @@ static void t6_topk_and_edges(void)
     }
 
     /* top_k=0 → 一条都不给 */
-    rc = ft_score_linear_bm25(docs, 3, query, 1, 0, hits, &n);
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 0, 8, hits, &n);
     CHECK(rc == OK);
     CHECK(n == 0);
 
@@ -361,22 +362,22 @@ static void t6_topk_and_edges(void)
         miss[0].len = 3;
         memcpy(miss[0].text, "zzz", 3);
         miss[0].text[3] = '\0';
-        rc = ft_score_linear_bm25(docs, 3, miss, 1, 8, hits, &n);
+        rc = ft_score_linear_bm25(docs, 3, miss, 1, 8, 8, hits, &n);
         CHECK(rc == OK);
         CHECK(n == 0);
     }
 
     /* 空查询 → 0 条 */
-    rc = ft_score_linear_bm25(docs, 3, query, 0, 8, hits, &n);
+    rc = ft_score_linear_bm25(docs, 3, query, 0, 8, 8, hits, &n);
     CHECK(rc == OK);
     CHECK(n == 0);
 
     /* 参数非法 */
-    CHECK(ft_score_linear_bm25(docs, 3, query, 1, 8, hits, NULL) == E_INVAL);
-    CHECK(ft_score_linear_bm25(NULL, 3, query, 1, 8, hits, &n) == E_INVAL);
-    CHECK(ft_score_linear_bm25(docs, 3, NULL, 1, 8, hits, &n) == E_INVAL);
+    CHECK(ft_score_linear_bm25(docs, 3, query, 1, 8, 8, hits, NULL) == E_INVAL);
+    CHECK(ft_score_linear_bm25(NULL, 3, query, 1, 8, 8, hits, &n) == E_INVAL);
+    CHECK(ft_score_linear_bm25(docs, 3, NULL, 1, 8, 8, hits, &n) == E_INVAL);
     /* top_k 非 0 但没有结果缓冲区 */
-    CHECK(ft_score_linear_bm25(docs, 3, query, 1, 8, NULL, &n) == E_NOSPACE);
+    CHECK(ft_score_linear_bm25(docs, 3, query, 1, 8, 8, NULL, &n) == E_NOSPACE);
 
     /*
      * avgdl = 0 的防护。
@@ -394,6 +395,77 @@ static void t6_topk_and_edges(void)
     }
 }
 
+/* ---------------- 7) max_out 容量参数 ---------------- */
+
+/*
+ * v1.3 步骤 2 的接口收口：线性扫描的签名补上 max_out（out 的容量）。
+ *
+ * 【为什么这条断言重要】
+ *
+ * 老签名里没有容量参数，只能约定"out 的容量 >= top_k"，
+ * 调用方给小了会**越界写** —— 而且不报错。
+ *
+ * 现在容量显式给出，容量不够就**明确报错**（E_NOSPACE），不静默截断：
+ * 截断出来的结果"看起来对其实错"（调用方以为拿到了 top_k 条，
+ * 实际只有 max_out 条，少的往往是排名靠后的那些），比报错坏得多。
+ *
+ * 这条断言防的正是"静默截断"：如果实现改成"写 min(top_k, max_out) 条然后返回 OK"，
+ * 这里立刻红。
+ */
+static void t7_max_out_capacity(void)
+{
+    printf("  7) max_out 容量：装不下就报错，不静默截断\n");
+
+    FtDocText docs[3];
+    FtToken query[1];
+    FtHit hits[8];
+    u32 n = 0;
+    int rc;
+
+    docs[0].doc_id = 7;
+    docs[0].text = "alpha beta";
+    docs[0].text_len = (u32)strlen(docs[0].text);
+    docs[1].doc_id = 3;
+    docs[1].text = "alpha beta";
+    docs[1].text_len = (u32)strlen(docs[1].text);
+    docs[2].doc_id = 1;
+    docs[2].text = "gamma";
+    docs[2].text_len = (u32)strlen(docs[2].text);
+
+    query[0].len = 5;
+    memcpy(query[0].text, "alpha", 5);
+    query[0].text[5] = '\0';
+
+    /* 容量正好等于 top_k → 正常 */
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 2, 2, hits, &n);
+    CHECK(rc == OK);
+    CHECK(n == 2);
+
+    /* 容量大于 top_k → 正常（多的容量不碍事） */
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 2, 8, hits, &n);
+    CHECK(rc == OK);
+    CHECK(n == 2);
+
+    /*
+     * 容量小于 top_k → **E_NOSPACE**，不是截断后返回 OK。
+     *
+     * 这是本项的核心断言：截断会让调用方拿到"少了一半"的结果却以为拿到了 top_k 条。
+     */
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 2, 1, hits, &n);
+    CHECK(rc == E_NOSPACE);
+    CHECK(n == 0);          /* 出错时一条都不写出来 */
+
+    /* TF-IDF 版同样要报错（两个函数的容量语义必须一致） */
+    rc = ft_score_linear_tfidf(docs, 3, query, 1, 2, 1, hits, &n);
+    CHECK(rc == E_NOSPACE);
+    CHECK(n == 0);
+
+    /* top_k 为 0 时容量不重要，max_out=0 也合法 */
+    rc = ft_score_linear_bm25(docs, 3, query, 1, 0, 0, hits, &n);
+    CHECK(rc == OK);
+    CHECK(n == 0);
+}
+
 int main(void)
 {
     printf("test_ft_bm25:\n");
@@ -404,11 +476,12 @@ int main(void)
     t4_linear_bm25();
     t5_linear_tfidf();
     t6_topk_and_edges();
+    t7_max_out_capacity();
 
     if (failures) {
         printf("  %d 项断言失败\n", failures);
         return 1;
     }
-    printf("  6 项验收全部通过\n");
+    printf("  7 项验收全部通过\n");
     return 0;
 }

@@ -101,24 +101,30 @@ typedef struct {
  *     TF-IDF 的教科书式 idf 可能为负，命中了就是命中了）。
  *   - query 里的重复词**不去重**，各贡献一次（坑 M4-12）。
  *   - 排序：分数降序；分数相同按 doc_id 升序（坑 M4-11）。
- *   - 返回最多 top_k 条。
+ *   - 返回最多 top_k 条，且**绝不写出超过 max_out 条**。
  *
  * 返回值：
- *   OK        —— 成功，*n_out = 写进 out 的条数（<= top_k）。
- *   E_NOSPACE —— top_k 非 0 但 out 为 NULL（没地方放结果）。
- *   E_INVAL   —— 参数非法。
+ *   OK        —— 成功，*n_out = 写进 out 的条数（<= top_k，且 <= max_out）。
+ *   E_NOSPACE —— top_k > max_out（结果缓冲区装不下 top_k 条）；
+ *                或 top_k 非 0 但 out 为 NULL（没地方放结果）。
+ *   E_INVAL   —— 参数非法（n_out 为 NULL，或 out 为 NULL 而 top_k 为 0）。
  *
- * 【关于 out 的容量 —— 一个 API 形状上的遗憾】
+ * 【out 的容量：由 max_out 显式给出】
  *
- * 这个签名里没有"out 的容量"参数，只能约定 **out 的容量 >= top_k**，
- * 函数保证**绝不写出 top_k 条以上**。调用方给小了会越界 ——
- * 责任在调用方。将来接线时（步骤 2 的倒排索引）建议补一个 max_out 参数。
+ * out 的容量不再靠"约定 out 的容量 >= top_k"，而是由 max_out 这个
+ * 参数**显式给出**。top_k > max_out 直接报 E_NOSPACE，**不做静默截断** ——
+ * 截断出来的结果"看起来对其实错"（调用方以为拿到了 top_k 条，
+ * 实际只有 max_out 条，且少的那些往往是排名靠后的），比报错坏得多。
+ * 这条方针和 config.h 里 MAX_GROUPS 那条"不能静默截断"是同一条。
+ *
+ * 这个参数是 v1.3 步骤 2 与倒排检索接口（ft_segment_search）对齐时补上的：
+ * 那边的签名本来就带"显式容量"，两边形状不一致会让接线的人一直踩坑。
  */
 int ft_score_linear_bm25(const FtDocText *docs, u32 n_docs, const FtToken *query, u32 n_query,
-                         u32 top_k, FtHit *out, u32 *n_out);
+                         u32 top_k, u32 max_out, FtHit *out, u32 *n_out);
 
 int ft_score_linear_tfidf(const FtDocText *docs, u32 n_docs, const FtToken *query, u32 n_query,
-                          u32 top_k, FtHit *out, u32 *n_out);
+                          u32 top_k, u32 max_out, FtHit *out, u32 *n_out);
 
 #ifdef __cplusplus
 }
