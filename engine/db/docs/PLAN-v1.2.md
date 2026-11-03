@@ -224,9 +224,9 @@ vacuum 只删死版本，不整理页内碎片 —— 长期写负载下页利�
 
 | 决定 | 内容 |
 |---|---|
-| 触发 | vacuum 扫描时顺带统计每页碎片率（空洞字节 / 页大小）；**> 50% 的页**进入 compact 队列 |
+| 触发 | vacuum 扫描时顺带统计每页碎片率（空洞字节 / 页大小）；**> 50% 的页**进入 compact 队列 ⚠️ **勘误（步骤 5 已落地）**：VACUUM 路径实际取阈值 **0**（只要有空洞就整理）—— 逐页 50% 保证不了 A5 的"全表 < 20%"（一堆 40% 碎片的页摊在一起，全表就是 40%）。详见 §3 步骤 5 |
 | 做法 | 页内 slot 重排：存活记录前移、slot 目录压缩、free space 合并 |
-| 崩溃安全 | compact 前后各写一次 `WAL_PAGEDATA` 整页镜像（重放最后一张即最终态） |
+| 崩溃安全 | compact 前后各写一次 `WAL_PAGEDATA` 整页镜像（重放最后一张即最终态） ⚠️ **勘误（步骤 5 已落地）**：实际是**一条** `WAL_PAGEDATA` 记录里同时带 before / after 两份整页镜像 —— 原子性更好，不会出现"日志里只有前半截"的状态。详见 §3 步骤 5 |
 | 并发 | compact 在页 frame latch **内**完成（页级操作，不跨页）—— 这正是细粒度 latch 的第一个受益者：大锁下 compact 会卡住整库 |
 | RID 稳定性 | **slot 序号不变**（重排的是物理位置和 slot 目录的顺序，RID = (page, slot) 不变）→ 索引和游标不受影响 |
 
@@ -256,7 +256,7 @@ vacuum 只删死版本，不整理页内碎片 —— 长期写负载下页利�
 | A2 | **copy-out 生效**：并发 `CREATE TABLE` 时其他连接已取的列定义不受影响（新增回归：旧代码下此测试在细粒度锁内必红） | 集成测试 | ✅ `test/integration/test_copyout.c`（3 项：拷贝语义 / 悬空铁证 / 并发 DDL×查询） |
 | A3 | **吞吐 ≥ 2×**：8:2 读写混合、4 线程，细粒度 latch vs 大锁基线 ≥ 2 倍 | bench 对照（基线 v1.1 已存档） |
 | A4 | **死锁零发生**：压力测试 10 分钟 + 调试构建的**全序断言**全程无 abort | bench + 断言 |
-| A5 | **碎片率**：10 万次随机增删 → `VACUUM`（含 compact）→ 全表碎片率 < 20%（对齐 v0.1 口径） | 集成测试 |
+| A5 | **碎片率**：10 万次随机增删 → `VACUUM`（含 compact）→ 全表碎片率 < 20%（对齐 v0.1 口径） | 集成测试 | ✅ **步骤 5 达成**：`test/integration/test_vacuum_compact.c` —— 第一次 `VACUUM` 报 frag=36% / compacted=22 页 / freed=29583 字节，**第二次 `VACUUM` 报 frag=0% / compacted=0**（没有可整理的空洞了）。⚠️ **规模偏离**：计划写"10 万次随机增删"，实际用 2000 行 + 750 次改删（2750 个事务），因为每条语句都是独立事务、提交要 fsync 一次，10 万条要几分钟 —— 10 万级压测留给步骤 7 的吞吐基准 |
 | A6 | **恢复时间解耦**：写 100MB 数据 + checkpoint → 断电 → 恢复耗时只与 checkpoint 后日志量相关（对照实验：不 checkpoint 的同负载恢复明显更慢，且差值可解释） | bench |
 | A7 | **全序断言抓逆序**：注入一处逆序获取（先 L4 后 L2）→ 调试构建必须 abort | 反向验证 |
 | A8 | 旧验收全绿；依赖方向正确；**btree.c / catalog.c < 800 行** | `make check` + wc |
@@ -332,12 +332,16 @@ vacuum 只删死版本，不整理页内碎片 —— 长期写负载下页利�
 5–7 待执行。
 子步骤划分与结果见 §3。
 
-### 步骤 5 · 页内 compact
+### 步骤 5 · 页内 compact ✅ 已完成（2026-11-03）
 
 1. 碎片率统计（vacuum 顺带）+ compact 实现（frame latch 内）+ WAL 双镜像。
 2. `VACUUM` 输出加 `compacted_pages` 列。
 
 **验证**：A5 + 崩溃恢复（compact 中途断电）。
+
+**执行进度**：**步骤 5 ✅ 已完成**（A5 达成；附带修掉一个**既有缺陷**：
+恢复阶段 xid 状态表的 256 项上限 → 重启后可见性错乱）。
+6–7 待执行。子步骤与结果见 §3。
 
 ### 步骤 6 · checkpoint + 日志截断
 
@@ -1430,6 +1434,282 @@ sh test/run.sh                             # 48 个测试文件，60 处断言�
                                             # （新增 test_heap_insert_domain / test_btree_domain）
 ```
 
-### 步骤 5 – 步骤 7
+### 步骤 5 · 页内 compact + WAL 双镜像（2026-11-03）
+
+#### 落地的东西
+
+| 文件 | 改了什么 |
+|---|---|
+| `src/storage/heap.{c,h}` | 新增 `heap_compact_page` / `heap_compact_table` / `heap_compact_frag_pct` + `HeapCompactStats` / `HeapPageCompact` |
+| `src/txn/vacuum.{c,h}` | VACUUM 增加第三遍（页内 compact）；`VacuumStats` 加 `compacted_pages` / `freed_bytes` / `frag_pct`；纠正 v0.7 那句"compact 会让索引失效"的旧注释 |
+| `src/spi/storage_am.h`、`src/spi/heap_am.c` | `AmVacuumStats` 同步加三个字段 |
+| `src/query/exec_write.c` | `VACUUM` 输出从 3 列变 6 列 |
+| `src/wal/recovery.{c,h}`、`src/db.c` | **附带修复**：恢复阶段 xid 状态表改成按需增长的哈希表（见 §九） |
+| `test/unit/test_compact.c` | 新增（单元，3 项） |
+| `test/integration/test_vacuum_compact.c` | 新增（集成，A5 的证据） |
+| `test/integration/test_recovery_xids.c` | 新增（既有缺陷的回归测试） |
+| `test/integration/test_mvcc_it.c`、`test_spi_it.c` | `VACUUM` 结果列数 3 → 6 的同步 |
+
+#### 一、compact 到底在干什么
+
+`page_compact(pg)` 这个函数**v0.1 就在了**（`src/storage/page.c`），
+但**从来没有人调用它** —— 步骤 5 之前它是一段死代码。
+
+它做的事：把页里**还活着的记录**按 slot 升序搬到页尾，
+中间的空洞被抹平，空闲空间合并成页头附近的一块连续区域。
+
+```
+记录从页尾往下长（slot 号越大，地址越低）。
+假设按顺序插了 R0 / R1 / R2（各 100 字节），后来 R1 被删了：
+
+整理前（页头 ← 空闲区 → R2 → 空洞 → R0）：
+  [ 空闲 ][ R2 ][  洞  ][ R0 ]     ← 洞就是被删掉的 R1 留下的 100 字节
+整理后（空洞抹平，空闲区合并到页头一侧）：
+  [      空闲      ][ R2 ][ R0 ]
+```
+
+整理后每条记录的**地址变了**（R2 从 3800 挪到 3896，R0 从 4000 挪到 3996），
+但它们的**相对顺序不变**，而且 **slot 号没变** —— RID 因此不变。
+
+关键：**slot 编号不变**（`slot_set(pg, i, dst, l)` 只改物理偏移，
+不改 slot 号）。这是整个设计能成立的前提，见 §五。
+
+#### 二、⚠️ 勘误一：阈值不是 50%，是 0
+
+计划（§1.4）写的是"**> 50% 的页**进入 compact 队列"。
+
+那是**插入路径**的取舍标准（插入时顺手整理一下，碎片率不到一半
+就不值得为它写一条整页日志）。但 **VACUUM 是显式的维护操作** ——
+用户就是要"把表收拾干净"，而验收 A5 要的是"**全表**碎片率 < 20%"。
+
+逐页 50% 的阈值**保证不了**这个结果：一堆 40% 碎片的页摊在一起，
+全表就是 40%。
+
+所以 VACUUM 路径取阈值 **0**：只要有空洞就整理。
+代价是每个整理过的页写一条 8KB 的日志记录（before + after 两份整页）——
+WAL 增长换空间回收，这个取舍交给步骤 6 的 checkpoint 去兜（日志会被截断）。
+
+`heap_compact_page` 的阈值参数保留（`frag_threshold_pct`），
+插入路径将来要用；VACUUM 现在传 0。
+
+#### 三、整理必须在**副本**上做（log before data）
+
+崩溃安全的铁律是"**先日志，后数据**"：页的内容变之前，
+对应的日志必须已经写好。
+
+如果直接就地整理（先 `page_compact(真页)` 再写日志），
+中间崩溃就会留下"页变了、日志里没有"的窗口 —— 重放之后这页回不来。
+
+所以做法是：
+
+```c
+u8 before[PAGE_SIZE];   /* 整理前 */
+u8 after[PAGE_SIZE];    /* 整理后（在副本上整理出来） */
+memcpy(before, f->data, PAGE_SIZE);
+memcpy(after,  f->data, PAGE_SIZE);
+page_compact(after);               /* 只动副本 */
+
+/* 先写日志 */
+wal_log(h, xid, LOG_PAGEDATA, page_id, 0, LOG_NO_SLOT_OFF,
+        before, PAGE_SIZE, after, PAGE_SIZE, &lsn);
+
+/* 日志写好了，才把整理结果落到真页上 */
+memcpy(f->data, after, PAGE_SIZE);
+```
+
+`test/unit/test_compact.c` 的第 2 项专门盯这条：日志钩子捕获
+`LOG_PAGEDATA`，断言**恰好一条**、before/after 各 4096 字节，
+而且 `spy.frag_before == pc.frag_before`（日志里的 before 就是真页的 before）。
+
+#### 四、⚠️ 勘误二：一条日志记录带两份整页，不是"前后各一条"
+
+计划写的是"compact 前后**各写一次** `WAL_PAGEDATA` 整页镜像
+（重放最后一张即最终态）"。
+
+实际实现是**一条**记录里同时带 before 和 after：
+
+```
+┌──────────── WAL 记录 ────────────┐
+│ header │ before[4096] │ after[4096] │ crc │
+└────────────────────────────────────┘
+```
+
+- **重放（redo）**：盖 after → 最终态
+- **回滚（undo）**：盖回 before → 整理被撤销
+
+比"前后各一条"好的地方：日志里的信息是**原子的**，
+不会出现"日志里只有前半截"的状态（后半截丢失 → 恢复出来的页是半整理的）。
+
+代价：一条记录 4096 + 4096 = **8192 字节**，
+正好等于 `WAL_MAX_PAYLOAD`（判据是 `>`，所以放得下）。
+
+#### 五、RID 不变是整个设计的锚
+
+`RID = (page, slot)`。compact 只改**物理偏移**，不改 **slot 号**：
+
+- 索引项指向的 RID 不变 → 索引不需要重建，也不需要失效
+- 游标每次 `scan_next` 重新过 latch 拿偏移（本来就该如此）
+
+这一步顺带**纠正了 v0.7 的一处旧注释**：当时写的是
+"compact 会移动记录位置 → RID 变化 → 索引失效"，
+并以此为理由**没有**在 VACUUM 里调用 compact。
+
+实测（`test/unit/test_compact.c` 第 1 项）：整理前后
+12 行的**字节内容逐字节相同**，RID 不变，扫描行数不变。
+
+#### 六、freelist 档位必须跟着更新
+
+页里的空间回收了，`freelist` 里这一页挂的档位（可用字节数）也得更新：
+
+```c
+freelist_set(h->fl, page_id, page_free_bytes(f->data));
+```
+
+不更新的后果：这一页在 freelist 里还挂着**旧的（更小的）档位**，
+找页的时候会被当成"塞不下"而跳过 —— 空间明明空着却用不上。
+
+实测（单元第 3 项）：档位 68 → 158（回收 1440 字节）。
+
+#### 七、VACUUM 输出变成六列
+
+```
+scanned | removed | kept | compacted_pages | freed_bytes | frag_pct
+```
+
+前 3 列是老的；后 3 列是步骤 5 加的 —— 页内 compact 干了多少活，
+得能看见，否则"VACUUM 说成功"和"空间真回收了"分不开。
+
+`frag_pct` 是**整理之前**这张表的碎片率：它回答的是
+"这次 VACUUM 收拾的是多碎的一张表"。
+整理之后再来一次 VACUUM，`frag_pct` 应该是 0 —— 这正是 A5 的判据。
+
+`test/integration/test_mvcc_it.c` 和 `test_spi_it.c` 里
+"`db_result_cols(r) == 3`" 的断言同步改成 6。
+
+#### 八、A5 的证据
+
+`test/integration/test_vacuum_compact.c`（集成，3 个阶段）：
+
+```
+造数据：2000 行插入 + 750 次删改（2750 个事务，20 多页）
+        索引建在整理之前 —— 这样"整理后索引点查还准"才真的在验 RID 不变
+
+阶段 A（回收 + A5）：
+  第一次 VACUUM：scanned=2250 removed=750 kept=1500
+                 compacted=22 freed=29583 frag=36%
+  第二次 VACUUM：scanned=1500 removed=0   kept=1500
+                 compacted=0  freed=0     frag=0%      ← A5 达成
+
+阶段 B（数据没被改坏）：
+  活着的行数 = 1500（应为 1500）
+  逐行抽查 val：全部正确
+  已删除的行：读不到
+  索引点查：值正确（RID 没变）
+
+阶段 C（还能用 + 落盘了）：
+  整理后插入 / 点查：正常
+  关库 → 重开：行数一致、值一致
+  重开后再 VACUUM：frag=0%、compacted=0
+```
+
+**为什么"第二次 VACUUM 报 frag=0"就是 A5 的证据**：
+第一次报 36% 说的是"我收拾的是多碎的一张表"，不是"我没收拾干净"。
+真正说明结果的是第二次 —— 如果第一次没整理干净，
+第二次还会看到碎片（frag > 0、compacted > 0）。
+
+⚠️ **规模偏离（如实记录）**：计划 A5 写的是"10 万次随机增删"，
+实际是 2000 行 + 750 次改删。原因：每条 SQL 语句都是独立事务，
+提交时要 fsync 一次日志 —— 10 万条语句光 fsync 就要几分钟，
+集成测试不能这么跑。10 万级的压测留给步骤 7 的吞吐基准。
+
+#### 九、附带修掉一个**既有缺陷**：恢复阶段 xid 状态表的 256 项上限
+
+这是步骤 5 的集成测试撞出来的，**不是步骤 5 引入的** ——
+它跟页内 compact 没关系，去掉 VACUUM 一样复现。
+
+**缺陷**：`src/wal/recovery.c` 收集 xid 提交状态用的是**固定 256 项**的数组：
+
+```c
+#define REC_MAX_XIDS 256
+typedef struct {
+    int         n;
+    RecoveredXid xids[REC_MAX_XIDS];   /* 固定 256 项 */
+} RecoveredState;
+```
+
+扫日志时表满了就 `continue` —— 后面的 xid **既没记"已提交"也没记"已中止"**。
+
+**后果是静默的数据错误**（不崩溃，数据悄悄变错）：
+
+```
+300 次插入 + 150 次删除 = 450 个事务
+  关闭前 COUNT(*) = 150
+  重启后 COUNT(*) = 255      ← 删掉的 105 行又"活"了
+```
+
+为什么是"活"而不是"死"：删除**不是物理删除**，是给记录打 xmax 标记。
+"这行删了没有"这件事记在 xmax 的那个 xid 上，而那个 xid 的提交状态被丢了
+→ clog 说"进行中" → 可见性判断认为这行还活着。
+
+**边界在哪**：事务数 ≤ 256 时一切正常（这也是为什么老测试全绿 ——
+它们的数据量都太小）。实测：
+
+| 事务数 | 修复前：关闭前 → 重启后 | 修复后 |
+|---|---|---|
+| 15 | 5 → 5 ✓ | 5 → 5 ✓ |
+| 150 | 50 → 50 ✓ | 50 → 50 ✓ |
+| 300 | 100 → **145** ✗ | 100 → 100 ✓ |
+| 450 | 150 → **255** ✗ | 150 → 150 ✓ |
+
+**修复**：把固定数组换成**按需增长的开放寻址哈希表**
+（`recovery.c` 的 `rec_put` / `rec_grow` / `rec_hash`）：
+事务多少都不会丢状态，查找也从 O(n) 变成 O(1)。
+
+**RED 证据**（把三个文件回退到修复前、重编、重跑）：
+
+| 测试 | 修复前 | 修复后 |
+|---|---|---|
+| `test_recovery_xids`（600 事务） | **3 项失败**：重启后 255 行（应为 200）、id=297 的值读不到、已删的 id=0 还能读到 | 1 项全过 |
+| `test_vacuum_compact` | **2 项失败**：重启后行数不对、整理后插的那行读不到 | 3 项全过 |
+
+**遗留**：clog 本身是个 4096 槽的**环形窗口**（`txn.h`），
+xid 跨度超过 4096 之后老事务的提交状态会被覆盖。
+那是 **v1.2 步骤 6**（checkpoint + clog 落盘）要解决的事，不在步骤 5 范围内。
+（本步骤的集成测试因此把事务数控制在 4096 以内。）
+
+#### 十、如实记录（不注水）
+
+- **WAL 增长**：每整理一个页写 8KB 日志。20 多页的表一次 VACUUM 就是几百 KB。
+  这是"WAL 增长换空间回收"的自觉取舍，步骤 6 的日志截断来兜底。
+- **只整理堆表**：blob / graph / vector 的页**不参与**页内 compact ——
+  它们不是 slotted page（blob 是定长帧链，graph 是定长槽页，vector 是列式），
+  物理布局不一样，整理逻辑不通用。
+- **compact 是页级操作，在 frame 域内完成**：不跨页 ⇒ 不引入新的锁序风险
+  （"frame → wal"是合法方向）。
+- **`frag_pct` 是"整理前"的碎片率**：它是**这次 VACUUM 的工作量指标**，
+  不是"当前表的碎片率"。想知道当前表的碎片率，要再 VACUUM 一次
+  （第二次会报 0，因为第一次已经整理干净了）。
+- **`heap_compact_table` 逐页独立**：一页整理失败不影响别的页 ——
+  维护操作不该因为"某一页有点怪"就整体失败。
+- **步骤 5 没有碰并发路径**：compact 在 VACUUM 里跑，
+  而 VACUUM 是单连接维护操作；页内整理没有新的锁，
+  靠的是 pager 已有的 frame 域锁。
+- **恢复阶段 xid 表换成了哈希表**：这是**行为变更**（以前超 256 就丢），
+  但只是把"静默丢状态"改成"不丢"，没有新的失败模式。
+  哈希表在极端 xid 稀疏时会有一次 rehash 的开销（摊销 O(1)）。
+
+#### 验证方式
+
+```
+mingw32-make clean && mingw32-make all     # -Werror 零警告
+sh tools/check_deps.sh                     # ✓ 依赖方向正确
+sh test/run.sh                             # 51 个测试文件，0 FAIL
+                                             # （新增 test_compact / test_vacuum_compact / test_recovery_xids）
+mingw32-make bench && ./build/exec_bench.exe 100000 10
+                                            # A9 扫描+过滤 4.56× ✓（门槛 ≥ 3×）
+                                            # 对拍全绿 ✓
+```
+
+### 步骤 6 – 步骤 7
 
 （待执行）

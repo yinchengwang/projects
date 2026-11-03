@@ -196,6 +196,11 @@ PostgreSQL 的 heap、SQLite 的 b-tree 表、MySQL 的 InnoDB clustered index�
 slotted page（`storage/page.{h,c}`）：20B 页头 + 变长记录区 + 4B slot 数组
 （`offset:u16 + length:u16`）。页类型 `PT_HEAP`。
 
+**页内 compact（v1.2 步骤 5）**：删除只打 xmax 标记，记录的空间要等
+VACUUM 才回收，但记录留在原地 → 页里留下空洞。`page_compact` 把活着的记录
+按 slot 升序搬到页尾、空洞抹平；**slot 号不变 → RID 不变 → 索引不受影响**。
+这是唯一支持 compact 的模态（见坑 M0-4）。
+
 ### 2.4 事务语义
 
 **MVCC 版本链**（RC / RR）。快照三元组 `(xmin, xmax, xip[])`，
@@ -237,6 +242,19 @@ slotted page（`storage/page.{h,c}`）：20B 页头 + 变长记录区 + 4B slot 
 **坑 M0-3 · xid 不能藏在共享对象里**
 `wal_set_xid(w, xid)` 这种写法在多连接下会让 A 的日志带上 B 的 xid →
 恢复时 **A 的未提交数据被判为已提交**。铁律：所有写接口显式传 `u32 xid`。
+
+**坑 M0-4 · 只有关系模态的页能 compact（v1.2 步骤 5）**
+页内 compact（`page_compact`）针对的是 **slotted page**：
+关系模态的堆页是 slotted page，blob 是定长帧链、图是定长槽页、
+向量是列式 —— 物理布局不一样，整理逻辑**不通用**。
+所以 `VACUUM` 的页内整理这一遍**只作用于关系模态**，
+其余模态的 `VACUUM` 仍然是 `E_NOTSUP`（能力位没给）。
+详见 `DESIGN.md` §3.4。
+
+**坑 M0-5 · 整理完必须更新 freelist 档位（v1.2 步骤 5）**
+页里回收了空间，但 `freelist` 里这一页还挂着旧的（更小的）档位 →
+找页时被当成"塞不下"而跳过 —— **空间明明空着却用不上**。
+凡是"页的可用字节数变了"的地方，都要 `freelist_set`。
 
 ---
 
@@ -1491,6 +1509,9 @@ IO 可证：**只取路径字段时不读全文** —— 页读计数对比（v0
 - **带外部值的模态**（blob / 向量 / 时序 / 文档）给 `AM_CAP_EXTERNAL`
 - **可写但语句级提交的模态**（图）给全套写能力位，但 `visible()` 恒真
 - `VACUUM` 只有真正有版本链的给（关系 + 文档）
+  （v1.2 步骤 5 起，关系的 `VACUUM` 多做一遍**页内 compact**，
+  并且输出多三列：compacted_pages / freed_bytes / frag_pct；
+  页内 compact 只对 slotted page 有效 → 只作用于关系模态，见坑 M0-4）
 - `INDEX` 指的是"模态自带的加速结构"（btree 不算 —— 它是通用索引，另走 `IndexAM`）
 
 ### 10.2.1 批能力（v1.2 步骤 0 新增）：可选加速，不是正确性前提
