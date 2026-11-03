@@ -92,6 +92,9 @@ PT_FT_POST（posting 页，若干）：
 > 段头存的是 `total_len + doc_count`（不存 `avgdl`，读出来现算）；
 > posting 除 `(doc_id_delta, tf)` 外**还带 `dl`**（4 字节/条，换掉第四种页类型）。
 > **实际磁盘格式以 `src/modalities/ft/ft_internal.h` 为准。**
+>
+> ⚠️ **tombstone 的形态也变了**（步骤 3 实测后，见 §3 步骤 3）：
+> 落地的是**全局 doc_id 集合**，不是"按 `seg_id` 组织的位图"。
 
 ### 1.4 评分与合并
 
@@ -178,19 +181,26 @@ TF-IDF 作为对照实现保留（验收 A2 用：两种评分对同一语料的
 **验证**：单段检索 == 线性扫描（A1 的单段版）——
 BM25 与 TF-IDF 的 **doc_id 序列与分数都逐位全等**（直接 `==` 比，不设容差）。
 
-### 步骤 3 · 多 segment + tombstone + Tiered 合并
+### 步骤 3 · 多 segment + tombstone + Tiered 合并 ✅ 已完成（2026-11-03）
 
 1. 多段管理、跨段统计聚合、tombstone、合并。
+2. 验证：A1（多段）/ A3 / A6。
 
-**验证**：A1（多段）/ A3 / A6。
+> ⚠️ **本步与 §1.3 设计稿有两处偏差**（见 §3 步骤 3）：
+> tombstone 改成**全局 doc_id 集合**（不是按 seg_id 组织的位图）；
+> 旧段的页**不回收**（FT 模态没有 freelist）。
 
-### 步骤 4 · SPI 接线
+### 步骤 4 · SPI 接线 ✅ 已完成（2026-11-03）
 
 1. `spi/ft_am.{h,c}`：`ft_docs` 虚拟表（`visible` 恒真 —— 对齐 blob/graph 的语句级语义）。
 2. `db_ft.{h,c}`：`db_ft_index / search / delete / merge / page_reads`，全部 latch（硬规则 8）。
 3. REPL：`FT INDEX / SEARCH`。
 
 **验证**：A8 + 旧验收全绿。
+
+> ⚠️ **两处与计划稿的偏差**（见 §3 步骤 4）：
+> ① `ft_am` 落在 `src/modalities/ft/`（`spi/` 是 L3，不许依赖 `modalities/` L4）；
+> ② 现成 API 缺"枚举段 / 判墓碑"的只读访问器，补了两个纯增量的函数。
 
 ### 步骤 5 · 崩溃恢复 + 基准
 
@@ -484,5 +494,146 @@ sh test/run.sh              # 76 处 [PASS]，0 FAIL（75 → 76；新增 test_f
 
 - **A1（单段版）**：BM25 与 TF-IDF 分别与线性扫描对拍 —— **doc_id 序列与分数逐位全等**（直接 `==`，不设容差）。
 - **IO 可证（实测）**：1000 文档 / 45 页的段，单词查询页读 = **4 页**。
+
+---
+
+### 步骤 3 · 多 segment + tombstone + Tiered 合并（2026-11-03）
+
+**结论：完成。A1（多段）/ A3 / A6 三项验收全部达标 —— 检索结果与线性扫描逐位全等。**
+
+#### 落地的东西
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `src/modalities/ft/ft_index.{c,h}` + `ft_index_internal.h` | 779 + 143 + 65 | 索引对象：段数组 + tombstone 集合 + 跨段检索（两遍扫描）+ 合并触发 |
+| `src/modalities/ft/ft_merge.{c,h}` | 528 + 69 | 字典多路归并 + 倒排两路归并 |
+| `src/modalities/ft/ft_writer.{c,h}` | 600 + 112 | 倒排 / 字典 / 段头写入器（从建段流程里抽出来的） |
+| `src/modalities/ft/ft_scan.c` | 477 | 段的只读访问器：查词、扫词表、取倒排链 |
+| `src/modalities/ft/ft_search.c` | 585 | 段内检索（字典查找改为复用 `ft_segment_lookup`，删掉重复实现） |
+| `test/unit/test_ft_index.c` | 456 | A1 / A3 / A6 三项验收 |
+
+索引的形态：**索引 = 若干不可变的段 + 一份全局 tombstone 集合**。
+跨段的全局统计量（`N` / `df(t)` / `avgdl`）在检索时实时聚合。
+
+#### 四个设计决定
+
+**① tombstone 是全局 doc_id 集合，不是"按 seg_id 组织的位图"（偏离 §1.3 设计稿）。**
+理由三条：`doc_id` 由调用方给、**不稠密** → 位图需要一张稠密序号映射表，
+而段的物理形态里**没有文档表**；"删一篇文档"时调用方只知道 `doc_id`、
+不知道它在哪个段里（按段存就得先反查）；合并时按全局集合过滤语义更直白。
+代价：集合只增不减（删掉的文档合并后其实可以清掉，但"它还在别的段里吗"不好判断）。
+
+**② 跨段检索分两遍扫描。**
+第一遍只查字典、聚出全局 `df(t)` / `N` / `avgdl`；第二遍才取倒排链打分。
+为什么不一遍做：`idf` 与 `avgdl` 是**全局量**，一段里算不出来。
+段数 ≤ 8 时聚合代价可忽略 —— 这正是合并的动机之一（段越少，聚合越便宜）。
+
+**③ 字典多路归并用流式游标，内存 O(k) 页。**
+k 路归并如果每一路都把整页读进内存，就是 O(k × 页大小)；
+用游标（记住"当前路读到哪个 slot"）只占 O(k) 页。
+
+**④ 段级页读不动，索引级改成差量累加（坑 M4-16）。**
+`ft_count_page_read` 一行未改（段级仍是"该段自打开以来读过的页数"）；
+索引自己维护累计计数器，每次检索取前后差值再累加。
+⚠️ 附带修了一处**死计数器**：段的只读访问器原本刻意不记页读，
+而索引检索走的正是那条路径 → 差量恒为 0。修法是
+**查词与取倒排链记页读（检索路径），扫词表不记（全量扫描路径）**。
+
+#### 验收
+
+| 验收项 | 怎么验 | 结果 |
+|---|---|---|
+| **A1（多段）** | 9 段 × 60 篇 = 540 篇；4 个查询（含重复词，覆盖 M4-12）与"对整语料线性扫描"对拍：条数 / doc_id / **score 逐位相等**（`==`，不设容差） | ✅ |
+| **A3（删除）** | 挑一篇命中且位于段 0 的文档：删前必在结果里 → 删后检索不到 → 重复删是空操作 → merge（nsegs 9→8、ndocs 540→539，被删文档被物理丢弃）→ **合并后仍检索不到** | ✅ |
+| **A6（合并透明）** | merge 前后两个查询结果**逐位一致**；合并后仍与线性扫描逐位一致；页读 merge 后**不缩水** | ✅ |
+
+#### 如实记录（不注水）
+
+- **段列表与 tombstone 都只在内存里** —— 持久化是步骤 5 的活，
+  所以"关库再开库还能搜到"目前**不成立**。
+- **旧段的页不回收**（FT 模态没有 freelist）→ 磁盘文件随合并次数增长。
+- **`ft_index_delete` 不存在的 doc_id 会记一条 tombstone**
+  （索引不知道哪些 doc_id 真实存在，要判定就得扫段）。语义无害，但不是零痕迹。
+- **空文档（0 词）无法被 tombstone 扣减** —— 它不在任何倒排链里，扣减没有落点。
+- **被删文档在合并前仍计入 N 与 df**（与 Lucene 一致）→ idf 会有偏差。
+
+#### 验证方式
+
+```
+mingw32-make all            # -Werror 零警告，退出码 0
+sh tools/check_deps.sh      # ✓ 依赖方向正确
+sh test/run.sh              # 77 个测试文件 [PASS] / 0 [FAIL]（76 → 77；新增 test_ft_index.c）
+```
+
+---
+
+### 步骤 4 · SPI 接线（2026-11-03）
+
+**结论：完成。A8 达标 —— 执行器零改动。**
+
+#### 落地的东西
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `src/modalities/ft/ft_am.{h,c}` | 53 + 737 | `ft_docs` 虚拟表（SPI 适配） |
+| `src/modalities/ft/ft_index_view.c` | 63 | 两个只读访问器（枚举段 / 判墓碑） |
+| `src/db_ft.c` | 353 | 公开 API + 注册表接入 + 建/关索引 |
+| `src/repl_ft.{h,c}` | 23 + 166 | REPL 的 FT 命令 |
+| `test/unit/test_ft_spi.c` | 347 | 5 项验收 |
+| `include/db.h` | 456 → 554 | 公开 API 声明 + `db_ft_hit` |
+| `src/db_internal.h` | 208 → 249 | 实例字段（`FtIndex *ft` / `ft_am` / `ft_ctx`） |
+| `src/db.c` / `src/db_instance.c` / `src/main.c` | 679→699 / 179→197 / 625→632 | 开库接线 / 关库释放 / REPL 分发 |
+
+`ft_docs` 的四列：`doc_id` / `doc_len` / `nterms` / `sealed`。
+段的物理形态里没有文档表，所以行内容只能**从倒排链现算**：
+逐段 → 逐词 → 逐 posting → 按 `doc_id` 聚合（内存 O(文档数)）。
+`visible` 恒真；写类操作一律 `E_NOTSUP`；谓词下推只推 `doc_id` 的等值/范围。
+
+公开 API：`db_ft_add` / `db_ft_search` / `db_ft_delete` / `db_ft_merge` /
+`db_ft_exists` / `db_ft_ndocs` / `db_ft_nsegs` / `db_ft_ntombstones` / `db_ft_page_reads`。
+全部在 `latch_lock()` / `latch_unlock()` 之间调内核（硬规则 8），
+错误码走 `map_rc()`；`top_k > max_out` 严格返回 `DB_E_NOSPACE`（不静默截断）。
+
+REPL：`FT INDEX <doc_id> <text>` / `FT SEARCH <query> <top_k>`。
+
+#### 三个设计决定
+
+**① `ft_am` 放在 `src/modalities/ft/`，不是计划稿写的 `spi/ft_am/`。**
+`spi/` 是 L3、**禁止**依赖 `modalities/`（L4），分层门禁会红；
+向量模态的 `vector_am.c` 就是放在 `modalities/vector/` 的 —— 与它同款做法。
+**计划稿这一处写错了，落地按门禁来**（不去改 `check_deps.sh`）。
+
+**② 现成 API 缺"枚举段 / 判墓碑"的只读访问器 → 补两个纯增量的函数。**
+`ft_docs` 要逐段扫倒排链，而段列表与 tombstone 集合都是**索引私有状态**，
+不能让别的文件碰内部结构。补 `ft_index_seg_at()` / `ft_index_is_tomb()`，
+实现放在新文件 `ft_index_view.c`；`struct FtIndex` 挪到新内部头
+`ft_index_internal.h`（纯挪位置，字段与语义一个字没动）。
+
+**③ 索引不落盘 → `db_open` 建**空**索引，而不是假装能恢复。**
+段内容在盘上，但段清单与 tombstone 只在内存（步骤 5 才落盘），
+所以重开库**恢复不了**文档。`db_open` 建一个空 `FtIndex` 并注册 `ft_docs`
+（`ft_docs` 是一张**空表**，不是"表不存在"）——
+这与 graph/vector 的"没有就不注册"是两种状态，代码注释里写清了区别。
+
+#### 如实记录（不注水）
+
+- `ft_docs` 的物化**每次扫描都重做**（O(文档数) 内存 + 读全部 posting）。
+  它是元数据路径，不是热路径；若将来变热，得改成"写入时维护一张文档表"
+  （要动段格式，步骤 5 之后评估）。
+- **0 词文档不会出现在 `ft_docs` 里**（它没有任何 posting 可反推），
+  但它计入段的 `doc_count` —— 与"空文档无法被墓碑命中"是同一个根因。
+- **删除后行仍在、`sealed=1`**，直到一次合并把它物理丢弃（Lucene 式）。
+- 同一 `doc_id` 出现在多个段里（删了又用同一个 id 重加）→ **不报错**，
+  口径是**段号大者胜**（坑 M4-19）。
+- 同一 `doc_id` 的多个 posting 里 `dl` 不一致 → `E_CORRUPT`（不"取一个凑合"，坑 M4-18）。
+
+#### 验证方式
+
+```
+mingw32-make all            # -Werror 零警告，退出码 0
+sh tools/check_deps.sh      # ✓ 依赖方向正确
+sh test/run.sh              # 78 个测试文件 [PASS] / 0 [FAIL]（77 → 78；新增 test_ft_spi.c）
+grep -rn "ft_\|fulltext" src/query/    # 零命中 —— A8：执行器零改动
+```
 
 ---
