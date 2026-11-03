@@ -165,7 +165,33 @@ static int txn_end_abort(DB *db)
  */
 db_err db_exec(DB *db, const char *sql, Result **out)
 {
+#ifdef DB_BIGLOCK_BASELINE
+    /*
+     * ==================== A3 大锁基线（只在带这个宏的构建里存在） ====================
+     *
+     * 这一段是步骤 4d **退役之前**的写法，原样放回来 ——
+     * 它是 A3 的"大锁基线"，用来和细粒度版本做吞吐对照。
+     *
+     * 【为什么用编译期开关，而不是运行期开关】
+     * 运行期开关会让两种模式跑在同一个进程里：页缓存、缓冲池、WAL 状态
+     * 都会互相污染，比值就不干净了。两次独立进程、两次独立库文件，才是对照。
+     *
+     * 【为什么是"整条语句持锁"】
+     * 因为这**就是**退役之前的行为：锁的范围覆盖 parse / 开事务 /
+     * 执行 / 提交（含 fsync）。少放一点就不是基线了。
+     *
+     * 【生产构建不带这个宏】
+     * 默认构建（不带 -DDB_BIGLOCK_BASELINE）走下面的 #else 分支，
+     * 也就是现在的细粒度路径。这段代码只服务于 bench/latch_bench.c。
+     */
+    db_err rc;
+    latch_lock();
+    rc = db_exec_impl(db, sql, out);
+    latch_unlock();
+    return rc;
+#else
     return db_exec_impl(db, sql, out);
+#endif
 }
 
 static db_err db_exec_impl(DB *db, const char *sql, Result **out)

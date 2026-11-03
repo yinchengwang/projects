@@ -1,4 +1,5 @@
 build/
+build_biglock/
 db
 db.exe
 *.o
@@ -8,6 +9,7 @@ db.exe
 *.db
 *.db-wal
 *.db-shm
+*.db-clog
 *.wal
 test/tmp/
 bench/tmp/

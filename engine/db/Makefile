@@ -59,12 +59,39 @@ VEC_BENCH_EXE   := $(OBJ_DIR)/vec_bench.exe
 GRAPH_BENCH_EXE := $(OBJ_DIR)/graph_bench.exe
 REF_EXE         := $(OBJ_DIR)/hnswlib_ref.exe
 EXEC_BENCH_EXE  := $(OBJ_DIR)/exec_bench.exe
+LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench.exe
+LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock.exe
 else
 VEC_BENCH_EXE   := $(OBJ_DIR)/vec_bench
 GRAPH_BENCH_EXE := $(OBJ_DIR)/graph_bench
 REF_EXE         := $(OBJ_DIR)/hnswlib_ref
 EXEC_BENCH_EXE  := $(OBJ_DIR)/exec_bench
+LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench
+LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock
 endif
+
+# ==================== A3：latch 吞吐基准（细粒度 vs 大锁基线） ====================
+#
+# 两个二进制，**同一份源码**，区别只有一个编译期宏：
+#
+#   latch_bench          当前源码（细粒度 latch）
+#   latch_bench_biglock  同一份源码 + -DDB_BIGLOCK_BASELINE（把退役的大锁放回去）
+#
+# 【为什么大锁基线要重编一遍整个库】
+# 那个开关是**编译期**的（见 src/db_stmt.c 里的 #ifdef DB_BIGLOCK_BASELINE）——
+# 用运行期开关的话，两种模式会跑在同一个进程里：页缓存、缓冲池、WAL 状态
+# 全部互相污染，比值就不干净了。两次独立进程、两次独立库文件，才是对照。
+#
+# 所以大锁版本有自己的一套目标文件（build_biglock/），不与主构建抢 .o。
+#
+# 【为什么基线是"整个语句持锁"】
+# 因为那**就是**步骤 4d 退役之前的写法（锁的范围覆盖 parse / 开事务 /
+# 执行 / 提交含 fsync）。少放一点就不是基线了。
+BIGLOCK_DIR   := build_biglock
+BIGLOCK_FLAGS := -DDB_BIGLOCK_BASELINE=1
+BIGLOCK_OBJS  := $(patsubst $(SRC_DIR)/%.c,$(BIGLOCK_DIR)/%.o,$(SRCS))
+BIGLOCK_DEPS  := $(BIGLOCK_OBJS:.o=.d)
+BIGLOCK_LIB   := $(filter-out $(BIGLOCK_DIR)/main.o,$(BIGLOCK_OBJS))
 
 BENCH_OBJS := $(patsubst $(BENCH_DIR)/%.c,$(OBJ_DIR)/bench/%.o,$(wildcard $(BENCH_DIR)/*.c))
 BENCH_DEPS := $(BENCH_OBJS:.o=.d)
@@ -98,12 +125,31 @@ $(OBJ_DIR)/bench/%.o: $(BENCH_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -I$(BENCH_DIR) -MMD -MP -c -o $@ $<
 
+# ---- A3：大锁基线那一份目标文件（-DDB_BIGLOCK_BASELINE） ----
+#
+# 单独一套 build_biglock/ 目录，不与主构建抢 .o ——
+# 两个 make 并发写同一个 .o 会写坏（gcc 直接写目标文件，不走临时文件）。
+$(BIGLOCK_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(BIGLOCK_FLAGS) -MMD -MP -c -o $@ $<
+
+$(BIGLOCK_DIR)/bench/%.o: $(BENCH_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(BIGLOCK_FLAGS) -I$(BENCH_DIR) -MMD -MP -c -o $@ $<
+
+# ---- A3 的两个基准可执行文件 ----
+$(LATCH_BENCH_EXE): $(OBJ_DIR)/bench/latch_bench.o $(LIB_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 # 基准 + 参照工具
 #
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
-bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE)
+bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE)
 
 $(VEC_BENCH_EXE): $(VEC_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(VEC_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
@@ -134,9 +180,10 @@ test: $(TARGET)
 check: deps test
 
 clean:
-	rm -rf $(OBJ_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(BIGLOCK_DIR) $(TARGET)
 
 -include $(DEPS)
 -include $(BENCH_DEPS)
+-include $(BIGLOCK_DEPS)
 
 .PHONY: all san deps test check clean bench
