@@ -88,6 +88,11 @@ PT_FT_POST（posting 页，若干）：
 内存持有 + WAL 逐条追加（`WAL_FT_TOMB` 新记录类型，内容仅 `seg_id + doc_id`）；
 重启时重放重建。**查询时过滤，合并时物理丢弃**。
 
+> ⚠️ **本节是设计稿，落地有两处偏差**（步骤 2 实测后，见 §3 步骤 2 的设计决定 ② / ③）：
+> 段头存的是 `total_len + doc_count`（不存 `avgdl`，读出来现算）；
+> posting 除 `(doc_id_delta, tf)` 外**还带 `dl`**（4 字节/条，换掉第四种页类型）。
+> **实际磁盘格式以 `src/modalities/ft/ft_internal.h` 为准。**
+
 ### 1.4 评分与合并
 
 **BM25**（k1=1.2, b=0.75）：
@@ -165,11 +170,13 @@ TF-IDF 作为对照实现保留（验收 A2 用：两种评分对同一语料的
 
 **验证**：tokenizer 边界用例 + BM25 手算对照。
 
-### 步骤 2 · 单 segment 写读
+### 步骤 2 · 单 segment 写读 ✅ 已完成（2026-11-03）
 
 1. 段格式（三种页）+ 构建（一批文档 → 一个 segment）+ 单段检索。
+2. 段对象（`open / close`）、段内检索（BM25 / TF-IDF）、页读计数（IO 可证的前半截）。
 
-**验证**：单段检索 == 线性扫描（A1 的单段版）。
+**验证**：单段检索 == 线性扫描（A1 的单段版）——
+BM25 与 TF-IDF 的 **doc_id 序列与分数都逐位全等**（直接 `==` 比，不设容差）。
 
 ### 步骤 3 · 多 segment + tombstone + Tiered 合并
 
@@ -392,5 +399,90 @@ mingw32-make all            # -Werror 零警告，退出码 0
 sh tools/check_deps.sh      # ✓ 依赖方向正确（ft 模态只依赖 common/）
 sh test/run.sh              # 75 处 [PASS]，0 FAIL（73 → 75）
 ```
+
+---
+
+### 步骤 2 · 单 segment 写读（2026-11-03）
+
+**结论：完成。A1 的单段版达标 —— 段检索与线性扫描的 doc_id 序列与分数逐位全等。**
+
+#### 落地的东西
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `src/modalities/ft/ft_internal.h` | 267 | **磁盘格式契约**：三种页的字段偏移、词条编解码、run 编解码、`post_ptr` 打包（页号<<32 \| 页内偏移） |
+| `src/modalities/ft/ft_segment.h` | 120 | 段的公开 API：`ft_segment_build / open / close / search / search_tfidf / page_reads / nterms` |
+| `src/modalities/ft/ft_segment.c` | 122 | 段对象：读段头、校验页型与版本（不对 → `E_CORRUPT`）、页读计数 |
+| `src/modalities/ft/ft_segment_build.c` | 801 | 建段：切词 → 每文档 tf → 全局排序（term 升序、doc_id 升序）→ 写倒排页 → 写字典页 → 写段头页 |
+| `src/modalities/ft/ft_search.c` | 730 | 段内检索：切查询词 → 字典跨页二分 + 页内二分 → 顺着倒排链累加分数 |
+| `src/common/config.h` | — | 新增三种页类型：`PT_FT_HEAD` / `PT_FT_DICT` / `PT_FT_POST` |
+| `test/unit/test_ft_segment.c` | — | 13 项验收 |
+
+#### 段格式（落地版）
+
+一个段 = 三种页的区间，写完**不可变**：
+
+| 页类型 | 页数 | 布局 |
+|---|---|---|
+| `PT_FT_HEAD` | 1 | 段头：`seg_id / doc_count / max_doc_id / dict_start / dict_count / post_start / post_count / n_terms / total_len / create_lsn`，字段一律从偏移 **20** 开始（页头 20B 是 slotted page 的标准头） |
+| `PT_FT_DICT` | 若干 | **标准 slotted page**，**没有自定义区**。词条 = `u16 term_len` + term 字节 + `u32 df` + `u64 post_ptr`（14 + term 字节） |
+| `PT_FT_POST` | 若干 | **自定义密集格式**：数据区从 `FPH_DATA`=28 开始；一个 run = 12 字节头（`first_doc_id / n_post / flags / next_run`）+ n × 12 字节 posting（`delta / tf / dl`） |
+
+**字典页的"本页第一个词" = slot 0 的记录**（插入顺序 = 字典序）——
+跨页二分先拿每页的第一个词比，再在页内 slot 上二分。
+
+**倒排链的跨页**：一个 term 的 posting 填满一页就换页，`FTR_NEXT_RUN` 存**下一个 run 所在的页号**；
+续接的 run 永远落在那一页的 `FPH_DATA` 处，所以页号就足够定位（无需 u64 的 `post_ptr`）。
+
+#### 五个设计决定
+
+**① 段对象在内存里只有段头，posting 一个都不缓存。**
+字典页和倒排页都是**按需从页里读**的 —— 这是"IO 可证"（A5）的前提：
+查一个词的页读 = 字典二分的页数 + 该词的 posting 页数，**与总文档量无关**。
+段是不可变的，段对象唯一的写字段是 `page_reads`（纯统计）。
+
+**② 段头存 `total_len` + `doc_count`，不存 `avgdl`（偏离 §1.3 设计稿）。**
+`avgdl = total_len / doc_count`，而这两个都是整数；存 `f64` 到磁盘要处理字节序和结构体填充，不值当。
+存整数、读出来现算，得到的 double 与线性扫描那边算出来的**逐位相同**
+（两边都是 `(double)total_len / (double)doc_count`）—— A1 要求的就是这个。（坑 M4-15）
+
+**③ posting 里带 `dl`（偏离 §1.3 设计稿）。**
+BM25 的长度归一项需要每篇文档的词数 `dl`，而段的物理形态里**没有文档表**，
+所以 `dl` 只能跟着 posting 走 —— 每个词重复存一遍。代价 4 字节/条，
+收益是**不用引入第四种页类型**。备选方案（加一张 ordinal → (doc_id, dl) 的表）留到步骤 3 之后再评估。
+
+**④ 倒排链只有一种布局，不做"猜几种可能"的兜底。**
+猜布局会把"布局错了"变成"能读出来但是错的"—— 那是更坏的一种错。
+所以只保留契约定义的那一种布局，链走到形状不对就报 `E_CORRUPT`。（坑 M4-14）
+
+**⑤ 接口收口：`top_k > max_out` → `E_NOSPACE`。**
+这是步骤 1 记下的"API 形状上的遗憾"的兑现 —— `ft_score_linear_bm25 / ft_score_linear_tfidf`
+与 `ft_segment_search / ft_segment_search_tfidf` 现在都显式带 `max_out`，
+调用方给小了会**报错**而不是越界（与 `config.h` 里 `MAX_GROUPS` 的同款规矩）。
+
+#### 如实记录（不注水）
+
+- **段列表在内存里**，调用方自己攥着 `head_page`。
+  磁盘上的段目录属于步骤 4/5 —— 所以"**重开库还能找到段**"目前**不成立**。
+- **没有 tombstone，没有合并** —— 那是步骤 3 的事。
+- **没有段级专用 WAL 记录类型**：页的改动走 `LOG_PAGEDATA` 整页镜像
+  （与向量模态同款手法），段列表与 tombstone 的日志留到步骤 5。
+- **段占的页号必须连续**（`pager_alloc` 从文件尾分配，连续分配 ⇒ 连续）。
+  这在步骤 3 的合并里要小心：回收旧段页之后再重新分配，页号就不连续了。
+- 1000 篇文档建一个段 = **45 页**（段头 1 + 字典 1 + 倒排 43）；
+  单个词的查询只读 **4 页** < 45 —— **段的大小取决于词数，不取决于文档数**。
+- 倒排页的 run 头里的 `flags` 目前是**预留字段**（恒 0）。
+  位置索引（`pos`）也是预留 —— 见 §1.1 的"不做"表。
+
+#### 验证方式
+
+```
+mingw32-make all            # -Werror 零警告，退出码 0
+sh tools/check_deps.sh      # ✓ 依赖方向正确
+sh test/run.sh              # 76 处 [PASS]，0 FAIL（75 → 76；新增 test_ft_segment.c 13 项）
+```
+
+- **A1（单段版）**：BM25 与 TF-IDF 分别与线性扫描对拍 —— **doc_id 序列与分数逐位全等**（直接 `==`，不设容差）。
+- **IO 可证（实测）**：1000 文档 / 45 页的段，单词查询页读 = **4 页**。
 
 ---
