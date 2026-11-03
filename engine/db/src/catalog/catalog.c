@@ -659,6 +659,12 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
     cat->wal_fn = fn;
     cat->wal_ctx = ctx;
 
+    /* catalog 域的读写锁（v1.2 步骤 3）。此时还没有别的线程能用它 */
+    if (pthread_rwlock_init(&cat->rw, NULL) != 0) {
+        free(cat);
+        return E_IO;
+    }
+
     int rc;
     if (pager_npages(pg) == 0) {
         rc = bootstrap(cat);
@@ -666,6 +672,7 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
         PageFrame *f;
         rc = pager_get(pg, PAGE_ID_META, &f);
         if (rc != OK) {
+            pthread_rwlock_destroy(&cat->rw);
             free(cat);
             return rc;
         }
@@ -676,6 +683,7 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
         pager_unpin(pg, PAGE_ID_META, false);
 
         if (magic != CAT_MAGIC || psz != PAGE_SIZE) {
+            pthread_rwlock_destroy(&cat->rw);
             free(cat);
             return E_CORRUPT;      /* 不是我们的文件，或页大小变了 */
         }
@@ -690,6 +698,13 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
     return OK;
 }
 
+/*
+ * 关闭 catalog。
+ *
+ * 【不取锁】
+ * 销毁时已经没有别的线程在用这个实例（引用计数归零才走到这里），
+ * 而且 catalog_open 的错误路径也会调它 —— 取锁会自锁。
+ */
 void catalog_close(Catalog *cat)
 {
     if (!cat)
@@ -705,11 +720,12 @@ void catalog_close(Catalog *cat)
         freelist_destroy(cat->t[i].fl);
     }
     free(cat->t);
+    pthread_rwlock_destroy(&cat->rw);
     free(cat);
 }
 
-int catalog_create_table(Catalog *cat, u32 xid, const char *name,
-                         const ColDesc *cols, int ncols, u32 *table_id_out)
+int catalog_create_table_locked(Catalog *cat, u32 xid, const char *name,
+                                const ColDesc *cols, int ncols, u32 *table_id_out)
 {
     if (!cat || !name || !cols || ncols <= 0 || !table_id_out)
         return E_INVAL;
@@ -717,7 +733,8 @@ int catalog_create_table(Catalog *cat, u32 xid, const char *name,
         return E_INVAL;
 
     u32 exist;
-    if (catalog_find_table(cat, name, &exist) == OK)
+    /* 内部调用走 _locked 版本 —— 外面已经持写锁了，不能再取一次 */
+    if (catalog_find_table_locked(cat, name, &exist) == OK)
         return E_INVAL;            /* 重名 */
 
     FreeList *fl = NULL;
@@ -776,7 +793,7 @@ int catalog_create_table(Catalog *cat, u32 xid, const char *name,
     return OK;
 }
 
-int catalog_find_table(Catalog *cat, const char *name, u32 *table_id_out)
+int catalog_find_table_locked(Catalog *cat, const char *name, u32 *table_id_out)
 {
     if (!cat || !name || !table_id_out)
         return E_INVAL;
@@ -795,7 +812,7 @@ int catalog_find_table(Catalog *cat, const char *name, u32 *table_id_out)
  * 原来返回的是 &e->meta —— 那是 TableEnt 数组里的一个元素，
  * 而 cat->t 会在建表时 realloc（见 ent_add）→ 指针悬空。
  */
-int catalog_table_meta(Catalog *cat, u32 table_id, TableMeta *out)
+int catalog_table_meta_locked(Catalog *cat, u32 table_id, TableMeta *out)
 {
     if (!cat || !out)
         return E_INVAL;
@@ -817,7 +834,7 @@ int catalog_table_meta(Catalog *cat, u32 table_id, TableMeta *out)
  *
  * 两段式：buf = NULL 且 cap = 0 → 只报需要多少列。
  */
-int catalog_table_cols(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols)
+int catalog_table_cols_locked(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols)
 {
     if (!cat || !ncols)
         return E_INVAL;
@@ -839,7 +856,7 @@ int catalog_table_cols(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *n
     return OK;
 }
 
-Heap *catalog_heap(Catalog *cat, u32 table_id)
+Heap *catalog_heap_locked(Catalog *cat, u32 table_id)
 {
     if (!cat)
         return NULL;
@@ -847,7 +864,7 @@ Heap *catalog_heap(Catalog *cat, u32 table_id)
     return e ? e->heap : NULL;
 }
 
-void catalog_set_wal(Catalog *cat, HeapWalFn fn, void *ctx)
+void catalog_set_wal_locked(Catalog *cat, HeapWalFn fn, void *ctx)
 {
     if (!cat)
         return;
@@ -872,20 +889,20 @@ void catalog_set_wal(Catalog *cat, HeapWalFn fn, void *ctx)
  * 所以现在 xid 一路从 db 层传到 heap 层，作为参数传下去。
  */
 
-u32 catalog_table_id_at(const Catalog *cat, int i)
+u32 catalog_table_id_at_locked(const Catalog *cat, int i)
 {
     if (!cat || i < 0 || i >= cat->n)
         return 0;
     return cat->t[i].meta.table_id;
 }
 
-u32 catalog_ntables(const Catalog *cat)
+u32 catalog_ntables_locked(const Catalog *cat)
 {
     return cat ? (u32)cat->n : 0;
 }
 
-int catalog_create_index(Catalog *cat, u32 xid, const char *name, u32 table_id,
-                         u32 col_no, u32 *index_id_out)
+int catalog_create_index_locked(Catalog *cat, u32 xid, const char *name, u32 table_id,
+                                u32 col_no, u32 *index_id_out)
 {
     if (!cat || !name || !index_id_out)
         return E_INVAL;
@@ -966,8 +983,8 @@ int catalog_create_index(Catalog *cat, u32 xid, const char *name, u32 table_id,
  * 里面的 BTree* / FreeList* 指向的对象归 catalog 所有，
  * 索引不会被删，所以那些指针照样有效。
  */
-int catalog_table_indexes(Catalog *cat, u32 table_id,
-                          IndexInfo *buf, int cap, int *n_out)
+int catalog_table_indexes_locked(Catalog *cat, u32 table_id,
+                                 IndexInfo *buf, int cap, int *n_out)
 {
     if (!cat || !n_out)
         return E_INVAL;
@@ -990,7 +1007,7 @@ int catalog_table_indexes(Catalog *cat, u32 table_id,
     return OK;
 }
 
-u32 catalog_next_table_id(const Catalog *cat)
+u32 catalog_next_table_id_locked(const Catalog *cat)
 {
     return cat ? cat->next_table_id : 0;
 }

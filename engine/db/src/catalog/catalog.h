@@ -120,6 +120,43 @@ int  catalog_create_index(Catalog *cat, u32 xid, const char *name, u32 table_id,
 int  catalog_table_indexes(Catalog *cat, u32 table_id,
                            IndexInfo *buf, int cap, int *n_out);
 
+/*
+ * ---------------- v1.2 步骤 3：catalog 域的读写锁 ----------------
+ *
+ * catalog 是实例级共享的元数据，**读多写少**
+ * （只有建表 / 建索引 / VACUUM 才写）→ 用读写锁，读读不互斥。
+ *
+ * 【锁在哪一层拿】
+ *
+ * 公开 API **自己**拿锁（内部实现是 `_locked` 版本，见 catalog_priv.h）。
+ * 调用方**不要**自己拿 —— 拿两次就是递归取读写锁，未定义行为。
+ *
+ * 【读锁可重入，写锁不可】
+ *
+ *   - 同一线程重复取读锁 → 计数 +1，不重复碰底层的 rwlock
+ *     （POSIX 明确规定"重复取读锁"是未定义行为，有写者在等时会死锁）
+ *   - 持有读锁时再取写锁（**升级**）→ 直接报错退出
+ *   - 持有写锁时再取读锁 → 直接报错退出
+ *
+ * 【与全局大锁的关系】
+ *
+ * 步骤 3 里 `db_exec` 的大锁**保留**，所以 catalog 锁暂时是"备而不用"的。
+ * 步骤 4 大锁退役后，它才是真正的保护。
+ */
+void catalog_read_lock(const Catalog *cat);
+void catalog_read_unlock(const Catalog *cat);
+void catalog_write_lock(Catalog *cat);
+void catalog_write_unlock(Catalog *cat);
+
+/*
+ * 违反上面三条纪律时的处理函数（**测试专用**）。
+ *
+ * 默认行为是"打印 + abort()" —— "不可能发生"要有机器证明。
+ * 装上自己的函数之后就不再 abort，但调用方也拿不到"成功"的保证。
+ */
+typedef void (*CatalogViolationFn)(const char *msg);
+void catalog_set_violation_handler(CatalogViolationFn fn);
+
 /* 给所有表的堆注册 WAL 钩子（v0.6 起每条修改都写日志） */
 void catalog_set_wal(Catalog *cat, HeapWalFn fn, void *ctx);
 

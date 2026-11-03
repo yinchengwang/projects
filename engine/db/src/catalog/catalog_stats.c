@@ -47,7 +47,7 @@
 
 #include <string.h>
 
-int catalog_nrows(Catalog *cat, u32 table_id, i64 *out)
+int catalog_nrows_locked(Catalog *cat, u32 table_id, i64 *out)
 {
     if (!cat || !out)
         return E_INVAL;
@@ -60,7 +60,7 @@ int catalog_nrows(Catalog *cat, u32 table_id, i64 *out)
     return OK;
 }
 
-void catalog_set_nrows(Catalog *cat, u32 table_id, i64 n)
+void catalog_set_nrows_locked(Catalog *cat, u32 table_id, i64 n)
 {
     if (!cat)
         return;
@@ -73,7 +73,7 @@ void catalog_set_nrows(Catalog *cat, u32 table_id, i64 n)
     e->meta.nrows_est = n < 0 ? 0 : n;
 }
 
-void catalog_add_nrows(Catalog *cat, u32 table_id, i64 delta)
+void catalog_add_nrows_locked(Catalog *cat, u32 table_id, i64 delta)
 {
     if (!cat)
         return;
@@ -86,7 +86,7 @@ void catalog_add_nrows(Catalog *cat, u32 table_id, i64 delta)
     e->meta.nrows_est = n < 0 ? 0 : n;
 }
 
-int catalog_persist_nrows(Catalog *cat, u32 xid, u32 table_id)
+int catalog_persist_nrows_locked(Catalog *cat, u32 xid, u32 table_id)
 {
     if (!cat)
         return E_INVAL;

@@ -3,6 +3,8 @@
 
 #include "catalog/catalog.h"
 
+#include <pthread.h>
+
 /*
  * catalog 的内部结构（catalog.c / catalog_stats.c 共享）。
  *
@@ -60,10 +62,53 @@ struct Catalog {
     TableEnt *t;
     int       n;
     int       cap;
+
+    /*
+     * catalog 域的读写锁（v1.2 步骤 3）。
+     *
+     * catalog 是**实例级共享**的 —— 所有连接看同一份元数据。
+     * 元数据读多写少（只有建表 / 建索引 / VACUUM 才写），
+     * 所以用读写锁：读读不互斥。
+     *
+     * 锁的原语与线程本地递归状态在 catalog_lock.c 里。
+     */
+    pthread_rwlock_t rw;
 };
 
 /* 按 table_id 找内存里的表项（catalog.c 实现） */
 TableEnt *catalog_ent_by_id(Catalog *cat, u32 table_id);
+
+/*
+ * ---------------- 不加锁的内部实现（catalog_lock.c 的包装层调用） ----------------
+ *
+ * 【为什么要拆成"_locked" + 公开包装】
+ *
+ * 加锁写在**公开 API** 上，内部调用一律走 `_locked` 版本。
+ * 这样：
+ *   - 每个公开 API 只有**一个出口** → 加锁/解锁不会漏路径
+ *   - 内部函数之间互调**不会递归取锁**（读写锁递归取读锁是未定义行为，
+ *     而且有写者在等时会死锁）
+ *
+ * 公开的那一份在 catalog_lock.c 里：
+ *     lock → 调 _locked → unlock → 返回
+ */
+int  catalog_find_table_locked(Catalog *cat, const char *name, u32 *table_id_out);
+int  catalog_table_meta_locked(Catalog *cat, u32 table_id, TableMeta *out);
+int  catalog_table_cols_locked(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols);
+int  catalog_table_indexes_locked(Catalog *cat, u32 table_id, IndexInfo *buf, int cap, int *n_out);
+Heap *catalog_heap_locked(Catalog *cat, u32 table_id);
+void catalog_set_wal_locked(Catalog *cat, HeapWalFn fn, void *ctx);
+u32  catalog_table_id_at_locked(const Catalog *cat, int i);
+u32  catalog_ntables_locked(const Catalog *cat);
+u32  catalog_next_table_id_locked(const Catalog *cat);
+int  catalog_create_table_locked(Catalog *cat, u32 xid, const char *name,
+                                 const ColDesc *cols, int ncols, u32 *table_id_out);
+int  catalog_create_index_locked(Catalog *cat, u32 xid, const char *name, u32 table_id,
+                                 u32 col_no, u32 *index_id_out);
+int  catalog_nrows_locked(Catalog *cat, u32 table_id, i64 *out);
+void catalog_set_nrows_locked(Catalog *cat, u32 table_id, i64 n);
+void catalog_add_nrows_locked(Catalog *cat, u32 table_id, i64 delta);
+int  catalog_persist_nrows_locked(Catalog *cat, u32 xid, u32 table_id);
 
 /*
  * 把 TableMeta 编码成 sys_table 的一行（catalog.c 实现）。
