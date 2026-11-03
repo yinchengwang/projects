@@ -1686,7 +1686,7 @@ xid 都传 0。区别在于**前者可变**（图的就地更新、段的合并�
 | 1 | **跨模态联合查询** | 一条 SQL 同时扫关系 + blob + 向量。当前 SQL 子集是单表（`DESIGN.md` §10.1），这是最先要解的 |
 | 2 | **图算法** | 最短路 / PageRank —— 遍历原语已验收（v0.11），算法是应用层 |
 | 3 | **向量量化** | PQ / SQ / binary —— 精确 fp32 做对之后的正交优化 |
-| 4 | **细粒度 latch** | v1.2 的内核收尾项；前置的 copy-out 重构**已在 v1.2 步骤 1 完成**（见 DESIGN.md D4.2.1）；**catalog 域已在 v1.2 步骤 3 换成读写锁**（见 DESIGN.md D4.4），剩下 txn / wal / freelist / frame 四个域（步骤 4） |
+| 4 | **细粒度 latch** | v1.2 的内核收尾项；前置的 copy-out 重构**已在 v1.2 步骤 1 完成**（见 DESIGN.md D4.2.1）；**catalog 域已在 v1.2 步骤 3 换成读写锁**、**txn 域已在 v1.2 步骤 4a 自带保护**（见 DESIGN.md D4.4 / D4.5），剩下 wal / freelist / frame 三个域（步骤 4b / 4c） |
 | 5 | **过滤吸收进 ANN** | filtered-HNSW —— 激进优化，等有真实工作负载 |
 | 6 | **多段 blob 上传** | 需要给 blob 真正的 xid（见 §3.5） |
 
