@@ -262,7 +262,7 @@ static void t8_redo_idempotent(void)
 
     /* 第一次恢复：重放生效 */
     bool did = false;
-    CHECK(recovery_run(pg, w, &did) == OK);
+    CHECK(recovery_run(pg, w, 0, &did) == OK);
     CHECK(did == true);
 
     u16 len;
@@ -274,7 +274,7 @@ static void t8_redo_idempotent(void)
     pager_unpin(pg, pid, false);
 
     /* 第二次恢复：page_lsn 挡住，不该重复插入 */
-    CHECK(recovery_run(pg, w, &did) == OK);
+    CHECK(recovery_run(pg, w, 0, &did) == OK);
     CHECK(pager_get(pg, pid, &f) == OK);
     CHECK(page_slot_count(f->data) == 1);      /* 还是 1 个 slot，没插第二次 */
     pager_unpin(pg, pid, false);
@@ -319,7 +319,7 @@ static void t9_uncommitted_rolled_back(void)
 
     /* 注意：xid=2 没有 COMMIT —— 崩溃了 */
     bool did = false;
-    CHECK(recovery_run(pg, w, &did) == OK);
+    CHECK(recovery_run(pg, w, 0, &did) == OK);
 
     /* xid=2 的那条插入必须被撤销 */
     CHECK(pager_get(pg, pid, &f) == OK);

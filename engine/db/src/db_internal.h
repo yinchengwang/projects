@@ -91,8 +91,32 @@ typedef struct DbInstance {
     HnswAmCtx    vec_index_ctx;
 
     char     *walpath;
+    char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
     int       nconns;       /* 引用计数 */
 } DbInstance;
+
+/*
+ * ---------------- checkpoint（v1.2 步骤 6，db_ckpt.c 实现） ----------------
+ */
+
+/*
+ * 做一次 checkpoint：刷页 + 写 meta 页的重放点 + 落 clog + 截日志。
+ *
+ * allow_truncate = false 时只刷页、不截日志。
+ */
+int  db_checkpoint_internal(DbInstance *inst, bool allow_truncate);
+
+/* 阈值触发：日志超过阈值就顺手做一次 checkpoint。 */
+void db_checkpoint_maybe(DbInstance *inst);
+
+/*
+ * 日志里出现过的每个 xid，是不是都有 COMMIT 记录？
+ *
+ * 关库时用它决定"能不能写干净关闭标记"——
+ * 还有没提交的事务却写了标记，恢复阶段会跳过重放和回滚，
+ * 那个事务的物理删除就永久生效了。
+ */
+bool db_wal_all_committed(Wal *w, bool *ok);
 
 /*
  * 把向量模态的两样东西接进注册表（db_vec.c 实现）。

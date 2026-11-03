@@ -33,6 +33,25 @@
 
 #define TABLE_NAME_MAX 64
 
+/*
+ * ==================== meta 页布局 ====================
+ *
+ * 第 0 页（PAGE_ID_META）存整个库的"根指针"。
+ * 内容从 HDR_SIZE 之后开始，避免和 slotted page 的页头冲突。
+ *
+ * 【为什么这些宏在公开头里】
+ * db 层要在**恢复之前**读出 checkpoint_lsn（恢复的起点），
+ * 那时候 catalog 还没打开（catalog_open 要在恢复之后）。
+ * 所以布局常量必须能被 db 层直接看到。
+ */
+#define M_MAGIC    (HDR_SIZE + 0u)    /* u32：魔数 "MDB1" */
+#define M_VERSION  (HDR_SIZE + 4u)    /* u32：格式版本 */
+#define M_CATROOT  (HDR_SIZE + 8u)    /* u32：sys_table 的根页 */
+#define M_NEXTTID  (HDR_SIZE + 12u)   /* u32：下一个可分配的 table_id */
+#define M_PAGESZ   (HDR_SIZE + 16u)   /* u32：页大小（用于识别文件） */
+#define M_CRC      (HDR_SIZE + 20u)   /* u32：页校验和（由 page_set_checksum 管） */
+#define M_CKPT_LSN (HDR_SIZE + 24u)   /* u32：最近一次 checkpoint 的 LSN */
+
 typedef struct {
     u32  table_id;
     char name[TABLE_NAME_MAX];
@@ -196,5 +215,17 @@ u32  catalog_table_id_at(const Catalog *cat, int i);
 
 u32  catalog_ntables(const Catalog *cat);
 u32  catalog_next_table_id(const Catalog *cat);
+
+/*
+ * ---------------- checkpoint 的 LSN（v1.2 步骤 6） ----------------
+ *
+ * checkpoint_lsn 记在 meta 页里 = "这个 LSN 之前的日志记录都不用重放了"。
+ *
+ * 写：catalog_set_checkpoint_lsn —— 会把整个 meta 页写进日志（整页镜像），
+ *     所以这个值本身是崩溃安全的。
+ * 读：catalog_checkpoint_lsn。
+ */
+int  catalog_set_checkpoint_lsn(Catalog *cat, u32 xid, u32 lsn);
+u32  catalog_checkpoint_lsn(Catalog *cat);
 
 #endif /* DB_CATALOG_CATALOG_H */

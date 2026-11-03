@@ -2,6 +2,7 @@
 #define DB_TXN_TXN_H
 
 #include <stdatomic.h>
+#include <stdio.h>
 
 #include "common/error.h"
 #include "common/types.h"
@@ -38,16 +39,25 @@
  *   2 = 已中止
  * 快照时逐个查询，得到的是精确的提交状态。
  *
- * 【窗口化】
+ * 【v1.2 步骤 6：分块 clog + 落盘】
  *
- * clog 如果给 40 亿个 xid 都留位，要 1GB 内存，太奢侈。
- * 实际上只有"最近"的 xid 才有查询价值 —— 更老的 xid 早就结束了，
- * 一定是提交状态（或者被 abort，但 abort 的版本会被 vacuum 清掉，
- * 不会一直留着）。
+ * v0.7 刚做 clog 时用的是**环形窗口**（4096 个槽位，xid % 4096）。
+ * 那个设计有个硬伤：
  *
- * 所以用环形窗口：只保留最近 TXN_CLOG_SLOTS 个 xid 的状态。
- * 窗口外的 xid 一律按"已提交"处理 —— 安全的，因为要走出窗口，
- * 说明中间已经过去了 TXN_CLOG_SLOTS 个事务，那是很久以前的事。
+ *   窗口一满，老 xid 的状态就被新 xid **覆盖**了。
+ *   同一个会话里跑过 4096 个事务之后，早先事务的"已提交"标记就没了
+ *   → 那些行**读不出来**（静默丢数据）。
+ *
+ *   跨会话更糟：clog 只在内存里，重启后从 WAL 重建。
+ *   而 WAL 一旦被截断（步骤 6 的目标），重建的原料就没了
+ *   → 可见性判断失去依据。
+ *
+ * 所以步骤 6 把 clog 改成两件事：
+ *   1. **分块**（chunked）：按 xid 高位分块，块指针表固定大小、
+ *      读路径无锁（原子读块指针）→ 老 xid 的状态**不会被覆盖**。
+ *   2. **落盘**：`<db>-clog` 文件，第 xid 个字节就是它的状态。
+ *      WAL 截断之前先把 clog 文件 fsync —— 于是"提交状态"这条信息
+ *      永远有地方可查（要么在 clog 文件里，要么还在 WAL 里）。
  */
 
 typedef enum {
@@ -95,8 +105,29 @@ typedef enum {
 
 #define TXN_MAX_ACTIVE 64
 
-/* clog 环形窗口大小（槽位数；每个槽位一字节） */
-#define TXN_CLOG_SLOTS 4096u
+/*
+ * ==================== v1.2 步骤 6：分块 clog ====================
+ *
+ * 原来是环形窗口：clog[xid % TXN_CLOG_SLOTS]。
+ *
+ * 环形窗口有个硬伤 —— **老状态会被新状态覆盖**。
+ * 一个会话里跑过 4096 个事务之后，最早那批事务的"已提交"标记就没了，
+ * 那些行**读不出来**（静默丢数据）。
+ *
+ * 分块的做法：按 xid 的高位切块，一块覆盖 65536 个 xid。
+ *
+ *   块号 = xid >> 16          （0 .. 1023）
+ *   块内偏移 = xid & 0xFFFF
+ *
+ * 块指针表固定 1024 项，读的时候**原子读指针**（不取锁）——
+ * 这是可见性判断这条最热的读路径能保持无锁的关键。
+ *
+ * 覆盖范围：1024 × 65536 = 67108864 个 xid。
+ * 超过这个数就当"提交"处理（理论上到不了）。
+ */
+#define TXN_CLOG_CHUNK_BITS 16
+#define TXN_CLOG_CHUNK_SIZE (1u << TXN_CLOG_CHUNK_BITS)   /* 65536 字节/块 */
+#define TXN_CLOG_CHUNKS    1024u                          /* 块指针表长度 */
 
 typedef struct {
     _Atomic u32 xid;
@@ -141,7 +172,34 @@ typedef struct TxnTable {
     _Atomic u32 next_xid;                /* 下一个可分配的 xid */
     _Atomic u32 committed_xmax;          /* 已提交事务的最大 xid（诊断用） */
     _Atomic u32 aborted_xmax;            /* 已中止事务的最大 xid（诊断用） */
-    _Atomic u8  clog[TXN_CLOG_SLOTS];    /* 环形提交日志：每个 xid 一字节 */
+
+    /*
+     * clog：分块数组（v1.2 步骤 6）。
+     *
+     * clog_chunk[i] 指向覆盖 xid [i<<16, (i+1)<<16) 的那一块。
+     * NULL = 这一块还没被用到（读的时候按"提交"兜底）。
+     */
+    _Atomic(u8 *) clog_chunk[TXN_CLOG_CHUNKS];
+
+    /*
+     * clog 的落盘状态（v1.2 步骤 6）。
+     *
+     * 【为什么 clog 必须落盘】
+     *
+     * WAL 截断之后，"哪些事务提交过"这条信息就只剩 clog 文件了。
+     * 如果 clog 只在内存里，截断日志 = 把可见性判断的依据一起扔了
+     * → 重启后所有历史事务都变成"进行中" → **已提交的数据全看不见**。
+     *
+     * 所以截断日志之前必须先把 clog fsync 落盘 —— 顺序不能反。
+     *
+     * 文件格式：第 xid 个字节就是 xid 的状态（0/1/2，同内存里的编码）。
+     * 一字节一 xid，简单直接；文件长度 = 用过的最大 xid + 1。
+     */
+    FILE *clog_fp;      /* <db>-clog 文件；NULL = 没开落盘 */
+    u32   clog_lo;      /* 待落盘的最小 xid（含） */
+    u32   clog_hi;      /* 待落盘的最大 xid（含）；0 = 没有待落盘的 */
+    u32   clog_max_xid; /* 文件里出现过的最大 xid */
+    bool  clog_ready;   /* clog 文件已就绪 —— 可以安全按"已提交"兜底 */
 } TxnTable;
 
 void txn_table_init(TxnTable *t, u32 start_xid);
@@ -173,7 +231,7 @@ int  txn_abort(TxnTable *t, u32 xid);
  *
  * xid = 0 → 系统事务，永远已提交。
  * xid >= next_xid → 还没分配，视为进行中。
- * 窗口外 → 已提交。
+ * 块不存在（这个 xid 从来没被分配过）→ 按已提交兜底。
  */
 u8   txn_clog_state(const TxnTable *t, u32 xid);
 
@@ -214,5 +272,53 @@ int  txn_nactive(const TxnTable *t);
  * 否则恢复后已提交的事务会被误判为进行中。
  */
 void txn_clog_set(TxnTable *t, u32 xid, u8 state);
+
+/*
+ * ==================== v1.2 步骤 6：clog 落盘 ====================
+ */
+
+/*
+ * 打开（必要时创建）clog 文件，并把文件里的内容读进内存的 clog 块。
+ *
+ * path 一般是 "<db>-clog"。
+ *
+ * 【读进来为什么重要】
+ * 恢复阶段要判断"这个 xid 提交了没有"。日志被截断之后，
+ * 提交记录已经不在日志里了 —— 唯一的依据就是 clog 文件。
+ * 所以文件内容必须**整个**读进内存的块里，不能只留个偏移。
+ */
+int  txn_clog_open(TxnTable *t, const char *path);
+
+/*
+ * 把待落盘的 xid 区间写进文件并 fsync。
+ *
+ * 什么时候必须调：**截断 WAL 之前**。
+ * 顺序反了（先截日志后落 clog）= 提交状态随日志一起没了
+ * → 重启后已提交的数据全部不可见。
+ */
+int  txn_clog_sync(TxnTable *t);
+
+/* 关闭 clog 文件（会先 sync 一次）。 */
+void txn_clog_close(TxnTable *t);
+
+/*
+ * 丢弃 clog 文件（**不** sync）—— 模拟断电。
+ *
+ * db_abandon（断电模拟）用这个：真的断电时，
+ * 没落盘的东西就该没有。同步落盘会让"断电模拟"变得太温柔，
+ * 把本该暴露的问题藏起来。
+ */
+void txn_clog_discard(TxnTable *t);
+
+/* clog 文件里出现过的最大 xid（0 = 从来没有）。 */
+u32  txn_clog_max_xid(const TxnTable *t);
+
+/*
+ * 把 next_xid 推到 xid 之后（取 max）。
+ *
+ * 用途：日志被截断之后，日志里的最大 xid 会变小，
+ * 而"真正用过的最大 xid"记在 clog 文件里 —— 开库时要把两边取大。
+ */
+void txn_table_bump_xid(TxnTable *t, u32 xid);
 
 #endif /* DB_TXN_TXN_H */

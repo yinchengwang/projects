@@ -11,11 +11,14 @@
 #define WAL_FSYNC(f) _commit(_fileno(f))
 #define FSEEK _fseeki64
 #define FTELL _ftelli64
+/* 把文件截到指定长度（Windows 用 _chsize_s，POSIX 用 ftruncate） */
+#define WAL_TRUNCATE(f, len) _chsize_s(_fileno(f), (long)(len))
 #else
 #include <unistd.h>
 #define WAL_FSYNC(f) fsync(fileno(f))
 #define FSEEK fseeko
 #define FTELL ftello
+#define WAL_TRUNCATE(f, len) ftruncate(fileno(f), (off_t)(len))
 #endif
 
 #include "common/crc.h"
@@ -404,6 +407,151 @@ int wal_fsync(Wal *w)
     }
     /* 到这一刻为止的都落盘了 */
     atomic_store(&w->flushed_lsn, atomic_load(&w->last_lsn));
+    wal_unlock(w);
+    return OK;
+}
+
+/*
+ * 日志文件当前占用的字节数。
+ *
+ * 取域锁 —— 因为它要动 FILE* 的位置（fseek 到文件尾）。
+ * 和 append 抢同一个 FILE*，不能并发。
+ */
+u64 wal_bytes(Wal *w)
+{
+    if (!w || !w->f)
+        return 0;
+    wal_lock(w);
+    u64 n = 0;
+    if (FSEEK(w->f, 0, SEEK_END) == 0) {
+        long long sz = FTELL(w->f);
+        if (sz > 0)
+            n = (u64)sz;
+    }
+    wal_unlock(w);
+    return n;
+}
+
+/*
+ * 截断日志：删掉 lsn <= keep_lsn 的记录。
+ *
+ * 【做法：把要保留的后缀挪到文件头，再把文件截短】
+ *
+ * LSN 在文件里是递增的，所以"要保留的记录"就是文件的一个**后缀**。
+ * 把后缀整体前移，再截短文件，就完成了截断。
+ *
+ * 前移用固定大小的缓冲（64KB）流式做 —— 不把整个日志读进内存。
+ *
+ * 【为什么一条都留不住时要保留最后一条】
+ * 见 wal.h 里的说明：LSN 不能倒退。
+ * 日志被截空之后重开库，last_lsn 会算成 0，
+ * 新记录的 LSN 从 1 重新开始 —— 而 checkpoint_lsn 可能是 5000，
+ * 于是新记录全部落在 checkpoint_lsn 之下，恢复时被跳过 → 数据丢。
+ */
+int wal_truncate(Wal *w, u32 keep_lsn)
+{
+    if (!w || !w->f)
+        return E_INVAL;
+
+    wal_lock(w);
+
+    /* 扫一遍：找切点、算保留部分的边界和统计量 */
+    long long cut = -1;          /* 第一条要保留的记录的偏移 */
+    long long last_off = -1;     /* 最后一条完整记录的偏移 */
+    long long last_end = 0;      /* 最后一条完整记录的结束偏移 */
+    u32  max_lsn = 0;            /* 保留部分的最大 lsn */
+    u32  last_lsn = 0;
+    u32  last_xid = 0;
+    u32  max_xid = 0;            /* 保留部分的最大 xid */
+    u32  nrec = 0;               /* 保留部分的记录条数 */
+
+    WalRec r;
+    wal_scan_begin_locked(w);
+    while (wal_scan_next_locked(w, &r) == OK) {
+        if (cut < 0 && r.lsn > keep_lsn)
+            cut = r.off;
+        /*
+         * 只有切点之后的记录才被保留 —— 统计量必须只算保留部分，
+         * 否则截断后 nrecords / max_xid 会带着"已经扔掉的记录"，
+         * 重开库时 xid 会从一个虚高的值往下走（空洞），max_xid 也不准。
+         */
+        if (cut >= 0) {
+            nrec++;
+            if (r.lsn > max_lsn)
+                max_lsn = r.lsn;
+            if (r.xid > max_xid)
+                max_xid = r.xid;
+        }
+        last_off = r.off;
+        last_end = r.off + (long long)WAL_HDR + (long long)r.blen + r.alen + 4;
+        last_lsn = r.lsn;
+        last_xid = r.xid;
+    }
+    wal_scan_end_locked(w);
+
+    if (nrec == 0) {
+        /*
+         * 一条都留不住 → 保留最后一条（LSN 不能倒退）。
+         * 日志里总共一条记录都没有时，没什么可截的。
+         */
+        if (last_off < 0) {
+            wal_unlock(w);
+            return OK;             /* 日志本来就是空的 */
+        }
+        cut = last_off;
+        max_lsn = last_lsn;
+        max_xid = last_xid;
+        nrec = 1;
+    }
+
+    /* 把 [cut, last_end) 挪到文件头 */
+    long long newlen = last_end - cut;
+    if (newlen > 0) {
+        u8 buf[65536];
+        long long src = cut;
+        long long dst = 0;
+        while (src < last_end) {
+            long long n = last_end - src;
+            if (n > (long long)sizeof(buf))
+                n = (long long)sizeof(buf);
+            if (FSEEK(w->f, src, SEEK_SET) != 0) {
+                wal_unlock(w);
+                return E_IO;
+            }
+            if (fread(buf, 1, (size_t)n, w->f) != (size_t)n) {
+                wal_unlock(w);
+                return E_IO;
+            }
+            if (FSEEK(w->f, dst, SEEK_SET) != 0) {
+                wal_unlock(w);
+                return E_IO;
+            }
+            if (fwrite(buf, 1, (size_t)n, w->f) != (size_t)n) {
+                wal_unlock(w);
+                return E_IO;
+            }
+            src += n;
+            dst += n;
+        }
+    }
+
+    /* 截短文件 —— 尾部那些不要的字节必须真的消失 */
+    if (WAL_TRUNCATE(w->f, newlen) != 0) {
+        wal_unlock(w);
+        return E_IO;
+    }
+
+    atomic_store(&w->last_lsn, max_lsn);
+    atomic_store(&w->nrecords, nrec);
+    atomic_store(&w->max_xid, max_xid);
+    /* 保留的记录本来就已经落盘了（截断之前调用方 fsync 过） */
+    atomic_store(&w->flushed_lsn, max_lsn);
+    w->scan_pos = 0;
+
+    /* 截断本身也要落盘（文件长度变了） */
+    fflush(w->f);
+    WAL_FSYNC(w->f);
+
     wal_unlock(w);
     return OK;
 }

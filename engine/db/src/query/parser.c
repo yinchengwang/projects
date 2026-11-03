@@ -450,6 +450,10 @@ int parse_sql(const char *sql, Stmt *out, char *errbuf, int errcap)
         rc = OK;
     } else if (p_accept_kw(&p, "VACUUM")) {
         rc = p_parse_vacuum(&p, out);
+    } else if (p_accept_kw(&p, "CHECKPOINT")) {
+        /* CHECKPOINT：没有子句（v1.2 步骤 6）*/
+        out->kind = ST_CHECKPOINT;
+        rc = OK;
     } else if (p_accept_kw(&p, "SET")) {
         rc = p_parse_set_isolation(&p, out);
     } else {

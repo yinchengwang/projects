@@ -77,6 +77,7 @@
 #include <stdlib.h>
 
 #include "common/latch.h"
+#include "storage/page.h"
 
 /* 4GB 以上文件必须用 64 位偏移的 fseek。MinGW 用 _fseeki64。 */
 #ifdef _WIN32
@@ -461,6 +462,12 @@ static int fetch_frame(Pager *pg, u32 page_id, PageFrame **out)
     f->page_id = page_id;
     f->pin_count = 1;
     f->clock_ref = 1;
+    /*
+     * 帧被复用了：上一任主人留下的 rec_lsn 与新页无关。
+     * 不清零的话，新页的第一次改动会继承别人的 recLSN →
+     * 重放点被压低（安全方向，但白费功夫）。
+     */
+    f->rec_lsn = 0;
     hash_ins(pg, page_id, fi);
 
     /* 内容锁已经持有着（frame_lock 那一步），不用再拿一次 */
@@ -622,6 +629,7 @@ int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
 
     memset((*out)->data, 0, PAGE_SIZE);
     (*out)->dirty = true;    /* 新页视为已改，close 时落盘 */
+    (*out)->rec_lsn = 0;     /* 新页还没有"第一次改动"的 LSN */
     *page_id = id;
     return OK;
 }
@@ -642,8 +650,18 @@ int pager_unpin(Pager *pg, u32 page_id, bool dirty)
         pool_unlock(pg);
         return E_INVAL;      /* unpin 不配对：这是调用方的 bug */
     }
-    if (dirty)
+    if (dirty) {
+        /*
+         * 记 rec_lsn：**这一页自上次刷盘以来的第一次改动**的 LSN。
+         *
+         * 两种情况要重置：
+         *   - 这一页之前是干净的 → 这次就是"自上次刷盘以来的第一次改动"
+         *   - rec_lsn 还是 0（新分配的页 / 之前那次改动没写日志）
+         */
+        if (!f->dirty || f->rec_lsn == 0)
+            f->rec_lsn = page_lsn(f->data);
         f->dirty = true;
+    }
     pool_unlock(pg);
 
     /*
@@ -684,6 +702,13 @@ int pager_flush_all(Pager *pg)
                 return rc;
             }
             f->dirty = false;
+            /*
+             * 刷盘之后，这一页在盘上的内容就是最新的 ——
+             * 下一次改动要重新记一个 recLSN（"自上次刷盘以来的第一次改动"）。
+             * 不清零的话，recLSN 会一直停在刷盘前那个老值，
+             * 重放点被压得很低 → 白白多重放一遍。
+             */
+            f->rec_lsn = 0;
         }
         frame_unlock(pg, i);
     }
@@ -698,6 +723,40 @@ void pager_set_wal_flush(Pager *pg, PagerFlushLogFn fn, void *ctx)
     pg->wal_flush = fn;
     pg->wal_ctx = ctx;
     pool_unlock(pg);
+}
+
+/*
+ * 取脏页里最小的 rec_lsn（checkpoint 的重放起点）。
+ *
+ * 【逐帧取内容锁，不持池级锁】
+ * 与 pager_flush_all 同样的理由：持着池级锁去等别人的内容锁 = 死锁。
+ *
+ * rec_lsn == 0 的页被跳过 —— 那是"故意不写日志"的页
+ * （向量索引），日志里没有它们的记录，不约束重放点。
+ */
+u32 pager_min_dirty_lsn(const Pager *pg)
+{
+    if (!pg)
+        return 0;
+
+    Pager *m = (Pager *)pg;     /* 取内容锁需要非 const 的 Pager */
+    u32 min_lsn = 0;
+    bool any = false;
+
+    for (u32 i = 0; i < m->nframes; i++) {
+        frame_lock(m, i);
+        PageFrame *f = &m->frames[i];
+        if (f->page_id != PAGE_ID_NIL && f->dirty && f->rec_lsn != 0) {
+            if (!any || f->rec_lsn < min_lsn)
+                min_lsn = f->rec_lsn;
+            any = true;
+        }
+        frame_unlock(m, i);
+    }
+
+    if (!any)
+        return 0;               /* 没有能约束重放点的脏页 */
+    return min_lsn;
 }
 
 void pager_abandon(Pager *pg)

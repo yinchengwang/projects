@@ -377,3 +377,19 @@ int catalog_persist_nrows(Catalog *cat, u32 xid, u32 table_id)
     catalog_write_unlock(cat);
     return rc;
 }
+
+int catalog_set_checkpoint_lsn(Catalog *cat, u32 xid, u32 lsn)
+{
+    catalog_write_lock(cat);
+    int rc = catalog_set_checkpoint_lsn_locked(cat, xid, lsn);
+    catalog_write_unlock(cat);
+    return rc;
+}
+
+u32 catalog_checkpoint_lsn(Catalog *cat)
+{
+    catalog_read_lock(cat);
+    u32 lsn = catalog_checkpoint_lsn_locked(cat);
+    catalog_read_unlock(cat);
+    return lsn;
+}

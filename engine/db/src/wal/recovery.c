@@ -62,6 +62,22 @@ static bool xid_committed(const Vec *vec, u32 xid)
     return false;
 }
 
+/*
+ * 这个 xid 是不是"已经回滚完了"（恢复阶段记过 WAL_ABORT_DONE）？
+ *
+ * 有了它，第二次恢复就不会把同一个事务再回滚一遍。
+ * 回滚本身大体是幂等的（写回同一份前像、删同一个空 slot），
+ * 但"页恢复原位失败就放弃"的那种情况不幂等 —— 重复回滚可能把
+ * 别的行的位置也搞乱。宁可跳过。
+ */
+static bool xid_abort_done(const Vec *vec, u32 xid)
+{
+    for (int i = 0; i < vec->n; i++)
+        if (vec->v[i].rec.type == WAL_ABORT_DONE && vec->v[i].rec.xid == xid)
+            return true;
+    return false;
+}
+
 /* 取页并确保页号存在（日志里可能有文件还没覆盖到的页） */
 static int get_page(Pager *pg, u32 page_id, PageFrame **f)
 {
@@ -312,7 +328,7 @@ static int rec_put(RecoveredState *st, u32 xid, u32 *idx_out)
     }
 
     st->slots[s].xid = xid;
-    st->slots[s].committed = 0;
+    st->slots[s].state = REC_XID_UNKNOWN;
     st->n++;
     *idx_out = s;
     return OK;
@@ -321,8 +337,18 @@ static int rec_put(RecoveredState *st, u32 xid, u32 *idx_out)
 /*
  * 扫一遍日志，收集每个 xid 是提交了还是中止了。
  *
- * 判据：一个 xid 如果日志里有 WAL_COMMIT 记录 → 已提交；
- * 否则如果它有别的记录（数据修改）→ 已中止（恢复时会被回滚）。
+ * 判据：
+ *   看到 WAL_COMMIT → 已提交
+ *   看到 WAL_ABORT  → 已中止
+ *   只有数据记录    → **未知**（不猜！）
+ *
+ * 【为什么"不猜"】
+ * v1.2 步骤 6 之前这里猜的是"没看到 COMMIT 就是已中止"。
+ * 日志被截断之后这个猜测会出错：一个已提交的事务，
+ * 它的 COMMIT 记录可能已经被截掉了（提交发生在 checkpoint 之前），
+ * 猜成"已中止" → 它的行在恢复后不可见 → 数据丢。
+ *
+ * 现在只报"未知"，由调用方拿 clog 文件里的权威状态来定夺。
  *
  * 注意 xid=0（系统事务）：永远视为已提交，不收进表里。
  */
@@ -346,9 +372,11 @@ int recovery_scan_xids(Wal *w, RecoveredState *out)
         }
 
         if (r.type == WAL_COMMIT)
-            out->slots[idx].committed = 1;
+            out->slots[idx].state = REC_XID_COMMITTED;
         else if (r.type == WAL_ABORT)
-            out->slots[idx].committed = 0;
+            out->slots[idx].state = REC_XID_ABORTED;
+        else if (r.type == WAL_ABORT_DONE)
+            out->slots[idx].state = REC_XID_ABORT_DONE;
     }
     wal_scan_end(w);
 
@@ -357,7 +385,7 @@ int recovery_scan_xids(Wal *w, RecoveredState *out)
 
 /* ---------------- 入口 ---------------- */
 
-int recovery_run(Pager *pg, Wal *w, bool *did_recover)
+int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover)
 {
     if (!pg || !w || !did_recover)
         return E_INVAL;
@@ -396,8 +424,15 @@ int recovery_run(Pager *pg, Wal *w, bool *did_recover)
         return OK;
     }
 
-    /* 阶段 2：重放（含未提交事务）*/
+    /*
+     * 阶段 2：重放（含未提交事务）
+     *
+     * 只重放 lsn > checkpoint_lsn 的记录 ——
+     * 它之前的记录造成的效果已经在数据文件里了（checkpoint 时刷过页）。
+     */
     for (int i = 0; i < vec.n; i++) {
+        if (vec.v[i].rec.lsn <= checkpoint_lsn)
+            continue;
         rc = redo_one(pg, w, &vec.v[i].rec);
         if (rc != OK) {
             free(vec.v);
@@ -405,9 +440,24 @@ int recovery_run(Pager *pg, Wal *w, bool *did_recover)
         }
     }
 
-    /* 阶段 3：回滚未提交事务（倒序）*/
+    /*
+     * 阶段 3：回滚未提交事务（倒序）
+     *
+     * 【这里不按 checkpoint_lsn 过滤】
+     * 未提交事务的记录可能横跨 checkpoint 点（事务在 checkpoint 时还开着）。
+     * 回滚要的是前像（before image），哪怕 lsn <= checkpoint_lsn 也得用。
+     *
+     * 而且截断日志的前提就是"没有活跃事务"——
+     * 被截掉的记录一定是已结束事务的记录，不需要回滚。
+     *
+     * 【已经回滚完的事务跳过】
+     * 上一轮恢复已经记过 WAL_ABORT_DONE 的 xid，这里不再重复回滚。
+     */
     for (int i = vec.n; i-- > 0; ) {
-        if (xid_committed(&vec, vec.v[i].rec.xid))
+        u32 xid = vec.v[i].rec.xid;
+        if (xid_committed(&vec, xid))
+            continue;
+        if (xid_abort_done(&vec, xid))
             continue;
         rc = undo_one(pg, w, &vec.v[i].rec);
         if (rc != OK) {
@@ -415,6 +465,49 @@ int recovery_run(Pager *pg, Wal *w, bool *did_recover)
             return rc;
         }
     }
+
+    /*
+     * 阶段 4：给回滚完的事务补一条 WAL_ABORT_DONE。
+     *
+     * 【为什么必须补】
+     * 崩溃时开着的事务，在日志里只有 BEGIN + 数据记录，没有 COMMIT。
+     * 恢复把它回滚了，但日志里看不出"它已经回滚完了"。
+     *
+     * 后果：日志截断的前提是"日志里的事务都结束了"，
+     * 而这个事务永远显示"没结束" → **日志永远截不掉** →
+     * 步骤 6 想要的"恢复时间只取决于 checkpoint 之后的日志量"就废了。
+     *
+     * 补一条 WAL_ABORT_DONE 就把这个状态明确下来了：
+     * "它的前像已经用掉了，日志里这份可以扔"。
+     *
+     * 【为什么不用 WAL_ABORT】
+     * WAL_ABORT 是**运行时**事务失败时记的 —— 那时回滚**还没做**
+     * （本内核的删除是物理删除，运行时不做 undo）。
+     * 那种事务的 before 镜像仍然有用（万一再崩一次，还要回滚）。
+     * 两者必须分开，否则会把"没回滚的"当成"回滚完了" → 数据错。
+     */
+    for (int i = 0; i < vec.n; i++) {
+        u32 xid = vec.v[i].rec.xid;
+        if (xid == 0)
+            continue;                       /* 系统事务 */
+        if (xid_committed(&vec, xid))
+            continue;
+        if (xid_abort_done(&vec, xid))
+            continue;
+        /* 同一个 xid 只补一条 */
+        bool seen = false;
+        for (int j = 0; j < i; j++) {
+            if (vec.v[j].rec.xid == xid) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen)
+            continue;
+        wal_append_xid(w, WAL_ABORT_DONE, xid, PAGE_ID_NIL, 0, 0,
+                       NULL, 0, NULL, 0);
+    }
+    wal_fsync(w);
 
     free(vec.v);
 

@@ -63,6 +63,28 @@ void   db_conn_close(DB *conn);
 /* 执行：一条语句，结果放 Result（非 SELECT 语句返回 affected 行数） */
 db_err db_exec(DB *db, const char *sql, Result **out);
 
+/*
+ * ---------------- checkpoint（v1.2 步骤 6） ----------------
+ *
+ * 手动做一次 checkpoint：刷所有脏页、把重放点写进 meta 页、
+ * 提交状态落盘、然后截断日志。
+ *
+ * 效果：恢复时间只取决于"上次 checkpoint 之后写了多少日志"，
+ * 与库的总大小无关。
+ *
+ * 什么时候用：
+ *   - 想让下次启动更快（写完一大批数据之后）
+ *   - 想让日志文件别一直涨
+ *
+ * 代价：checkpoint 要刷所有脏页 + fsync，是一次明显的停顿。
+ *
+ * 【什么时候不会截断日志】
+ * 还有未提交的事务时不截 —— 未提交事务的日志记录是回滚的依据，
+ * 截掉了那行被物理删掉的数据就再也回不来了。
+ * （刷页和写重放点照做。）
+ */
+db_err db_checkpoint(DB *db);
+
 /* 结果集访问（row-major）。NULL 值返回字符串 "NULL"。 */
 int         db_result_rows(const Result *r);
 int         db_result_cols(const Result *r);

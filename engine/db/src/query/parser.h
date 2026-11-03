@@ -59,6 +59,7 @@ typedef enum {
     ST_COMMIT,      /* COMMIT：提交 */
     ST_ROLLBACK,    /* ROLLBACK：回滚 */
     ST_VACUUM,      /* VACUUM t：回收死版本 */
+    ST_CHECKPOINT,  /* CHECKPOINT：刷页 + 截断日志（v1.2 步骤 6）*/
     ST_SET_ISOLATION/* SET TRANSACTION ISOLATION LEVEL ... */
 } StmtKind;
 

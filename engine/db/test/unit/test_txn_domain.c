@@ -144,12 +144,15 @@ static void t1_xid_unique_and_committed(void)
     free(seen);
 }
 
-/* ---------------- 2) 槽位复用：未提交 ≠ 已提交 ---------------- */
+/* ---------------- 2) 分块边界：未提交 ≠ 已提交 ---------------- */
 
 /*
- * 把整个 clog 窗口填成"已提交"，然后开一个新事务 ——
- * 它的槽位里还留着老事务的"已提交"。
- * 如果开事务时不重置槽位，这个新事务会被读成"已提交" → 脏读。
+ * 跑满整整一块（跨到下一块），再开一个新事务 ——
+ * 它的状态必须是"进行中"，不能被读成"已提交"。
+ *
+ * v0.7 的环形窗口下这里会踩"槽位复用"的坑；
+ * v1.2 步骤 6 改成分块之后，槽位不再复用，这条断言守住的是
+ * "新分配出来的 xid 一定是进行中"这条更根本的不变量。
  */
 static void t2_stale_slot_not_committed(void)
 {
@@ -157,7 +160,7 @@ static void t2_stale_slot_not_committed(void)
     txn_table_init(&tt, 0);
 
     u32 last = 0;
-    for (u32 i = 0; i < TXN_CLOG_SLOTS; i++) {
+    for (u32 i = 0; i < TXN_CLOG_CHUNK_SIZE; i++) {
         u32 x = 0;
         CHECK(txn_begin(&tt, &x) == OK);
         CHECK(txn_commit(&tt, x) == OK);
@@ -227,8 +230,8 @@ static void t3_concurrent_no_dirty_read(void)
     TxnTable tt;
     txn_table_init(&tt, 0);
 
-    /* 先填满窗口，让"槽位复用"成为常态 */
-    for (u32 i = 0; i < TXN_CLOG_SLOTS; i++) {
+    /* 先填满一块，让"跨块分配"成为常态 */
+    for (u32 i = 0; i < TXN_CLOG_CHUNK_SIZE; i++) {
         u32 x = 0;
         CHECK(txn_begin(&tt, &x) == OK);
         CHECK(txn_commit(&tt, x) == OK);

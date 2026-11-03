@@ -189,33 +189,40 @@ static void t4_active_table(void)
     CHECK(txn_begin(&tt, &over) == E_NOSPACE);
 }
 
-/* ---- 5) clog 环形窗口 ---- */
-static void t5_clog_window(void)
+/* ---- 5) clog 分块：老 xid 的状态不会被覆盖 ---- */
+static void t5_clog_chunked(void)
 {
     TxnTable tt;
     txn_table_init(&tt, 0);
 
     /*
-     * 窗口外的 xid 一律视为已提交。
+     * v0.7 的 clog 是 4096 槽的环形窗口。
+     * 窗口一满，老 xid 的状态就被新 xid 覆盖 → 那些行读不出来
+     * （静默丢数据），而且中止的老事务只能"猜成已提交"。
      *
-     * 为什么安全：走出窗口意味着中间过去了 4096 个事务，
-     * 那个 xid 早就结束了（提交或中止）。中止的版本会被 vacuum 清掉，
-     * 不会一直留在表里被人读到。
+     * v1.2 步骤 6 改成**分块**：按 xid 高位切块，块只增不减。
+     * 于是老 xid 的状态一直都在 —— 包括"中止"这个精确信息。
      */
-    u32 x = 0;
-    CHECK(txn_begin(&tt, &x) == OK);
-    CHECK(txn_commit(&tt, x) == OK);
+    u32 xc = 0, xa = 0;
+    CHECK(txn_begin(&tt, &xc) == OK);
+    CHECK(txn_commit(&tt, xc) == OK);
+    CHECK(txn_begin(&tt, &xa) == OK);
+    CHECK(txn_abort(&tt, xa) == OK);
 
-    /* 推进 next_xid 越过整个窗口 */
-    for (u32 i = 0; i < TXN_CLOG_SLOTS + 10u; i++) {
+    /* 跑过整整一块（跨到下一块去） */
+    for (u32 i = 0; i < TXN_CLOG_CHUNK_SIZE + 10u; i++) {
         u32 y = 0;
         CHECK(txn_begin(&tt, &y) == OK);
         CHECK(txn_commit(&tt, y) == OK);
     }
 
-    /* 第一个 xid 已经落在窗口外 → 视为已提交 */
-    CHECK(txn_clog_state(&tt, x) == TXN_CLOG_COMMITTED);
-    CHECK(txn_committed(&tt, x) == true);
+    /* 老 xid 的"已提交"没有被覆盖 */
+    CHECK(txn_clog_state(&tt, xc) == TXN_CLOG_COMMITTED);
+    CHECK(txn_committed(&tt, xc) == true);
+
+    /* 老 xid 的"已中止"也还在 —— 环形窗口做不到这一点 */
+    CHECK(txn_clog_state(&tt, xa) == TXN_CLOG_ABORTED);
+    CHECK(txn_aborted(&tt, xa) == true);
 
     /* xid = 0 是系统事务，永远已提交 */
     CHECK(txn_clog_state(&tt, 0) == TXN_CLOG_COMMITTED);
@@ -265,7 +272,7 @@ int main(void)
     t2_clog_state();
     t3_xid_monotonic();
     t4_active_table();
-    t5_clog_window();
+    t5_clog_chunked();
     t6_restart_xid();
 
     if (failures) {

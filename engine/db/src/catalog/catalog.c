@@ -14,14 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---------------- meta 页布局（从 HDR_SIZE 之后开始） ---------------- */
-
-#define M_MAGIC    (HDR_SIZE + 0u)    /* u32 */
-#define M_VERSION  (HDR_SIZE + 4u)    /* u32 */
-#define M_CATROOT  (HDR_SIZE + 8u)    /* u32 */
-#define M_NEXTTID  (HDR_SIZE + 12u)   /* u32 */
-#define M_PAGESZ   (HDR_SIZE + 16u)   /* u32 */
-#define M_CRC      (HDR_SIZE + 20u)   /* u32 */
+/* ---------------- meta 页布局在 catalog.h（公开） ----------------
+ *
+ * 原来这些宏是本文件私有的。v1.2 步骤 6 改了它们的可见性：
+ * db 层要在**恢复之前**读出 checkpoint_lsn（恢复的起点），
+ * 那时 catalog 还没打开 —— 所以布局常量必须公开。
+ */
 
 /* ---------------- 系统表 schema（硬编码） ---------------- */
 
@@ -142,6 +140,7 @@ static int meta_write(Catalog *cat, u32 xid)
 
     put_u32(f->data + M_CATROOT, cat->catalog_root);
     put_u32(f->data + M_NEXTTID, cat->next_table_id);
+    put_u32(f->data + M_CKPT_LSN, cat->checkpoint_lsn);
     page_set_checksum(f->data);
 
     u8 after[PAGE_SIZE];
@@ -645,6 +644,29 @@ static int load_all(Catalog *cat)
     return load_indexes(cat);
 }
 
+/* ---------------- checkpoint 的 LSN（v1.2 步骤 6） ---------------- */
+
+/*
+ * 把 checkpoint_lsn 写进 meta 页。
+ *
+ * meta 页的整页镜像会进日志，所以这个值本身是崩溃安全的：
+ * 崩溃后要么是旧值（多重放一遍，无害），要么是新值（正是我们要的）。
+ *
+ * xid 用 0（系统事务）—— checkpoint 不是用户事务。
+ */
+int catalog_set_checkpoint_lsn_locked(Catalog *cat, u32 xid, u32 lsn)
+{
+    if (!cat)
+        return E_INVAL;
+    cat->checkpoint_lsn = lsn;
+    return meta_write(cat, xid);
+}
+
+u32 catalog_checkpoint_lsn_locked(Catalog *cat)
+{
+    return cat ? cat->checkpoint_lsn : 0;
+}
+
 /* ---------------- 公开 API ---------------- */
 
 int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
@@ -680,6 +702,7 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
         u32 psz = get_u32(f->data + M_PAGESZ);
         cat->catalog_root = get_u32(f->data + M_CATROOT);
         cat->next_table_id = get_u32(f->data + M_NEXTTID);
+        cat->checkpoint_lsn = get_u32(f->data + M_CKPT_LSN);
         pager_unpin(pg, PAGE_ID_META, false);
 
         if (magic != CAT_MAGIC || psz != PAGE_SIZE) {

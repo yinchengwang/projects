@@ -19,8 +19,25 @@
  *
  * did_recover 返回是否真的做了恢复（日志非空）。调用方据此决定
  * 要不要重建索引（v0.6 里索引不写日志）。
+ *
+ * ==================== checkpoint_lsn（v1.2 步骤 6） ====================
+ *
+ * checkpoint_lsn = "这个 LSN 之前的日志记录都不用重放了"。
+ * 它记在 meta 页里（见 catalog.h 的 M_CKPT_LSN）。
+ *
+ * 【重放按它过滤，回滚不按它过滤 —— 这两者的理由不同】
+ *
+ *   重放：lsn <= checkpoint_lsn 的记录造成的效果**已经在数据文件里**
+ *         （checkpoint 时刷过页了）→ 重放是多余的。
+ *
+ *   回滚：未提交事务的记录可能横跨 checkpoint 点
+ *         （事务在 checkpoint 时还开着，它的日志记录一部分在点前、一部分在点后）。
+ *         这些记录的前像（before image）是回滚的依据，
+ *         哪怕 lsn <= checkpoint_lsn 也必须留着、必须回滚。
+ *
+ * 所以回滚阶段遍历**全部**记录，不按 lsn 过滤。
  */
-int recovery_run(Pager *pg, Wal *w, bool *did_recover);
+int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover);
 
 /*
  * 恢复阶段收集到的 xid 状态（供 clog 重建用）。
@@ -43,8 +60,14 @@ int recovery_run(Pager *pg, Wal *w, bool *did_recover);
  */
 typedef struct {
     u32 xid;
-    u8  committed;   /* 1 = 已提交，0 = 已中止 */
+    u8  state;     /* REC_XID_UNKNOWN / REC_XID_COMMITTED / REC_XID_ABORTED */
 } RecoveredXid;
+
+/* 恢复阶段扫出来的 xid 状态 */
+#define REC_XID_UNKNOWN   0u   /* 只有数据记录，没看到提交/中止 */
+#define REC_XID_COMMITTED 1u   /* 看到了 WAL_COMMIT */
+#define REC_XID_ABORTED   2u   /* 看到了 WAL_ABORT（回滚还没做）*/
+#define REC_XID_ABORT_DONE 3u  /* 看到了 WAL_ABORT_DONE（已回滚完，日志可扔）*/
 
 /*
  * xid 状态表：开放寻址哈希表（槽位数是 2 的幂）。
@@ -84,6 +107,19 @@ void recovered_state_free(RecoveredState *st);
  *
  * 单独一个函数，因为 db_open 需要在恢复**之前**就知道状态，
  * 好把 clog 建好 —— 否则恢复过程中做可见性判断就没依据了。
+ *
+ * ==================== 为什么状态是三态而不是两态 ====================
+ *
+ * v1.2 步骤 6 之前是二态："有 COMMIT 记录 → 已提交，否则 → 已中止"。
+ *
+ * 两态在"日志被截断"之后就不够用了：
+ * 一个已提交的事务，它的 COMMIT 记录可能**已经被截掉**
+ * （提交发生在 checkpoint 之前）。这时候日志里只剩它的数据记录
+ * ——按两态就会被判成"已中止"→ 它的行在恢复后不可见 → 数据丢。
+ *
+ * 所以改成三态：只看到数据记录时是"未知"，
+ * 由调用方拿 clog 文件里的权威状态来定夺
+ * （见 db.c 里的合并逻辑）。
  */
 int recovery_scan_xids(Wal *w, RecoveredState *out);
 

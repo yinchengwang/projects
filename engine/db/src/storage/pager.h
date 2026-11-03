@@ -19,6 +19,26 @@ typedef struct PageFrame {
     int  pin_count;   /* >0 表示有人正拿着指针，不许逐出 */
     bool dirty;
     int  clock_ref;   /* Clock 算法的引用位 */
+
+    /*
+     * rec_lsn：**自上次刷盘以来，这一页第一次被改动时**的日志 LSN。
+     *
+     * 【为什么需要它】
+     * 页头的 H_LSN 记的是"最后一次改动"的 LSN —— 刷新盘之后它就变成
+     * "最后一次落盘的改动的 LSN"，中间那些改动就看不出来了。
+     *
+     * 而 checkpoint 需要知道"哪些记录还没落盘"：
+     *   - 页是脏的 → 它上面的改动都只在内存里
+     *   - 第一次改动（rec_lsn）之后的记录都还没落盘 → 恢复时必须重放
+     *
+     * 这就是 ARIES 的 dirty page table 的最小形式。
+     * 没有它，checkpoint 就只能"把所有记录都重放一遍"（不截断），
+     * 或者靠"全局停写"来保证安全（那要加一把全局写锁）。
+     *
+     * 0 = 未知（这一页被改了但没写日志 —— 那是 bug，
+     * checkpoint 会因此拒绝推进截断点）。
+     */
+    u32  rec_lsn;
 } PageFrame;
 
 int pager_open(const char *path, u32 nframes, Pager **out);
@@ -43,6 +63,27 @@ int pager_unpin(Pager *pg, u32 page_id, bool dirty);
 
 /* 刷所有脏页。pager_close 会自动调。 */
 int pager_flush_all(Pager *pg);
+
+/*
+ * 取脏页里最小的 rec_lsn（checkpoint 的重放起点）。
+ *
+ * 返回 0 表示"没有能约束重放点的脏页"。
+ *
+ * 【rec_lsn == 0 的页被跳过】
+ * 有一类页是**故意不写日志**的：向量索引（checkpoint 式的，
+ * 过期了重建就行，见 db.c 里 db_vec_open 的注释）。
+ * 它们的 rec_lsn 恒为 0。
+ *
+ * 跳过它们是安全的：日志里根本没有它们的记录，
+ * 所以它们不约束"哪些记录还没落盘"。
+ *
+ * 反过来，如果某个**本该写日志**的页 rec_lsn 也是 0，
+ * 那说明写它的时候漏了 page_set_lsn —— 那是 bug。
+ * 这个 bug 的后果是"那一页的重做信息丢了"，
+ * 但它不是 checkpoint 能补救的（重做也救不回来），
+ * 所以这里不为此停下整个 checkpoint。
+ */
+u32 pager_min_dirty_lsn(const Pager *pg);
 
 u64 pager_npages(const Pager *pg);
 

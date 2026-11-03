@@ -34,7 +34,20 @@ typedef enum {
     WAL_UPDATE,
     WAL_PAGEINIT,      /* 新页初始化：after = 页头 20 字节，写到偏移 0 */
     WAL_CHECKPOINT,
-    WAL_PAGEDATA       /* 整页镜像：before/after 各 4KB（元数据页用）*/
+    WAL_PAGEDATA,      /* 整页镜像：before/after 各 4KB（元数据页用）*/
+    /*
+     * "这个事务已经回滚完了"。
+     *
+     * 与 WAL_ABORT 的区别（这是 v1.2 步骤 6 加的）：
+     *   WAL_ABORT      —— 事务失败时记的。**回滚还没做**
+     *                      （本内核的删除是物理删除，运行时不做 undo）。
+     *   WAL_ABORT_DONE —— 恢复阶段把未提交事务回滚完之后记的。
+     *                      "前像已经用掉了，日志里这份可以扔"。
+     *
+     * 日志截断的前提就是靠这个区分：
+     * 只有 WAL_ABORT_DONE 的事务，它的 before 镜像才可以跟着日志一起扔掉。
+     */
+    WAL_ABORT_DONE
 } WalType;
 
 #define WAL_HDR         28u
@@ -107,6 +120,40 @@ u32  wal_append_xid(Wal *w, u8 type, u32 xid, u32 page_id, u16 slot,
                     const u8 *before, u16 blen, const u8 *after, u16 alen);
 
 int  wal_fsync(Wal *w);
+
+/*
+ * 日志文件当前占用的字节数。
+ *
+ * 用途：判断"要不要做一次 checkpoint"。
+ * 因为每次 checkpoint 都会截断日志，所以文件大小 ≈ 上次 checkpoint 之后的日志量。
+ */
+u64  wal_bytes(Wal *w);
+
+/*
+ * 截断日志：删掉 lsn <= keep_lsn 的记录。
+ *
+ * ==================== 为什么能截 ====================
+ *
+ * 截断的前提是"这些记录已经不需要了" —— 也就是它们造成的效果
+ * 已经**写进数据文件**了（页已经刷盘）。这正是 checkpoint 的定义。
+ *
+ * 截断之后：恢复阶段从 checkpoint_lsn 开始重放，
+ * 恢复时间只取决于"上次 checkpoint 之后的日志量"，而不是日志总量。
+ *
+ * ==================== 两条硬约束 ====================
+ *
+ * 1. **LSN 不能倒退**
+ *    日志被截空之后，重开库时 last_lsn 会从文件里重新算出来 = 0，
+ *    新记录的 LSN 就从 1 重新开始 —— 而 checkpoint_lsn 可能是 5000，
+ *    于是新记录全部被恢复阶段跳过（lsn <= checkpoint_lsn）→ 数据丢。
+ *    所以：一条都留不住时，宁可保留最后一条。
+ *
+ * 2. **clog 必须先落盘**
+ *    提交状态记在 clog 文件里，不在日志里。
+ *    日志一截，"哪些事务提交过"就只剩 clog 文件了。
+ *    所以调用方必须先 fsync clog，再调本函数。顺序反了 = 静默丢数据。
+ */
+int  wal_truncate(Wal *w, u32 keep_lsn);
 
 /*
  * 已 fsync 到磁盘的最大 LSN。

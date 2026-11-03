@@ -291,6 +291,33 @@ static db_err db_exec_impl(DB *db, const char *sql, Result **out)
     }
 
     /*
+     * CHECKPOINT 语句（v1.2 步骤 6）。
+     *
+     * 它**不是**一条普通语句 —— 不该被"每条语句一个事务"包起来：
+     * checkpoint 刷的是整个库的状态，包在一个事务里毫无意义，
+     * 反而会让"还有未提交事务 → 不截断日志"的判断永远成立。
+     *
+     * 所以它和 BEGIN / COMMIT / ROLLBACK 一样，在事务逻辑之前处理。
+     */
+    if (st.kind == ST_CHECKPOINT) {
+        free_stmt(&st);
+        rc = db_checkpoint_internal(db->inst, true);
+        if (rc != OK) {
+            snprintf(db->errmsg, sizeof(db->errmsg), "checkpoint 失败: %s",
+                     err_name(rc));
+            return map_rc(rc);
+        }
+        if (out) {
+            Result *r = calloc(1, sizeof(*r));
+            if (!r)
+                return DB_E_IO;
+            r->qr = NULL;
+            *out = r;
+        }
+        return DB_OK;
+    }
+
+    /*
      * 已经在一个失败的事务里 → 什么都不许做，只能 ROLLBACK。
      * （PG 的 "current transaction is aborted" 语义）
      */
@@ -366,6 +393,17 @@ static db_err db_exec_impl(DB *db, const char *sql, Result **out)
             return map_rc(rc);
         }
     }
+
+    /*
+     * 阈值触发的 checkpoint（v1.2 步骤 6）。
+     *
+     * 放在语句**结束**之后：这时改动已经写进日志、事务也提交了，
+     * 是做 checkpoint 的好时机（不用考虑"本语句的事务还没结束"）。
+     *
+     * 失败不报错 —— checkpoint 是后台维护动作，
+     * 失败了下次语句还会再试。把它变成硬错误只会让用户莫名其妙。
+     */
+    db_checkpoint_maybe(db->inst);
 
     if (out) {
         Result *r = calloc(1, sizeof(*r));

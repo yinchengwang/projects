@@ -1,7 +1,20 @@
 #include "txn/txn.h"
 
 #include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <io.h>
+#define CLOG_FSYNC(f) _commit(_fileno(f))
+#define FSEEK _fseeki64
+#define FTELL _ftelli64
+#else
+#include <unistd.h>
+#define CLOG_FSYNC(f) fsync(fileno(f))
+#define FSEEK fseeko
+#define FTELL ftello
+#endif
 
 #include "common/latch.h"
 
@@ -58,16 +71,81 @@ static void txn_unlock(void)
     pthread_mutex_unlock(&g_txn_lock);
 }
 
-/* ---- clog：一个 xid 一字节（原子读，无锁） ---- */
+/* ---- clog：分块数组（原子读，无锁）+ 落盘文件 ---- */
 
-static void clog_set(TxnTable *t, u32 xid, u8 state)
+/*
+ * 取（必要时分配）xid 所在的那一块。
+ *
+ * 调用方必须已持 txn 域锁（或处于单线程的初始化阶段）——
+ * 分配块要写块指针表，不能让两个线程同时分配同一块。
+ *
+ * 块的默认值是 0 = TXN_CLOG_INPROGRESS，与 clog 文件里的默认值一致。
+ */
+static u8 *clog_chunk_w(TxnTable *t, u32 xid)
 {
-    atomic_store(&t->clog[xid % TXN_CLOG_SLOTS], state);
+    u32 ci = xid >> TXN_CLOG_CHUNK_BITS;
+    if (ci >= TXN_CLOG_CHUNKS)
+        return NULL;
+
+    u8 *c = atomic_load(&t->clog_chunk[ci]);
+    if (c)
+        return c;
+
+    c = calloc(TXN_CLOG_CHUNK_SIZE, 1);
+    if (!c)
+        return NULL;
+
+    atomic_store(&t->clog_chunk[ci], c);
+    return c;
 }
 
+/*
+ * 读 xid 的状态 —— **无锁**（原子读）。
+ *
+ * 块指针用 atomic_load 读：写者可能正在分配新块，
+ * 但已经发布出去的块指针不会被改，读者拿到的永远是完整的一块。
+ */
 static u8 clog_get(const TxnTable *t, u32 xid)
 {
-    return atomic_load(&t->clog[xid % TXN_CLOG_SLOTS]);
+    u32 ci = xid >> TXN_CLOG_CHUNK_BITS;
+    if (ci >= TXN_CLOG_CHUNKS)
+        return TXN_CLOG_COMMITTED;      /* 超出可表示范围：当作早已结束 */
+
+    u8 *c = atomic_load(&t->clog_chunk[ci]);
+    if (!c)
+        return TXN_CLOG_COMMITTED;      /* 这一块从没被用过 */
+
+    return atomic_load(&c[xid & (TXN_CLOG_CHUNK_SIZE - 1u)]);
+}
+
+/*
+ * 写 xid 的状态 —— 调用方必须已持 txn 域锁。
+ *
+ * 顺带把 xid 记进"待落盘区间"。
+ *
+ * 【为什么区间是闭区间而不是位图】
+ * xid 是连续分配的，落盘时按区间整段写最省事。
+ * 区间可能很大（几万字节），但一次 fwrite 就完了。
+ */
+static void clog_set(TxnTable *t, u32 xid, u8 state)
+{
+    u8 *c = clog_chunk_w(t, xid);
+    if (!c)
+        return;                       /* 分配失败：状态存不下来（OOM） */
+
+    atomic_store(&c[xid & (TXN_CLOG_CHUNK_SIZE - 1u)], state);
+
+    if (t->clog_hi == 0) {            /* 之前没有脏区间 */
+        t->clog_lo = xid;
+        t->clog_hi = xid;
+    } else {
+        if (xid < t->clog_lo)
+            t->clog_lo = xid;
+        if (xid > t->clog_hi)
+            t->clog_hi = xid;
+    }
+    if (xid > t->clog_max_xid)
+        t->clog_max_xid = xid;
 }
 
 void txn_clog_set(TxnTable *t, u32 xid, u8 state)
@@ -112,9 +190,20 @@ void txn_table_init(TxnTable *t, u32 start_xid)
      * 为什么不是"已提交"：clog 只对**已分配**的 xid 有意义，
      * 而已分配的 xid 一律先被标成"进行中"，提交/中止时再改。
      * 还没分配的 xid 由 `xid >= next_xid` 那条规则挡住。
+     *
+     * 分块数组不在这里初始化 —— 块是**按需分配**的：
+     * 分配 64KB 一块来存几个字节太浪费，而且 calloc 出来的
+     * 默认值正好就是"进行中"（0）。
      */
-    for (u32 i = 0; i < TXN_CLOG_SLOTS; i++)
-        atomic_init(&t->clog[i], TXN_CLOG_INPROGRESS);
+    for (u32 i = 0; i < TXN_CLOG_CHUNKS; i++)
+        atomic_init(&t->clog_chunk[i], NULL);
+
+    /* 落盘状态（v1.2 步骤 6） */
+    t->clog_fp = NULL;
+    t->clog_lo = 0;
+    t->clog_hi = 0;
+    t->clog_max_xid = 0;
+    t->clog_ready = false;
 }
 
 int txn_begin(TxnTable *t, u32 *xid_out)
@@ -141,10 +230,9 @@ int txn_begin(TxnTable *t, u32 *xid_out)
          * 不对：默认值是 INPROGRESS，读者会判成"不可见"，那是**保守**的，
          * 安全。真正危险的是把默认值当成"已提交"。
          *
-         * 那为什么还要先 clog 后 next_xid？因为 clog 的槽位是**环形复用**的：
-         * xid % SLOTS 这个槽位可能是 4096 个事务之前的老 xid 用过的，
-         * 里面还留着"已提交"。如果先发布 next_xid，读者会读到那个陈旧的
-         * "已提交" → **脏读**。所以必须先把这个槽位重置成"进行中"。
+         * 分块之后这条更简单：块是按需分配的，
+         * 分配 xid 时顺手把那一字节置成"进行中"，
+         * 读者就不会看到"没分配过的槽位残留着上一个 xid 的已提交"。
          */
         clog_set(t, xid, TXN_CLOG_INPROGRESS);
         atomic_store(&t->next_xid, nx);
@@ -225,6 +313,8 @@ u8 txn_clog_state(const TxnTable *t, u32 xid)
         return TXN_CLOG_COMMITTED;      /* 系统事务 */
 
     /*
+     * 超过 next_xid 的 xid 还没分配出来 → 进行中。
+     *
      * next_xid 只读一次：两次读之间它可能又涨了，
      * 用同一个值判断才不会前后不一致。
      */
@@ -233,18 +323,15 @@ u8 txn_clog_state(const TxnTable *t, u32 xid)
         return TXN_CLOG_INPROGRESS;      /* 还没分配出来的事务 */
 
     /*
-     * 窗口外的 xid 一律当作已提交。
+     * 其它情况一律查 clog 块。
      *
-     * 什么时候会走到这里：xid + TXN_CLOG_SLOTS < next_xid，
-     * 说明这个 xid 已经很老了 —— 中间过去了 4096 个事务。
-     * 这时它不可能还在进行中（要么提交要么中止）。
+     * v0.7 的环形窗口有个"窗口外一律当已提交"的兜底。
+     * 分块之后**不再需要**这个兜底 ——
+     * 老 xid 的状态不会被覆盖，查到的就是真实状态。
      *
-     * 中止的情况怎么办？中止的版本会被 vacuum 清掉，
-     * 不会一直留在表里被人读到。所以按"已提交"处理是安全的。
+     * （块不存在 = 这个 xid 从来没被分配过 → 按已提交兜底。
+     *   这种情况只可能出现在"没有 clog 文件的老库"上。）
      */
-    if (nx - xid > TXN_CLOG_SLOTS)
-        return TXN_CLOG_COMMITTED;
-
     return clog_get(t, xid);
 }
 
@@ -298,4 +385,189 @@ u32 txn_oldest_active(const TxnTable *t)
 int txn_nactive(const TxnTable *t)
 {
     return t ? atomic_load(&t->n_active) : 0;
+}
+
+/* ---------------- clog 落盘（v1.2 步骤 6） ---------------- */
+
+/*
+ * 打开 clog 文件，并把文件里的内容读进内存的 clog 块。
+ *
+ * 【为什么必须整个读进来】
+ * 恢复阶段判断可见性时要查 clog。日志被截断之后，
+ * 那些 xid 的提交记录已经不在日志里了 —— 唯一的依据就是 clog 文件。
+ * 只记个文件偏移是不够的：查询是随机的，要能直接读到那一字节。
+ */
+int txn_clog_open(TxnTable *t, const char *path)
+{
+    if (!t || !path)
+        return E_INVAL;
+
+    FILE *f = fopen(path, "r+b");
+    if (!f) {
+        f = fopen(path, "wb");
+        if (!f)
+            return E_IO;
+        fclose(f);
+        f = fopen(path, "r+b");
+        if (!f)
+            return E_IO;
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+
+    if (FSEEK(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return E_IO;
+    }
+    long long sz = FTELL(f);
+    if (sz < 0)
+        sz = 0;
+
+    t->clog_fp = f;
+    t->clog_max_xid = (sz > 0) ? (u32)(sz - 1) : 0;
+    t->clog_ready = true;
+
+    if (sz > 0) {
+        if (FSEEK(f, 0, SEEK_SET) != 0) {
+            fclose(f);
+            t->clog_fp = NULL;
+            return E_IO;
+        }
+
+        u64 pos = 0;
+        while (pos < (u64)sz) {
+            u32 ci = (u32)(pos >> TXN_CLOG_CHUNK_BITS);
+            u32 off = (u32)(pos & (TXN_CLOG_CHUNK_SIZE - 1u));
+            u32 n = TXN_CLOG_CHUNK_SIZE - off;
+            if (pos + n > (u64)sz)
+                n = (u32)((u64)sz - pos);
+
+            /* 按块读：文件偏移 = xid，块内偏移 = xid & (块大小-1) */
+            u8 *c = clog_chunk_w(t, ci << TXN_CLOG_CHUNK_BITS);
+            if (!c) {
+                fclose(f);
+                t->clog_fp = NULL;
+                return E_IO;
+            }
+            if (fread(c + off, 1, n, f) != n) {
+                fclose(f);
+                t->clog_fp = NULL;
+                return E_IO;
+            }
+            pos += n;
+        }
+    }
+    return OK;
+}
+
+/*
+ * 把待落盘的 xid 区间写进文件并 fsync。
+ *
+ * 【调用时机的铁律】
+ * 截断 WAL 之前必须先调它。顺序反了 = 提交状态随日志一起消失
+ * → 重启后已提交的数据全部不可见（静默丢数据）。
+ */
+int txn_clog_sync(TxnTable *t)
+{
+    if (!t)
+        return E_INVAL;
+    if (!t->clog_fp)
+        return OK;               /* 没开落盘：没什么可做的 */
+    if (t->clog_hi == 0)
+        return OK;               /* 没有脏区间 */
+
+    txn_lock();
+    u32 lo = t->clog_lo;
+    u32 hi = t->clog_hi;
+    t->clog_lo = 0;
+    t->clog_hi = 0;
+    txn_unlock();
+
+    /*
+     * 逐块写。
+     *
+     * 一段脏区间可能横跨多块（xid 每 65536 个换一块），
+     * 所以按块边界切分后逐段 fwrite。
+     */
+    u64 x = lo;
+    while (x <= (u64)hi) {
+        u32 ci = (u32)(x >> TXN_CLOG_CHUNK_BITS);
+        u32 off = (u32)(x & (TXN_CLOG_CHUNK_SIZE - 1u));
+        u32 n = TXN_CLOG_CHUNK_SIZE - off;
+        if (x + n > (u64)hi + 1)
+            n = (u32)((u64)hi + 1 - x);
+
+        u8 *c = atomic_load(&t->clog_chunk[ci]);
+        if (c) {
+            if (FSEEK(t->clog_fp, (long long)x, SEEK_SET) != 0)
+                return E_IO;
+            if (fwrite(c + off, 1, n, t->clog_fp) != n)
+                return E_IO;
+        }
+        x += n;
+    }
+
+    fflush(t->clog_fp);
+    if (CLOG_FSYNC(t->clog_fp) != 0)
+        return E_IO;
+    return OK;
+}
+
+void txn_clog_close(TxnTable *t)
+{
+    if (!t)
+        return;
+    if (!t->clog_fp)
+        return;
+    (void)txn_clog_sync(t);
+    fclose(t->clog_fp);
+    t->clog_fp = NULL;
+    t->clog_ready = false;
+}
+
+void txn_clog_discard(TxnTable *t)
+{
+    if (!t)
+        return;
+    if (!t->clog_fp)
+        return;
+    /* 不 sync：模拟断电 —— 没落盘的东西就该没有 */
+    fclose(t->clog_fp);
+    t->clog_fp = NULL;
+    t->clog_ready = false;
+}
+
+/*
+ * 把 next_xid 推到 xid 之后。
+ *
+ * 【为什么需要】
+ * next_xid 的初值来自日志里的最大 xid。但日志可能被截断过
+ * （步骤 6 的 checkpoint 会截），截断之后日志里的最大 xid 会变小 ——
+ * 这时真正的"用过的最大 xid"在 clog 文件里。
+ *
+ * 如果不推一把，新会话会**重用**旧 xid → 旧事务的提交状态
+ * 被新事务覆盖 → 可见性判断错乱（静默的数据错误）。
+ */
+void txn_table_bump_xid(TxnTable *t, u32 xid)
+{
+    if (!t)
+        return;
+    txn_lock();
+    u32 nx = atomic_load(&t->next_xid);
+    if (xid >= nx) {
+        u32 v = xid + 1;
+        if (v == 0)
+            v = 1;                /* 回绕保护 */
+        atomic_store(&t->next_xid, v);
+    }
+    txn_unlock();
+}
+
+u32 txn_clog_max_xid(const TxnTable *t)
+{
+    if (!t)
+        return 0;
+    txn_lock();
+    u32 v = t->clog_max_xid;
+    txn_unlock();
+    return v;
 }

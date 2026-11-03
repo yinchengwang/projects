@@ -64,6 +64,15 @@ struct Catalog {
     int       cap;
 
     /*
+     * 最近一次 checkpoint 的 LSN（v1.2 步骤 6）。
+     *
+     * 存在 meta 页里 —— 也就是"这个库自己的根指针页"。
+     * 恢复阶段从它开始重放：lsn <= checkpoint_lsn 的记录都不用管
+     * （它们造成的效果已经在数据文件里了）。
+     */
+    u32       checkpoint_lsn;
+
+    /*
      * catalog 域的读写锁（v1.2 步骤 3）。
      *
      * catalog 是**实例级共享**的 —— 所有连接看同一份元数据。
@@ -109,6 +118,8 @@ int  catalog_nrows_locked(Catalog *cat, u32 table_id, i64 *out);
 void catalog_set_nrows_locked(Catalog *cat, u32 table_id, i64 n);
 void catalog_add_nrows_locked(Catalog *cat, u32 table_id, i64 delta);
 int  catalog_persist_nrows_locked(Catalog *cat, u32 xid, u32 table_id);
+int  catalog_set_checkpoint_lsn_locked(Catalog *cat, u32 xid, u32 lsn);
+u32  catalog_checkpoint_lsn_locked(Catalog *cat);
 
 /*
  * 把 TableMeta 编码成 sys_table 的一行（catalog.c 实现）。

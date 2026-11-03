@@ -298,25 +298,83 @@ db_err db_open(const char *path, DB **out)
     u32 max_xid = wal_max_xid(inst->wal);
 
     /*
-     * 初始化事务表，并**从日志重建 clog**。
+     * 初始化事务表。
+     *
+     * 必须在 clog_open 之前 —— txn_table_init 会把分块 clog 的块指针表清空，
+     * 而 clog_open 要往里填文件的内容。
+     */
+    txn_table_init(&inst->txns, max_xid);
+
+    /*
+     * clog 文件（v1.2 步骤 6）：<db>-clog
+     *
+     * 【为什么需要它】
+     * "哪些事务提交过"这条信息必须有个**不在日志里**的存放处 ——
+     * 因为步骤 6 的 checkpoint 会截断日志，
+     * 提交记录被截掉之后，可见性判断就只剩这个文件可依。
+     *
+     * 【陈旧 clog 的处置，和陈旧日志一样】
+     * 数据文件不存在（全新库）→ 同名 clog 一定是上一个同名库的孤儿 → 删掉。
+     * 反过来（数据文件存在但 clog 不存在）→ 那是"老版本建的库"，
+     * 从日志重建就行（下面就是这么做的）。
+     */
+    inst->clogpath = malloc(plen + 10);
+    if (!inst->clogpath) {
+        txn_clog_close(&inst->txns);
+        wal_close(inst->wal);
+        pager_close(pg);
+        free(inst->clogpath);
+        free(inst->walpath);
+        free(inst);
+        free(db);
+        return DB_E_IO;
+    }
+    snprintf(inst->clogpath, plen + 10, "%s-clog", path);
+
+    if (!datafile_exists)
+        remove(inst->clogpath);       /* 孤儿 clog：删掉（不存在也不报错）*/
+
+    rc = txn_clog_open(&inst->txns, inst->clogpath);
+    if (rc != OK) {
+        wal_close(inst->wal);
+        pager_close(pg);
+        free(inst->clogpath);
+        free(inst->walpath);
+        free(inst);
+        free(db);
+        return map_rc(rc);
+    }
+
+    /*
+     * xid 还要和 clog 文件里的最大 xid 取大。
+     *
+     * 日志被截断之后，日志里的最大 xid 会变小 ——
+     * 真正"用过的最大 xid"记在 clog 文件里。
+     * 不取大的话，新会话会重用旧 xid → 旧事务的提交状态被覆盖
+     * → 可见性判断错乱。
+     */
+    txn_table_bump_xid(&inst->txns, txn_clog_max_xid(&inst->txns));
+
+    /*
+     * 从日志重建 clog（补上 clog 文件里没有的部分）。
      *
      * 为什么必须重建：MVCC 可见性判断完全依赖 clog —— "这个 xid 提交了没有"。
      * 如果重启后 clog 是空的，所有历史事务都会被当成"进行中"，
      * 于是重启后**所有已提交的数据都看不见了**。
      *
-     * clog 只在内存里（不持久化），所以每次启动都要从日志重建一遍。
-     * 这也意味着：日志被截断之前，必须先把 clog 的信息存到别处
-     * （PG 就是这么做的 —— clog 是独立文件）。v0.7 不截断日志，所以没问题。
+     * 两份信息的分工：
+     *   clog 文件 —— checkpoint 之前的历史（提交记录可能已被截断）
+     *   日志      —— checkpoint 之后的事务（提交记录还在日志里）
      */
-    txn_table_init(&inst->txns, max_xid);
-
     RecoveredState xs;
     recovered_state_init(&xs);
     rc = recovery_scan_xids(inst->wal, &xs);
     if (rc != OK) {
         recovered_state_free(&xs);
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -325,17 +383,64 @@ db_err db_open(const char *path, DB **out)
     for (u32 i = 0; i < xs.cap; i++) {
         if (xs.slots[i].xid == 0)
             continue;               /* 空槽 */
-        txn_clog_set(&inst->txns, xs.slots[i].xid,
-                     xs.slots[i].committed ? TXN_CLOG_COMMITTED : TXN_CLOG_ABORTED);
+        u32 xid = xs.slots[i].xid;
+        switch (xs.slots[i].state) {
+        case REC_XID_COMMITTED:
+            txn_clog_set(&inst->txns, xid, TXN_CLOG_COMMITTED);
+            break;
+        case REC_XID_ABORTED:
+            txn_clog_set(&inst->txns, xid, TXN_CLOG_ABORTED);
+            break;
+        case REC_XID_ABORT_DONE:
+            /* 恢复阶段已经回滚完了 → 同样是"中止" */
+            txn_clog_set(&inst->txns, xid, TXN_CLOG_ABORTED);
+            break;
+        default:
+            /*
+             * 未知：日志里有它的数据记录，但没看到提交/中止记录。
+             *
+             * 两种可能：
+             *   (a) 它在崩溃时还没结束 → 该按"中止"处理（会被回滚）
+             *   (b) 它的提交记录已经被 checkpoint 截掉了 → 它其实是已提交的
+             *
+             * 怎么区分：看 clog 文件。clog 文件是 checkpoint 时同步落盘的，
+             * 提交状态在那儿是权威的 —— 文件说"已提交"就信它。
+             */
+            if (txn_clog_state(&inst->txns, xid) != TXN_CLOG_COMMITTED)
+                txn_clog_set(&inst->txns, xid, TXN_CLOG_ABORTED);
+            break;
+        }
     }
     recovered_state_free(&xs);
 
+    /*
+     * 恢复起点：checkpoint_lsn（记在 meta 页里）。
+     *
+     * 必须在 catalog_open **之前**读 —— 那时 catalog 还没打开，
+     * 而 meta 页的布局常量是公开的（catalog.h），可以直接读。
+     *
+     * 读到的值可能比日志里的实际情况旧（meta 页没来得及刷盘），
+     * 那就多重放一遍 —— 无害。反过来（新值比日志新）不可能发生：
+     * meta 页落盘之前它的日志记录必须先落盘（WAL 规则）。
+     */
+    u32 ckpt_lsn = 0;
+    if (pager_npages(pg) > 0) {
+        PageFrame *mf;
+        if (pager_get(pg, PAGE_ID_META, &mf) == OK) {
+            if (get_u32(mf->data + M_MAGIC) == CAT_MAGIC)
+                ckpt_lsn = get_u32(mf->data + M_CKPT_LSN);
+            pager_unpin(pg, PAGE_ID_META, false);
+        }
+    }
+
     /* 恢复必须在打开 catalog 之前：catalog 也是普通表，也要恢复 */
     bool did_recover = false;
-    rc = recovery_run(pg, inst->wal, &did_recover);
+    rc = recovery_run(pg, inst->wal, ckpt_lsn, &did_recover);
     if (rc != OK) {
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -345,8 +450,10 @@ db_err db_open(const char *path, DB **out)
     Catalog *cat = NULL;
     rc = catalog_open(pg, db_wal_hook, inst, &cat);
     if (rc != OK) {
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -368,8 +475,10 @@ db_err db_open(const char *path, DB **out)
     rc = blob_store_create(pg, db_wal_hook, inst, &inst->blobs);
     if (rc != OK) {
         catalog_close(cat);
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -393,8 +502,10 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -414,8 +525,10 @@ db_err db_open(const char *path, DB **out)
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -486,8 +599,10 @@ db_err db_open(const char *path, DB **out)
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
+        txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
@@ -561,6 +676,25 @@ db_err db_connect(DB *db, DB **out)
 static void instance_close(DbInstance *inst)
 {
     /*
+     * ==================== v1.2 步骤 6：关库 = 一次完整 checkpoint ====================
+     *
+     * 关库时做 checkpoint 有两个好处：
+     *   1. 日志被截断 → 下次启动几乎不用恢复
+     *   2. clog 文件落盘 → 提交状态不会丢
+     *
+     * 【顺序：checkpoint 在 db_vec_close 之前】
+     *
+     * 向量索引是 checkpoint 式的（不写日志）。
+     * 它写完页之后那些页是脏的、rec_lsn 是 0 ——
+     * 如果 checkpoint 在它之后跑，那些页就"不约束重放点"，倒也没问题；
+     * 但如果 checkpoint 在它之前跑，索引页就是干净的，不影响重放点的计算。
+     *
+     * 两种顺序都能work，但"checkpoint 在前"更保守：
+     * checkpoint 算出来的重放点只涉及**有日志**的页。
+     */
+    (void)db_checkpoint_internal(inst, true);
+
+    /*
      * 向量索引先落盘。
      *
      * 索引是 checkpoint 式的：不落盘的话，下次开库要重建一遍
@@ -583,15 +717,29 @@ static void instance_close(DbInstance *inst)
      */
     pager_close(inst->pager);
 
-    wal_append_xid(inst->wal, WAL_CHECKPOINT, 0, PAGE_ID_NIL, 0, 0,
-                   NULL, 0, NULL, 0);
-    wal_fsync(inst->wal);
+    /*
+     * "干净关闭"标记 —— 只在日志里的事务全都提交了时才写。
+     *
+     * 这个标记的含义是"上次是干净关闭，不用重放"。
+     * 如果还有没提交的事务却写了标记，恢复阶段会跳过重放**和回滚**
+     * → 那个事务物理删掉的行就永久消失了。
+     */
+    bool ok = false;
+    if (db_wal_all_committed(inst->wal, &ok) && ok) {
+        wal_append_xid(inst->wal, WAL_CHECKPOINT, 0, PAGE_ID_NIL, 0, 0,
+                       NULL, 0, NULL, 0);
+        wal_fsync(inst->wal);
+    }
     wal_close(inst->wal);
+
+    /* clog 文件最后关 —— 关之前会再 sync 一次 */
+    txn_clog_close(&inst->txns);
 
     catalog_close(inst->cat);
     blob_store_destroy(inst->blobs);
     graph_destroy(inst->graph);
     spi_registry_destroy(inst->reg);
+    free(inst->clogpath);
     free(inst->walpath);
     free(inst);
 }
@@ -668,6 +816,8 @@ void db_abandon(DB *db)
         spi_registry_destroy(inst->reg);
         pager_abandon(inst->pager);     /* 脏页全丢 —— 这就是"断电" */
         wal_close(inst->wal);            /* 日志已经 fsync 过了，关掉即可 */
+        txn_clog_discard(&inst->txns);  /* clog 也不落盘 —— 断电就该没有 */
+        free(inst->clogpath);
         free(inst->walpath);
         free(inst);
         free(db);
