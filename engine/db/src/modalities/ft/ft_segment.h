@@ -55,6 +55,22 @@ static inline double ft_segment_avgdl(const FtSegment *seg)
 }
 
 /*
+ * 一条 posting（内存形态）：绝对 doc_id + 该词的 tf + 文档长度（词数）。
+ *
+ * 【为什么内存里的 posting 是绝对 doc_id，磁盘上却是 delta】
+ *
+ * delta 编码是**存盘时**的事（省空间），而且它要求 posting 按 doc_id 递增。
+ * 上层（建段、合并）手里的 posting 都是绝对 doc_id —— 合并时要把两个段的
+ * posting **归并**（不是拼接），归并完才能算 delta。
+ * 所以"绝对 → delta"这一步必须由写页的那一层做（ft_writer.c）。
+ */
+typedef struct {
+    u32 doc_id;
+    u32 tf;
+    u32 dl;
+} FtPosting;
+
+/*
  * 建一个段：把一批文档建成不可变的倒排索引。
  *
  * pg / wal / wal_ctx / xid —— 段要占页，页的改动必须进 WAL
@@ -112,6 +128,35 @@ u64 ft_segment_page_reads(const FtSegment *seg);
 
 /* 段的词数 */
 u32 ft_segment_nterms(const FtSegment *seg);
+
+/*
+ * 查字典：找 term 的 df 与倒排链头（跨段统计量靠它聚合）。
+ *
+ * 找不到返回 E_NOTFOUND（词不在这个段里 —— 这是**正常结果**，不是错误）。
+ */
+int ft_segment_lookup(const FtSegment *seg, const char *term, u32 term_len,
+                      u32 *df_out, u64 *post_ptr_out);
+
+/*
+ * 按字典序遍历段里的**全部词条**（合并时用）。
+ *
+ * 回调收到：词、词长、df、倒排链头。
+ * 回调返回非 OK → 立刻停止遍历，并把该值原样返回。
+ */
+typedef int (*FtTermFn)(void *ctx, const char *term, u32 term_len, u32 df, u64 post_ptr);
+int ft_segment_scan_terms(const FtSegment *seg, FtTermFn fn, void *ctx);
+
+/*
+ * 读一个词的**全部 posting**（合并时用）。
+ *
+ * post_ptr / df —— 字典词条里的倒排链头与 posting 条数。
+ * out / max_out —— 输出缓冲与容量；装不下返回 E_NOSPACE（**不静默截断**）。
+ * n_out —— 实际读出的条数。
+ *
+ * 读出来的 posting 按 doc_id 递增（格式保证）。
+ */
+int ft_segment_postings(const FtSegment *seg, u64 post_ptr, u32 df,
+                        FtPosting *out, u32 max_out, u32 *n_out);
 
 #ifdef __cplusplus
 }

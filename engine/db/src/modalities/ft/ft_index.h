@@ -1,0 +1,143 @@
+#ifndef DB_MODALITIES_FT_INDEX_H
+#define DB_MODALITIES_FT_INDEX_H
+
+/*
+ * ft_index.h —— 全文检索的**索引**（多个段的集合）（v1.3 步骤 3）
+ *
+ * 一个段是不可变的；一个**索引**是若干个段 + 一份删除标记（tombstone）：
+ *
+ *   索引 = [段0, 段1, 段2, ...] + tombstone 集合
+ *
+ * 【为什么要分段】
+ *
+ * 段是不可变的，写入只追加 —— 所以索引是"追加 + 定期合并"的形态，
+ * 这与 LSM 树是同一个思路：写入便宜，合并贵，但合并可以后台做。
+ *
+ * 【跨段的统计量怎么聚合】
+ *
+ * BM25 的 idf 用 N（语料文档数）和 df（词的文档数），它们是**全局量**。
+ * 分段之后它们被摊在各段的段头里，检索时实时聚合：
+ *
+ *   N     = Σ 各段 doc_count
+ *   df(t) = Σ 各段 df(t)         ← 一个词可能在好几段里都有
+ *   avgdl = Σ 各段 total_len / N
+ *
+ * 段数 ≤ 阈值（FT_MERGE_THRESHOLD = 8）时，聚合代价可忽略。
+ *
+ * 【tombstone 的粒度】
+ *
+ * ⚠️ **与原计划 §1.3 不同**：原计划说"按 seg_id 组织的 doc_id 位图"，
+ * 本版改成**一份全局的 doc_id 集合**。理由：
+ *
+ *   1. doc_id 是调用方给的，**不连续** —— 位图需要稠密的序号映射，
+ *      而段的格式里没有"文档表"（见 ft_internal.h 关于 dl 的说明）。
+ *   2. 删除是"删一篇文档"，调用方只知道 doc_id，不知道它在哪个段里；
+ *      按段存就得先反查文档在哪个段（要么全扫、要么再维护一张表）。
+ *   3. 合并时按全局集合过滤，语义更直白："这个 doc_id 被删了"。
+ *
+ * 代价：集合只增不减（删掉的文档在合并后其实可以清掉，
+ * 但"它还在别的段里吗"不好判断）—— 见 MODALITIES.md 的如实记录。
+ *
+ * 【tombstone 对统计量的影响】
+ *
+ * 被删的文档**不进结果**，但**仍然计入 N 与 df**（直到合并把它物理丢掉）。
+ * 这与 Lucene 的做法一致（删除的文档在合并前一直占着 docFreq）。
+ * 后果：删除之后 idf 会略有偏差 —— 如实记录在案。
+ */
+
+#include "common/loghook.h"
+#include "common/types.h"
+#include "modalities/ft/ft_segment.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct FtIndex FtIndex;
+
+/* 段数超过这个阈值就触发合并（Tiered） */
+#define FT_MERGE_THRESHOLD 8u
+
+/* 新建一个空索引 */
+int ft_index_create(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid, FtIndex **out);
+
+/* 关闭索引（释放内存，不刷页、不关库） */
+void ft_index_close(FtIndex *ix);
+
+/*
+ * 加一批文档 → **建一个新段**追加到索引（写入只追加，不改老段）。
+ *
+ * seg_id_out —— 新段的段号（段号在索引内唯一、递增）。
+ */
+int ft_index_add(FtIndex *ix, u32 xid, const FtDocText *docs, u32 n_docs, u32 *seg_id_out);
+
+/*
+ * 跨所有段检索（语义与单段检索、与线性扫描一致）：
+ *
+ *   - 只有命中至少一个 query 词的文档才进结果；
+ *   - query 里的重复词不去重（M4-12）；
+ *   - 排序：分数降序、分数相同按 doc_id 升序（M4-11）；
+ *   - 被 tombstone 的 doc_id 不进结果；
+ *   - top_k > max_out → E_NOSPACE（不静默截断）。
+ */
+int ft_index_search(const FtIndex *ix, const char *query, u32 query_len,
+                    u32 top_k, u32 max_out, FtHit *out, u32 *n_out);
+
+/* 同上，但用教科书式 TF-IDF 打分（对照组） */
+int ft_index_search_tfidf(const FtIndex *ix, const char *query, u32 query_len,
+                          u32 top_k, u32 max_out, FtHit *out, u32 *n_out);
+
+/*
+ * 删一篇文档（打 tombstone）。
+ *
+ * 立刻生效：之后的检索不再返回它。
+ * doc_id 不存在也**不报错**（删一个不存在的文档是合法的空操作）。
+ */
+int ft_index_delete(FtIndex *ix, u32 xid, u32 doc_id);
+
+/*
+ * 触发一次 Tiered 合并。
+ *
+ * 段数 ≤ FT_MERGE_THRESHOLD 时**什么都不做**，直接返回 OK。
+ * 否则挑"文档数之和最小"的相邻若干段合并成一个新段，
+ * 合并时：字典多路归并 + posting 归并（**重算 delta**）+ 丢弃 tombstone 的文档。
+ *
+ * merged_out —— 被合并掉的段数（0 表示没合并）。
+ */
+int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out);
+
+/* 统计 */
+u32 ft_index_nsegs(const FtIndex *ix);
+u32 ft_index_ndocs(const FtIndex *ix);        /* 各段 doc_count 之和（含 tombstone 的） */
+u32 ft_index_ntombstones(const FtIndex *ix);
+u64 ft_index_page_reads(const FtIndex *ix);
+
+/*
+ * ---------------- 只读访问器（v1.3 步骤 4 给 ft_docs 虚拟表用） ----------------
+ *
+ * 【为什么需要它们】
+ *
+ * ft_docs 这张虚拟表要**逐段**扫倒排链，才能把 (doc_id, doc_len, nterms)
+ * 聚合出来（段的格式里没有"文档表"，见 ft_internal.h 关于 dl 的说明）。
+ * 而段列表与 tombstone 集合都是索引的**私有**状态 ——
+ * 没有只读访问器，模态就看不到它们。
+ *
+ * 这两个函数是**纯只读**的：不改索引的任何内容、不动页读统计。
+ *
+ * 【为什么不把整个结构体公开】
+ *
+ * 公开结构体 = 公开"怎么加字段、怎么排序"这些实现细节 ——
+ * 改一次布局就要改所有使用者。所以只给两个函数。
+ */
+
+/* 取第 i 个段。i 越界 → E_NOTFOUND（不是错误，是"没有那么多段"）。 */
+int ft_index_seg_at(const FtIndex *ix, u32 i, const FtSegment **out);
+
+/* doc_id 是否已被删除（tombstone）。返回 1 = 已删，0 = 没删。 */
+int ft_index_is_tomb(const FtIndex *ix, u32 doc_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* DB_MODALITIES_FT_INDEX_H */
