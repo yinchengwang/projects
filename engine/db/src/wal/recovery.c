@@ -216,6 +216,109 @@ static int undo_one(Pager *pg, Wal *w, const WalRec *r)
 /* ---------------- xid 状态扫描（供 clog 重建） ---------------- */
 
 /*
+ * xid 状态表：开放寻址哈希表。
+ *
+ * 为什么是哈希表而不是数组：
+ *   - 数组要事先知道 xid 的范围（xid 可以很稀疏）；
+ *   - 固定长度会**丢状态**（v0.7 的 256 项上限就是这么丢的，
+ *     详见 recovery.h 里的说明）；
+ *   - 哈希表按需增长，事务多少都不会丢。
+ *
+ * 槽位用 xid == 0 表示"空"—— xid 0 是系统事务，本来就不收。
+ */
+
+#define REC_HASH_INIT 64u
+
+void recovered_state_init(RecoveredState *st)
+{
+    if (!st)
+        return;
+    st->slots = NULL;
+    st->cap = 0;
+    st->n = 0;
+}
+
+void recovered_state_free(RecoveredState *st)
+{
+    if (!st)
+        return;
+    free(st->slots);
+    st->slots = NULL;
+    st->cap = 0;
+    st->n = 0;
+}
+
+/*
+ * 散列：乘法散列取低位。
+ *
+ * 之所以低位可用：乘数是奇数，x*prime mod 2^k 是 x mod 2^k 的一个置换，
+ * 连续 xid 落到的槽位互不相同（步长是固定的奇数）—— 不会成堆。
+ */
+static u32 rec_hash(u32 xid, u32 cap)
+{
+    return (xid * 2654435761u) & (cap - 1);
+}
+
+/* 扩容一倍并重新散列 */
+static int rec_grow(RecoveredState *st)
+{
+    u32 ncap = st->cap ? st->cap * 2 : REC_HASH_INIT;
+    RecoveredXid *ns = calloc(ncap, sizeof(RecoveredXid));
+    if (!ns)
+        return E_IO;
+
+    u32 old_cap = st->cap;
+    RecoveredXid *old = st->slots;
+
+    st->slots = ns;
+    st->cap = ncap;
+    st->n = 0;
+
+    u32 mask = ncap - 1;
+    for (u32 i = 0; i < old_cap; i++) {
+        if (old[i].xid == 0)
+            continue;
+        u32 s = rec_hash(old[i].xid, ncap);
+        while (st->slots[s].xid != 0)
+            s = (s + 1) & mask;
+        st->slots[s] = old[i];
+        st->n++;
+    }
+    free(old);
+    return OK;
+}
+
+/*
+ * 找到或插入 xid，返回它所在的槽位下标。
+ *
+ * 扩容发生在插入之前，所以返回的下标一定落在**当前**的 slots 数组里。
+ */
+static int rec_put(RecoveredState *st, u32 xid, u32 *idx_out)
+{
+    if (st->cap == 0 || (st->n + 1) * 10 >= st->cap * 7) {
+        int rc = rec_grow(st);
+        if (rc != OK)
+            return rc;
+    }
+
+    u32 mask = st->cap - 1;
+    u32 s = rec_hash(xid, st->cap);
+    while (st->slots[s].xid != 0) {
+        if (st->slots[s].xid == xid) {
+            *idx_out = s;
+            return OK;
+        }
+        s = (s + 1) & mask;
+    }
+
+    st->slots[s].xid = xid;
+    st->slots[s].committed = 0;
+    st->n++;
+    *idx_out = s;
+    return OK;
+}
+
+/*
  * 扫一遍日志，收集每个 xid 是提交了还是中止了。
  *
  * 判据：一个 xid 如果日志里有 WAL_COMMIT 记录 → 已提交；
@@ -228,8 +331,6 @@ int recovery_scan_xids(Wal *w, RecoveredState *out)
     if (!w || !out)
         return E_INVAL;
 
-    memset(out, 0, sizeof(*out));
-
     WalRec r;
     int rc;
     wal_scan_begin(w);
@@ -237,29 +338,17 @@ int recovery_scan_xids(Wal *w, RecoveredState *out)
         if (r.xid == 0)
             continue;               /* 系统事务，不用记 */
 
-        /* 找这个 xid 在不在表里 */
-        int found = -1;
-        for (int i = 0; i < out->n; i++) {
-            if (out->xids[i].xid == r.xid) {
-                found = i;
-                break;
-            }
-        }
-        if (found < 0) {
-            if (out->n >= REC_MAX_XIDS) {
-                /* 表满了：保守处理，先当成未提交，后面遇到 COMMIT 会改 */
-                rc = OK;
-                continue;
-            }
-            found = out->n++;
-            out->xids[found].xid = r.xid;
-            out->xids[found].committed = 0;
+        u32 idx = 0;
+        int prc = rec_put(out, r.xid, &idx);
+        if (prc != OK) {
+            rc = prc;
+            break;
         }
 
         if (r.type == WAL_COMMIT)
-            out->xids[found].committed = 1;
+            out->slots[idx].committed = 1;
         else if (r.type == WAL_ABORT)
-            out->xids[found].committed = 0;
+            out->slots[idx].committed = 0;
     }
     wal_scan_end(w);
 

@@ -46,12 +46,38 @@ typedef struct {
     u8  committed;   /* 1 = 已提交，0 = 已中止 */
 } RecoveredXid;
 
-#define REC_MAX_XIDS 256
-
+/*
+ * xid 状态表：开放寻址哈希表（槽位数是 2 的幂）。
+ *
+ * ==================== 为什么不能是固定长度的数组 ====================
+ *
+ * v0.7 这里是 `RecoveredXid xids[256]` —— 固定 256 项。
+ * 事务一多，**后面的 xid 状态直接丢掉**：
+ *
+ *   扫日志时发现表满了 → `continue` → 这个 xid 既没记"已提交"
+ *   也没记"已中止" → clog 里它是"进行中"。
+ *
+ * 后果是**静默的数据错误**（v1.2 步骤 5 的集成测试撞出来的）：
+ * 一个库跑了 450 个事务（300 插入 + 150 删除），重启后：
+ *   - 关闭前 COUNT(*) = 150
+ *   - 重启后 COUNT(*) = 255      ← 删掉的行又"活"了
+ *
+ * 因为"删掉了哪些行"这件事记在 xmax 里，而 xmax 的那个 xid
+ * 的提交状态被丢了 → clog 说"进行中" → 可见性判断认为这行还活着。
+ *
+ * 所以这里改成**按需增长的哈希表**：事务多少都不会丢状态。
+ * 真正的容量上限在别处 —— clog 本身是个 4096 槽的环形窗口
+ * （见 txn.h），xid 跨度超过 4096 时老状态会被覆盖，
+ * 那是另一个问题，属于 v1.2 步骤 6（日志截断 + clog 落盘）的范围。
+ */
 typedef struct {
-    int         n;
-    RecoveredXid xids[REC_MAX_XIDS];
+    RecoveredXid *slots;   /* 开放寻址表；xid == 0 表示空槽 */
+    u32 cap;               /* 槽位数（2 的幂） */
+    u32 n;                 /* 已占用的槽位数 */
 } RecoveredState;
+
+void recovered_state_init(RecoveredState *st);
+void recovered_state_free(RecoveredState *st);
 
 /*
  * 扫一遍日志，收集每个 xid 的提交状态。

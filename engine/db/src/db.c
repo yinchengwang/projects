@@ -311,8 +311,10 @@ db_err db_open(const char *path, DB **out)
     txn_table_init(&inst->txns, max_xid);
 
     RecoveredState xs;
+    recovered_state_init(&xs);
     rc = recovery_scan_xids(inst->wal, &xs);
     if (rc != OK) {
+        recovered_state_free(&xs);
         wal_close(inst->wal);
         pager_close(pg);
         free(inst->walpath);
@@ -320,10 +322,13 @@ db_err db_open(const char *path, DB **out)
         free(db);
         return map_rc(rc);
     }
-    for (int i = 0; i < xs.n; i++) {
-        txn_clog_set(&inst->txns, xs.xids[i].xid,
-                     xs.xids[i].committed ? TXN_CLOG_COMMITTED : TXN_CLOG_ABORTED);
+    for (u32 i = 0; i < xs.cap; i++) {
+        if (xs.slots[i].xid == 0)
+            continue;               /* 空槽 */
+        txn_clog_set(&inst->txns, xs.slots[i].xid,
+                     xs.slots[i].committed ? TXN_CLOG_COMMITTED : TXN_CLOG_ABORTED);
     }
+    recovered_state_free(&xs);
 
     /* 恢复必须在打开 catalog 之前：catalog 也是普通表，也要恢复 */
     bool did_recover = false;
