@@ -109,4 +109,32 @@ int ft_write_segment_head(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
                           u32 post_start, u32 post_count,
                           u32 n_terms, u64 total_len, u32 create_lsn);
 
+/* ---------------- 通用整页写（v1.3 步骤 5） ---------------- */
+
+/*
+ * 把 buf 的内容写进 pid 这一页（写日志 → 填 LSN → 算校验和 → 标脏放开）。
+ *
+ * 【与建段时的整页写有什么不同】
+ *
+ *   - 前像（before 镜像）= **这一页现在的内容**，不是全 0。
+ *     建段时那些页是刚分配的（前像 = 0）；而 tombstone 页、段头页
+ *     是**反复改写**的老页 —— 前像必须是改之前的内容，
+ *     否则未提交事务的修改没法撤销（undo 拿到的会是垃圾）。
+ *   - buf 是一份**独立的副本**，不能直接传 fr->data
+ *     （那样"前像"会取到已经被改过的内容）。
+ *
+ * 页的帧（fr）在调用前必须已 pin；**无论成功失败，本函数都会放开它**。
+ */
+int ft_page_write(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+                   u32 pid, PageFrame *fr, const u8 *buf, u32 *lsn_out);
+
+/*
+ * 改段头页的状态字段（FTH_STATE / FTH_MERGE_TO）。
+ *
+ * 合并时用它把老段标成 MERGING / DEAD（契约见 ft_internal.h）。
+ * 整页镜像进 WAL —— 状态也是数据，改错了要能撤销。
+ */
+int ft_write_segment_state(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+                           u32 head_pid, u32 state, u32 merge_to);
+
 #endif /* DB_MODALITIES_FT_WRITER_H */

@@ -213,37 +213,14 @@ static int ft_idx_collect_tokens(const char *text, u32 text_len, FtToken **buf, 
 /* ---------------- tombstone 集合 ---------------- */
 
 /*
- * 二分找 doc_id 在升序集合里的位置（返回第一个 >= doc_id 的下标，也就是插入点）。
- *
- * ft_merge.h 要求传过去的 tomb 集合**必须升序**（那边用二分判断成员）。
+ * tombstone 的内存集合（升序数组）与落盘形态都在 ft_tomb.c 里 ——
+ * 本文件只调用，不重复实现（二分查找与有序插入必须只有一份）。
  */
-static u32 ft_idx_tomb_lb(const u32 *tomb, u32 n, u32 doc_id)
-{
-    u32 lo = 0;
-    u32 hi = n;
 
-    while (lo < hi) {
-        u32 mid = lo + (hi - lo) / 2;
-
-        if (tomb[mid] < doc_id) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
-}
-/* doc_id 是否已被删除 */
-static bool ft_idx_is_tomb(const FtIndex *ix, u32 doc_id)
-{
-    u32 pos = ft_idx_tomb_lb(ix->tomb, ix->n_tombs, doc_id);
-
-    return (pos < ix->n_tombs && ix->tomb[pos] == doc_id);
-}
 /* ---------------- 段数组 ---------------- */
 
 /* 追加一个段（段数组按 2 的幂增长） */
-static int ft_idx_push_seg(FtIndex *ix, FtSegment *seg)
+int ft_index_push_seg(FtIndex *ix, FtSegment *seg)
 {
     if (ix->n_segs == ix->cap_segs) {
         u32 ncap = (ix->cap_segs == 0) ? FT_IDX_INIT_SEGS : ix->cap_segs * 2;
@@ -432,7 +409,7 @@ static int ft_index_search_impl(const FtIndex *ix, const char *query, u32 query_
                 double score;
 
                 /* 被删的文档不进结果（但它仍然计入 N 与 df） */
-                if (ft_idx_is_tomb(ix, p->doc_id)) {
+                if (ft_tomb_is(ix, p->doc_id)) {
                     continue;
                 }
                 if (use_bm25) {
@@ -505,7 +482,7 @@ int ft_index_create(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid, FtIndex **
 {
     FtIndex *ix;
 
-    (void)xid;   /* 本版的段目录只在内存里，落盘是步骤 4/5 的事 */
+    (void)xid;   /* 段目录落盘用的是段头页里的状态字段（见 ft_catalog.c） */
 
     if (pg == NULL || out == NULL) {
         return E_INVAL;
@@ -534,6 +511,7 @@ void ft_index_close(FtIndex *ix)
     }
     free(ix->segs);
     free(ix->tomb);
+    ft_tomb_free(ix);
     free(ix);
 }
 /* ---------------- 公开 API：加文档 ---------------- */
@@ -570,7 +548,7 @@ int ft_index_add(FtIndex *ix, u32 xid, const FtDocText *docs, u32 n_docs, u32 *s
         /* 段头页已经写下去了，但打不开 → 如实报错（那几页成了孤儿，欠账） */
         return rc;
     }
-    rc = ft_idx_push_seg(ix, seg);
+    rc = ft_index_push_seg(ix, seg);
     if (rc != OK) {
         ft_segment_close(seg);
         return rc;
@@ -594,92 +572,39 @@ int ft_index_search_tfidf(const FtIndex *ix, const char *query, u32 query_len,
 
 int ft_index_delete(FtIndex *ix, u32 xid, u32 doc_id)
 {
-    u32 pos;
-
-    (void)xid;   /* tombstone 集合本版只在内存里，落盘是步骤 4/5 的事 */
+    int rc;
 
     if (ix == NULL) {
         return E_INVAL;
     }
-    pos = ft_idx_tomb_lb(ix->tomb, ix->n_tombs, doc_id);
-    if (pos < ix->n_tombs && ix->tomb[pos] == doc_id) {
+    if (ft_tomb_is(ix, doc_id)) {
         /* 已经删过了：再删一次是合法的空操作，不报错 */
         return OK;
     }
-    if (ix->n_tombs == ix->cap_tombs) {
-        u32 ncap = (ix->cap_tombs == 0) ? FT_IDX_INIT_TOMBS : ix->cap_tombs * 2;
-        u32 *nt = (u32 *)realloc(ix->tomb, sizeof(u32) * (size_t)ncap);
-
-        if (nt == NULL) {
-            return E_NOSPACE;
-        }
-        ix->tomb = nt;
-        ix->cap_tombs = ncap;
-    }
     /*
-     * 插到 pos 处（保持升序）。
+     * 【先落盘，再进内存集合】
      *
-     * 【为什么是"有序插入"而不是"追加后整体排序"】
+     * tombstone 页是**权威存储**（坑 B）：它不会被 checkpoint 截断，
+     * 而内存集合一重启就没了。所以必须先把它写进页里。
      *
-     *   - 有序插入：插入 O(n)（memmove），但**查找**是 O(log n) 二分；
-     *     追加后排序：插入 O(n log n)，查找也只能 O(n) 线性扫。
-     *   - 删除是**低频**操作，检索是**高频**操作 —— 该优化的是检索。
-     *   - ft_merge.h 要求传过去的 tomb 集合必须升序（那边用二分判断成员），
-     *     有序插入天然满足。
+     * 顺序反过来的话（先进内存、写页失败），内存集合里多了一条
+     * "这个文档被删了"，而磁盘上没有 —— 重开库后它又冒出来了。
      */
-    if (pos < ix->n_tombs) {
-        memmove(&ix->tomb[pos + 1], &ix->tomb[pos],
-                sizeof(u32) * (size_t)(ix->n_tombs - pos));
+    rc = ft_tomb_append(ix, xid, doc_id);
+    if (rc != OK) {
+        return rc;
     }
-    ix->tomb[pos] = doc_id;
-    ix->n_tombs++;
+    if (ft_tomb_insert(ix, doc_id) < 0) {
+        return E_NOSPACE;
+    }
     return OK;
 }
 /* ---------------- 公开 API：合并 ---------------- */
 
 /*
- * 挑合并窗口：在所有长度为 2..n_segs 的**相邻窗口**里，挑"文档数之和最小"的那个。
- * 并列时的取法（必须确定性）：文档数之和更小的胜 → 并列取**窗口更大**的
- * → 还并列取**起点更小**的。
- *
- * 【为什么挑文档数之和最小的】合并要读这些段的字典与倒排、再写出一个新段，代价
- * 正比于参与的文档数；而且 Tiered 的思路就是"小段先合"。
- * 【为什么并列时选更大的窗口】窗口更大 = 一次把更多的段收成一段 → 段数降得更多
- * → 后续合并触发得更晚；同样的代价下少合并几轮更划算。
- *
- * 窗口个数 O(n²)、每个窗口求和 O(n) → 总共 O(n³)；段数被阈值卡在十几以内，
- * 这个代价可以忽略（真要担心，把前缀和存下来即可）。
+ * 挑合并窗口的活儿在 ft_merge.c 里（ft_merge_pick_window）——
+ * 它是"合并策略"，与合并的执行放在一起更好懂。
  */
-static void ft_idx_pick_window(const FtIndex *ix, u32 *start_out, u32 *width_out)
-{
-    u32 best_start = 0;
-    u32 best_w = 0;
-    u64 best_sum = 0;
-    bool have = false;
-
-    for (u32 w = 2; w <= ix->n_segs; w++) {
-        for (u32 st = 0; st + w <= ix->n_segs; st++) {
-            u64 sum = 0;
-            bool better;
-
-            for (u32 k = 0; k < w; k++) {
-                sum += ix->segs[st + k]->doc_count;
-            }
-            better = (!have) ||
-                     (sum < best_sum) ||
-                     (sum == best_sum && w > best_w) ||
-                     (sum == best_sum && w == best_w && st < best_start);
-            if (better) {
-                have = true;
-                best_sum = sum;
-                best_w = w;
-                best_start = st;
-            }
-        }
-    }
-    *start_out = best_start;
-    *width_out = best_w;
-}
 int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out)
 {
     u32 start = 0;
@@ -687,6 +612,9 @@ int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out)
     FtMergeResult res;
     FtSegment *newseg = NULL;
     FtSegment **old = NULL;
+    u32 *heads = NULL;
+    u64 pr_before = 0;
+    u64 pr_after = 0;
     int rc;
 
     if (ix == NULL || merged_out == NULL) {
@@ -698,30 +626,87 @@ int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out)
     if (ix->n_segs <= FT_MERGE_THRESHOLD) {
         return OK;
     }
-    ft_idx_pick_window(ix, &start, &w);
+    ft_merge_pick_window(ix->n_segs, ix->segs, &start, &w);
     if (w < 2) {
         return OK;   /* 理论上到不了这里（n_segs > 阈值 ≥ 8） */
     }
+
+    /* 老段的段头页号（改状态时要用） */
+    heads = (u32 *)malloc(sizeof(u32) * (size_t)w);
+    if (heads == NULL) {
+        return E_NOSPACE;
+    }
+    for (u32 k = 0; k < w; k++) {
+        heads[k] = ix->segs[start + k]->head_page;
+        pr_before += ix->segs[start + k]->page_reads;
+    }
+
+    /*
+     * 第一步：把老段标成 MERGING（指向新段的段号）。
+     *
+     * 【必须先标，再写新段】（坑 M4-21）
+     *
+     * 反过来的话，"新段已存在、老段还没标死"时崩溃，
+     * 重开库就会把两批文档都算进去（同一篇文档数两遍）。
+     *
+     * 标了 MERGING 之后就不用怕了：恢复时看"目标段在不在"就能定死活。
+     */
+    rc = ft_catalog_mark_merge(ix, xid, ix->next_seg_id, heads, w);
+    if (rc != OK) {
+        free(heads);
+        return rc;
+    }
+
     memset(&res, 0, sizeof(res));
     rc = ft_merge_segments(ix->pg, ix->wal, ix->wal_ctx, xid,
                            ix->segs + start, w, ix->tomb, ix->n_tombs,
                            ix->next_seg_id, &res);
     if (rc != OK) {
-        /* 合并失败 → 索引状态**完全不变**（段列表、tombstone 都不动） */
+        /* 合并失败 → 状态回滚（老段还是活的），索引状态**完全不变** */
+        (void)ft_catalog_abort_merge(ix, xid, heads, w);
+        free(heads);
         return rc;
     }
+    /* 新段的段号就此用掉 —— 段号不能重用（磁盘上已经有一个同号的段了） */
+    ix->next_seg_id++;
+
     rc = ft_segment_open(ix->pg, res.head_page, &newseg);
     if (rc != OK) {
         /*
-         * 合并本身成功了，但新段打不开 → 索引状态不变（还是老的那几个段）。
+         * 合并本身成功了，但新段打不开 → 老段必须算死
+         * （否则同一批文档被数两遍）。
          * 新段的页成了孤儿 —— 与"旧段的页不回收"是同一类欠账，如实记录。
          */
+        (void)ft_catalog_end_merge(ix, xid, heads, w);
+        free(heads);
         return rc;
     }
+
+    /*
+     * 第三步：老段标死。
+     *
+     * 标死了磁盘上的状态与"恢复时的判定"完全一致；
+     * 标死失败也不影响正确性 —— 恢复时 MERGING + 目标段存在 = 死（坑 M4-21）。
+     * 所以这里如实返回错误，但**内存状态照样换掉**（与磁盘一致）。
+     */
+    rc = ft_catalog_end_merge(ix, xid, heads, w);
+
+    /*
+     * 收"合并页读"（必须在老段被释放之前收 —— 释放后就读不到了）。
+     *
+     * 口径 = 参与合并的段的页读**增量**（合并读老段的倒排页）
+     *      + 合并自己读的字典页数（游标读的，不在段的计数里）。
+     */
+    for (u32 k = 0; k < w; k++) {
+        pr_after += ix->segs[start + k]->page_reads;
+    }
+    ix->merge_page_reads += (pr_after - pr_before) + res.page_reads;
+
     /* ---- 换段：窗口里的 w 个段换成新段，新段放在窗口原来的位置 ---- */
     old = (FtSegment **)malloc(sizeof(FtSegment *) * (size_t)w);
     if (old == NULL) {
         ft_segment_close(newseg);
+        free(heads);
         return E_NOSPACE;
     }
     memcpy(old, ix->segs + start, sizeof(FtSegment *) * (size_t)w);
@@ -743,11 +728,11 @@ int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out)
         ft_segment_close(old[k]);
     }
     free(old);
+    free(heads);
 
     ix->segs[start] = newseg;
-    ix->next_seg_id++;
     *merged_out = w;
-    return OK;
+    return rc;
 }
 /* ---------------- 公开 API：统计 ---------------- */
 
@@ -776,4 +761,16 @@ u64 ft_index_page_reads(const FtIndex *ix)
 {
     /* 索引级**累计**值（坑 M4-16）：跨检索累加，合并后也不会缩水 */
     return (ix == NULL) ? 0 : ix->page_reads_total;
+}
+
+/*
+ * 索引级**累计**的"合并页读"（与 ft_index_page_reads 分开）。
+ *
+ * 口径：每次 ft_index_merge() 把这次合并读过的页数累加进来 ——
+ * 读老段倒排页的那部分（各段 page_reads 的增量）
+ * + 合并自己读的字典页（游标读的）。
+ */
+u64 ft_index_merge_page_reads(const FtIndex *ix)
+{
+    return (ix == NULL) ? 0 : ix->merge_page_reads;
 }

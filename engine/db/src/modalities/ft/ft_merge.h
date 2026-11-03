@@ -44,7 +44,24 @@ typedef struct {
     u64 total_len;    /* 新段所有文档的词数之和 */
     u32 n_terms;      /* 新段的词数 */
     u32 max_doc_id;   /* 新段的最大 doc_id */
+    /*
+     * 合并路径读过的**字典页**数。
+     *
+     * 读老段的倒排页已经记在那些段的 page_reads 里（ft_scan.c 的规矩），
+     * 而字典页是合并的游标自己读的（不在段的计数里）——
+     * 所以这一项补上"合并读字典"的那半边，两半加起来才是合并的总页读。
+     */
+    u64 page_reads;
 } FtMergeResult;
+
+/*
+ * 挑合并窗口（合并策略）。
+ *
+ * 在所有长度为 2..n_segs 的**相邻窗口**里，挑"文档数之和最小"的那个；
+ * 并列时的取法是确定的（见 ft_merge.c 的注释）。
+ */
+void ft_merge_pick_window(u32 n_segs, FtSegment *const *segs,
+                           u32 *start_out, u32 *width_out);
 
 /*
  * 把 segs[0..n_segs) 合并成一个新段（新段直接写到 pg 里）。

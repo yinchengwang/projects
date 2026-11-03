@@ -47,7 +47,27 @@ typedef enum {
      * 日志截断的前提就是靠这个区分：
      * 只有 WAL_ABORT_DONE 的事务，它的 before 镜像才可以跟着日志一起扔掉。
      */
-    WAL_ABORT_DONE
+    WAL_ABORT_DONE,
+    /*
+     * 【逻辑记录】全文检索的 tombstone（v1.3 步骤 5）。
+     *
+     * 载荷 = u32 doc_id（写在 after 镜像里，blen = 0）。
+     *
+     * 【为什么 WAL 层要有这条记录】
+     *
+     * WAL 层**不认识** FT 语义（分层铁律：wal/ 是 L1，不许 include modalities/）。
+     * 它只负责"把这类记录原样转交给上层" —— 恢复阶段遇到非页类记录时，
+     * 通过重放钩子（见 recovery.h）把 (type, xid, payload) 交给 db 层，
+     * 由 db 层解释它。
+     *
+     * 【为什么页镜像之外还要这条逻辑记录】
+     *
+     * tombstone 的**权威存储**是 tombstone 页（整页镜像进 WAL）。
+     * 但"这篇文档被删了"这件事本身，用一条 4 字节的逻辑记录表达更直接：
+     *   - 重放时不必依赖"页镜像在不在"；
+     *   - 未提交事务的删除可以被**撤销**（语义：这次删除没发生过）。
+     */
+    WAL_FT_TOMB
 } WalType;
 
 #define WAL_HDR         28u

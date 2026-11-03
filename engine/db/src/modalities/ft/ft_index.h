@@ -88,6 +88,21 @@ int ft_index_search_tfidf(const FtIndex *ix, const char *query, u32 query_len,
                           u32 top_k, u32 max_out, FtHit *out, u32 *n_out);
 
 /*
+ * 【崩溃恢复】（v1.3 步骤 5）
+ *
+ * 从磁盘把索引重建出来：
+ *   - 段目录：扫页空间，找到还活着的段并打开（死段不算数）；
+ *   - tombstone 集合：页里的内容 ∪ (WAL 重放看到的 − WAL 回滚撤销的)。
+ *
+ * redo_ids / n_redo —— 恢复重放时看到的删除（由 db 层的恢复钩子收集）。
+ * undo_ids / n_undo —— 恢复回滚时撤销的删除（未提交事务的）。
+ *
+ * 必须在**恢复重放之后**调 —— 否则 WAL 里的删除还没进集合。
+ */
+int ft_index_recover(FtIndex *ix, const u32 *redo_ids, u32 n_redo,
+                     const u32 *undo_ids, u32 n_undo);
+
+/*
  * 删一篇文档（打 tombstone）。
  *
  * 立刻生效：之后的检索不再返回它。
@@ -111,6 +126,30 @@ u32 ft_index_nsegs(const FtIndex *ix);
 u32 ft_index_ndocs(const FtIndex *ix);        /* 各段 doc_count 之和（含 tombstone 的） */
 u32 ft_index_ntombstones(const FtIndex *ix);
 u64 ft_index_page_reads(const FtIndex *ix);
+
+/*
+ * 索引级**累计**的"合并页读"（v1.3 步骤 5 补）。
+ *
+ * 【为什么与 ft_index_page_reads 分开】
+ *
+ *   - ft_index_page_reads()      —— **检索**页读：A5 测"查一个词读了几页"，
+ *                                  口径是各段计数的**差量**，与语料量无关；
+ *   - ft_index_merge_page_reads() —— **合并**页读：A4 测"合并一次要读几页"。
+ *
+ * 两条是不同的 IO 曲线（合并读的页比检索多一个数量级），
+ * 混在一起就看不出量级了 —— 所以必须是两个计数器。
+ *
+ * 【口径】
+ *
+ * 每次 ft_index_merge() 把这次合并读过的页数累加进来：
+ *   - 读老段**倒排页**的那部分（各段 page_reads 的增量）；
+ *   - 合并自己读的**字典页**（游标读的，不计入段的计数）。
+ *
+ * 为什么必须单独记：合并时被合并掉的段随后就被释放了，
+ * 它们的 page_reads 事后读不到 —— 不在合并返回前把增量收上来，
+ * 这次的合并代价就永远丢了。
+ */
+u64 ft_index_merge_page_reads(const FtIndex *ix);
 
 /*
  * ---------------- 只读访问器（v1.3 步骤 4 给 ft_docs 虚拟表用） ----------------

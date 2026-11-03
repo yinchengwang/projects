@@ -39,6 +39,55 @@
  */
 int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover);
 
+/* ---------------- 重放钩子（v1.3 步骤 5） ---------------- */
+
+/*
+ * 【为什么要钩子】
+ *
+ * WAL 层是 L1，**不许** include modalities/（分层铁律，见 tools/check_deps.sh）。
+ * 所以 WAL 层不能自己解释"FT 的 tombstone 记录是什么意思"。
+ *
+ * 做法：WAL 层只负责**原样转交** —— 恢复阶段遇到"非页类记录"
+ * （页类 = INSERT / DELETE / UPDATE / PAGEINIT / PAGEDATA）时，
+ * 把 (type, xid, payload, payload_len) 交给上层注册的钩子，
+ * 由上层（db 层）解释它。
+ *
+ * 这样加第 5 个模态时，WAL 层**一行都不用改**。
+ */
+
+/* 钩子的阶段：重放 / 回滚 */
+typedef enum {
+    REC_HOOK_REDO = 0,   /* 重放阶段：这条记录要生效 */
+    REC_HOOK_UNDO = 1    /* 回滚阶段：这条记录要撤销 */
+} RecHookPhase;
+
+/*
+ * 钩子函数。
+ *
+ * 返回非 OK → 恢复失败（整个开库失败）。返回 OK 表示"这条记录处理完了"。
+ * 钩子不认识这个 type 时**直接返回 OK**（忽略）—— 钩子可以收到所有非页类记录。
+ *
+ * payload 是载荷（before + after 拼起来的字节）；对 WAL_FT_TOMB 来说
+ * 就是那 4 字节的 doc_id（blen = 0，所以 payload 全是 after）。
+ */
+typedef int (*RecoveryHookFn)(void *ctx, u8 type, u32 xid,
+                               const u8 *payload, u16 payload_len,
+                               RecHookPhase phase);
+
+/*
+ * 注册 / 注销重放钩子。
+ *
+ * 钩子是**进程级**的一份（WAL 是实例级共享的，恢复只跑一次），
+ * 所以用全局状态而不是参数 —— recovery_run 的签名保持不变
+ * （它被别处调用着，改签名会波及一片）。
+ *
+ * 典型用法（db.c 的开库顺序）：
+ *   recovery_set_hook(db_ft_recovery_hook, inst);
+ *   recovery_run(...);
+ *   recovery_set_hook(NULL, NULL);
+ */
+void recovery_set_hook(RecoveryHookFn fn, void *ctx);
+
 /*
  * 恢复阶段收集到的 xid 状态（供 clog 重建用）。
  *

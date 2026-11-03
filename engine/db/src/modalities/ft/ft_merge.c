@@ -69,6 +69,7 @@ typedef struct {
     u32        term_len;
     u32        df;
     u64        ptr;
+    u64        page_reads;   /* 这个游标读过的字典页数（合并路径的页读） */
 } FtTermCursor;
 
 /* 取下一个词条；读完返回 OK 且 have = false */
@@ -92,6 +93,7 @@ static int ft_cursor_next(FtTermCursor *c)
             if (rc != OK) {
                 return rc;
             }
+            c->page_reads++;      /* 合并读了一页字典 */
             c->slot = 0;
         }
 
@@ -261,6 +263,166 @@ static bool ft_tomb_find(const u32 *tombs, u32 n, u32 doc_id, u32 *idx_out)
     return false;
 }
 
+/* ---------------- 词序遍历（两趟共用） ---------------- */
+
+/*
+ * 找出各段当前词里的最小者。
+ *
+ * found = false 表示所有段都读完了。
+ * 词被拷进 term（不能指向游标里的缓冲：游标一推进就没了）。
+ */
+static bool ft_cursors_pick(FtTermCursor *cursors, u32 n_segs,
+                             char *term, u32 *term_len)
+{
+    u32 best = 0;
+    bool found = false;
+
+    for (u32 i = 0; i < n_segs; i++) {
+        if (!cursors[i].have) {
+            continue;
+        }
+        if (!found ||
+            ft_term_cmp(cursors[i].term, cursors[i].term_len,
+                        cursors[best].term, cursors[best].term_len) < 0) {
+            best = i;
+            found = true;
+        }
+    }
+    if (!found) {
+        return false;
+    }
+    *term_len = cursors[best].term_len;
+    memcpy(term, cursors[best].term, cursors[best].term_len);
+    return true;
+}
+
+/*
+ * 把"当前词就是这个词"的那些段的游标各推进一步。
+ */
+static int ft_cursors_advance(FtTermCursor *cursors, u32 n_segs,
+                               const char *term, u32 term_len)
+{
+    for (u32 i = 0; i < n_segs; i++) {
+        int rc;
+
+        if (!cursors[i].have) {
+            continue;
+        }
+        if (ft_term_cmp(cursors[i].term, cursors[i].term_len, term, term_len) != 0) {
+            continue;
+        }
+        rc = ft_cursor_next(&cursors[i]);
+        if (rc != OK) {
+            return rc;
+        }
+    }
+    return OK;
+}
+
+/* 游标复位：放开当前页，从头再来一遍（第二趟要重走同一个词序） */
+static int ft_cursors_reset(FtTermCursor *cursors, u32 n_segs, FtSegment *const *segs)
+{
+    for (u32 i = 0; i < n_segs; i++) {
+        int rc;
+
+        ft_cursor_free(&cursors[i]);
+        rc = ft_cursor_init(&cursors[i], segs[i]);
+        if (rc != OK) {
+            return rc;
+        }
+    }
+    return OK;
+}
+
+/* ---------------- 归并记录表 ---------------- */
+
+/*
+ * 每个词一条记录：df（留在新段里的 posting 数）、倒排链头、是否保留。
+ *
+ * 【为什么要记这张表】
+ *
+ * 因为写入必须分两趟（坑 M4-23）：字典页要连号，
+ * 所以不能"写一个词的倒排就写它的字典"。
+ *
+ * 第一趟把词序走完、只写倒排，把每个词的 (df, ptr) 记在这张表里；
+ * 第二趟重走同一个词序，按表里记的 (df, ptr) 写字典。
+ *
+ * 表的大小 = O(词数)（每个词 16 字节）——
+ * 比"把词本身也存下来"省得多（词序可以从游标重走）。
+ */
+typedef struct {
+    u32 df;      /* 留在新段里的 posting 数 */
+    u32 kept;    /* 1 = 这个词进了新段，0 = posting 全被删光 */
+    u64 ptr;     /* 倒排链头 */
+} FtMergeRec;
+
+static int ft_merge_rec_push(FtMergeRec **recs, u32 *n, u32 *cap,
+                             u32 df, u32 kept, u64 ptr)
+{
+    if (*n == *cap) {
+        u32 ncap = (*cap == 0) ? 256u : *cap * 2u;
+        FtMergeRec *nr = (FtMergeRec *)realloc(*recs, sizeof(FtMergeRec) * (size_t)ncap);
+
+        if (nr == NULL) {
+            return E_NOSPACE;
+        }
+        *recs = nr;
+        *cap = ncap;
+    }
+    (*recs)[*n].df = df;
+    (*recs)[*n].kept = kept;
+    (*recs)[*n].ptr = ptr;
+    (*n)++;
+    return OK;
+}
+
+/* ---------------- 合并策略：挑窗口 ---------------- */
+
+/*
+ * 挑合并窗口：在所有长度为 2..n_segs 的**相邻窗口**里，挑"文档数之和最小"的那个。
+ * 并列时的取法（必须确定性）：文档数之和更小的胜 → 并列取**窗口更大**的
+ * → 还并列取**起点更小**的。
+ *
+ * 【为什么挑文档数之和最小的】合并要读这些段的字典与倒排、再写出一个新段，代价
+ * 正比于参与的文档数；而且 Tiered 的思路就是"小段先合"。
+ * 【为什么并列时选更大的窗口】窗口更大 = 一次把更多的段收成一段 → 段数降得更多
+ * → 后续合并触发得更晚；同样的代价下少合并几轮更划算。
+ *
+ * 窗口个数 O(n²)、每个窗口求和 O(n) → 总共 O(n³)；段数被阈值卡在十几以内，
+ * 这个代价可以忽略（真要担心，把前缀和存下来即可）。
+ */
+void ft_merge_pick_window(u32 n_segs, FtSegment *const *segs,
+                           u32 *start_out, u32 *width_out)
+{
+    u32 best_start = 0;
+    u32 best_w = 0;
+    u64 best_sum = 0;
+    bool have = false;
+
+    for (u32 w = 2; w <= n_segs; w++) {
+        for (u32 st = 0; st + w <= n_segs; st++) {
+            u64 sum = 0;
+            bool better;
+
+            for (u32 k = 0; k < w; k++) {
+                sum += segs[st + k]->doc_count;
+            }
+            better = (!have) ||
+                     (sum < best_sum) ||
+                     (sum == best_sum && w > best_w) ||
+                     (sum == best_sum && w == best_w && st < best_start);
+            if (better) {
+                have = true;
+                best_sum = sum;
+                best_w = w;
+                best_start = st;
+            }
+        }
+    }
+    *start_out = best_start;
+    *width_out = best_w;
+}
+
 /* ---------------- 合并主流程 ---------------- */
 
 /*
@@ -276,6 +438,9 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     FtPostBuf merged;
     FtPostWriter *pw = NULL;
     FtDictWriter *dw = NULL;
+    FtMergeRec *recs = NULL;     /* 每个词的 (df, ptr, kept)：两趟之间传话 */
+    u32 n_recs = 0;
+    u32 cap_recs = 0;
     u8 *tomb_done = NULL;
     u32 head_pid = PAGE_ID_NIL;
     PageFrame *head_fr = NULL;
@@ -350,32 +515,23 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         goto done;
     }
 
-    /* ---- k 路归并主循环 ---- */
+    /*
+     * ---- 第一趟：k 路归并，**只写倒排**（坑 M4-23）----
+     *
+     * 字典页必须连号（段头只记连续区间），所以不能"写一个词的倒排
+     * 就写它的字典" —— 两个写入器交替分配页，页号就不连号了，
+     * 读侧按连续区间读会读到倒排页（查不到 / 命中 0 / 静默丢词）。
+     *
+     * 第一趟把词序走完，只写倒排，把每个词的 (df, ptr) 记进 recs[]。
+     */
     for (;;) {
-        u32 best = 0;
-        bool found = false;
         u32 merged_n = 0;
         u64 ptr = FT_PTR_NIL;
 
-        /* 找各段当前词里的最小者 */
-        for (i = 0; i < n_segs; i++) {
-            if (!cursors[i].have) {
-                continue;
-            }
-            if (!found ||
-                ft_term_cmp(cursors[i].term, cursors[i].term_len,
-                            cursors[best].term, cursors[best].term_len) < 0) {
-                best = i;
-                found = true;
-            }
-        }
-        if (!found) {
+        /* 找各段当前词里的最小者（拷一份词出来：游标一推进就没了） */
+        if (!ft_cursors_pick(cursors, n_segs, term, &term_len)) {
             break;      /* 所有段都读完了 */
         }
-
-        /* 拷一份词出来：游标一推进，cursors[best].term 就变了 */
-        term_len = cursors[best].term_len;
-        memcpy(term, cursors[best].term, term_len);
 
         /* 把这个词在**所有**段里的 posting 归并成一条 */
         for (i = 0; i < n_segs; i++) {
@@ -403,12 +559,16 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
             if (rc != OK) {
                 goto done;
             }
+        }
 
-            /* 这个段的游标推进一步 */
-            rc = ft_cursor_next(&cursors[i]);
-            if (rc != OK) {
-                goto done;
-            }
+        /*
+         * 这个词的游标推进一步。
+         *
+         * 第二趟用**同样的推进方式** → 同样的词序 → 才能按顺序取 recs[]。
+         */
+        rc = ft_cursors_advance(cursors, n_segs, term, term_len);
+        if (rc != OK) {
+            goto done;
         }
 
         /*
@@ -448,11 +608,16 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
 
         /* 全部 posting 都被删掉了 → 这个词不进新段 */
         if (merged_n == 0) {
+            /* 第二趟也要跳过它 → 记一条"不保留" */
+            rc = ft_merge_rec_push(&recs, &n_recs, &cap_recs, 0, 0, FT_PTR_NIL);
+            if (rc != OK) {
+                goto done;
+            }
             continue;
         }
 
         /*
-         * 写新段：先写 posting（拿到链头），再写字典词条。
+         * 只写倒排（拿到链头），字典留到第二趟写。
          *
          * 写入器收的是**绝对 doc_id**，delta 由它算（坑 M4-2）。
          */
@@ -460,18 +625,63 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         if (rc != OK) {
             goto done;
         }
-        rc = ft_dict_writer_put(dw, term, term_len, merged_n, ptr);
+        rc = ft_merge_rec_push(&recs, &n_recs, &cap_recs, merged_n, 1, ptr);
         if (rc != OK) {
             goto done;
         }
         n_terms++;
     }
 
-    /* ---- 收尾：两个写入器都要 flush（漏一个最后一页就不落盘） ---- */
+    /* ---- 倒排页收尾（最后半页落盘） ---- */
     rc = ft_post_writer_flush(pw);
     if (rc != OK) {
         goto done;
     }
+
+    /*
+     * ---- 第二趟：重走同一个词序，写字典页（坑 M4-23）----
+     *
+     * 游标复位后再走一遍：同样的输入 → 同样的词序，
+     * 于是可以按顺序取 recs[] 里记好的 (df, ptr)。
+     *
+     * 这一趟不读 posting（词序与 posting 无关）。
+     */
+    rc = ft_cursors_reset(cursors, n_segs, segs);
+    if (rc != OK) {
+        goto done;
+    }
+    {
+        u32 idx = 0;
+
+        for (;;) {
+            if (!ft_cursors_pick(cursors, n_segs, term, &term_len)) {
+                break;
+            }
+            rc = ft_cursors_advance(cursors, n_segs, term, term_len);
+            if (rc != OK) {
+                goto done;
+            }
+            if (idx >= n_recs) {
+                rc = E_CORRUPT;     /* 两趟的词数对不上（不该发生） */
+                goto done;
+            }
+            if (!recs[idx].kept) {
+                idx++;      /* 这个词的 posting 全被删光了 → 不进新段 */
+                continue;
+            }
+            rc = ft_dict_writer_put(dw, term, term_len, recs[idx].df, recs[idx].ptr);
+            if (rc != OK) {
+                goto done;
+            }
+            idx++;
+        }
+        if (idx != n_recs) {
+            rc = E_CORRUPT;         /* 两趟的词数对不上（不该发生） */
+            goto done;
+        }
+    }
+
+    /* ---- 收尾：字典页也要 flush（漏一个最后一页就不落盘） ---- */
     rc = ft_dict_writer_flush(dw);
     if (rc != OK) {
         goto done;
@@ -499,6 +709,16 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     out->total_len = total_len;
     out->n_terms = n_terms;
     out->max_doc_id = max_doc_id;
+    /*
+     * 合并读的字典页数（游标读的）。
+     *
+     * 两趟（坑 M4-23）意味着字典页被读了**两遍** ——
+     * 这是"字典页必须连号"换来的代价，如实计入。
+     */
+    out->page_reads = 0;
+    for (i = 0; i < n_segs; i++) {
+        out->page_reads += cursors[i].page_reads;
+    }
 
 done:
     if (pw != NULL) {
@@ -521,6 +741,7 @@ done:
     }
     ft_postbuf_free(&merged);
     free(tomb_done);
+    free(recs);
     if (head_fr != NULL) {
         pager_unpin(pg, head_pid, false);
     }

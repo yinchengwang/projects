@@ -230,6 +230,126 @@ done:
     return rc;
 }
 
+/* ---------------- 两趟写页（坑 M4-23） ---------------- */
+
+/*
+ * 【为什么要分两趟】
+ *
+ * 段头只记**连续区间**：dict_start + dict_count、post_start + post_count。
+ * 读侧（跨页二分、词条游标）都按"连续区间"读页 ——
+ * 所以字典页必须**连号**，倒排页也必须连号。
+ *
+ * 曾经的写法是"一个词先写倒排、再写字典"，两个写入器各自 pager_alloc
+ * → 倒排页与字典页**交替分配**，页号不连号。
+ * 后果：字典超过一页时，读侧按连续区间读到的其实是倒排页 →
+ *   - ft_segment_lookup 返回 E_NOTFOUND（查不到）；
+ *   - 检索命中 0 篇；
+ *   - 合并时读到垃圾 → 报错，或者**静默丢词**。
+ *
+ * 单页字典时这个 bug 测不出来（词表 ≤ 约 177 个词时字典正好一页），
+ * 所以必须有"字典跨页"的用例盯着（见 test_ft_segment.c 的字典跨页用例）。
+ *
+ * 【两趟怎么分工】
+ *
+ *   第一趟：只写倒排，顺手把每个词的倒排链头（post_ptr）记下来；
+ *   第二趟：按同一个词序写字典，用第一趟记下的链头。
+ *
+ * 词本身不用另存 —— posting 数组还在内存里，第二趟重新走一遍词组
+ * 就能拿到同样的词序（同样的输入 → 同样的顺序）。
+ */
+
+/* 一个词组（同一个词的 posting 连在一起） */
+typedef int (*FtGroupFn)(void *ctx, const FtBuildPost *grp, u32 n, u32 term_len);
+
+/*
+ * 按词分组遍历已排序的 posting 数组。
+ *
+ * posts 已按 (词 asc, doc_id asc) 排好 → 同一个词的 posting 连续。
+ */
+static int ft_build_each_group(FtBuildPost *posts, u32 n_posts, FtGroupFn fn, void *ctx)
+{
+    u32 i = 0;
+
+    while (i < n_posts) {
+        u32 j = i + 1;
+        u32 tlen = posts[i].tlen;
+        int rc;
+
+        while (j < n_posts &&
+               ft_term_cmp(posts[i].term, tlen, posts[j].term, posts[j].tlen) == 0) {
+            j++;
+        }
+        rc = fn(ctx, &posts[i], j - i, tlen);
+        if (rc != OK) {
+            return rc;
+        }
+        i = j;
+    }
+    return OK;
+}
+
+/* 第一趟的上下文：写倒排 + 记链头 */
+typedef struct {
+    FtPostWriter *pw;
+    FtPosting    *scratch;
+    u64          *ptrs;      /* 每个词的倒排链头 */
+    u32           n_ptrs;
+    u32           cap_ptrs;
+} FtPass1Ctx;
+
+static int ft_build_pass1(void *vctx, const FtBuildPost *grp, u32 n, u32 term_len)
+{
+    FtPass1Ctx *c = (FtPass1Ctx *)vctx;
+    u64 ptr = FT_PTR_NIL;
+    u32 k;
+    int rc;
+
+    (void)term_len;
+
+    for (k = 0; k < n; k++) {
+        c->scratch[k].doc_id = grp[k].doc_id;
+        c->scratch[k].tf = grp[k].tf;
+        c->scratch[k].dl = grp[k].dl;
+    }
+    rc = ft_post_writer_put(c->pw, c->scratch, n, &ptr);
+    if (rc != OK) {
+        return rc;
+    }
+
+    if (c->n_ptrs == c->cap_ptrs) {
+        u32 ncap = (c->cap_ptrs == 0) ? 64u : c->cap_ptrs * 2u;
+        u64 *np = (u64 *)realloc(c->ptrs, sizeof(u64) * (size_t)ncap);
+
+        if (np == NULL) {
+            return E_NOSPACE;
+        }
+        c->ptrs = np;
+        c->cap_ptrs = ncap;
+    }
+    c->ptrs[c->n_ptrs++] = ptr;
+    return OK;
+}
+
+/* 第二趟的上下文：写字典（链头取第一趟记下的） */
+typedef struct {
+    FtDictWriter  *dw;
+    const u64     *ptrs;
+    u32            n_ptrs;
+    u32            idx;
+} FtPass2Ctx;
+
+static int ft_build_pass2(void *vctx, const FtBuildPost *grp, u32 n, u32 term_len)
+{
+    FtPass2Ctx *c = (FtPass2Ctx *)vctx;
+    u64 ptr;
+
+    if (c->idx >= c->n_ptrs) {
+        return E_CORRUPT;     /* 两趟的词数对不上（不该发生） */
+    }
+    ptr = c->ptrs[c->idx++];
+    return ft_dict_writer_put(c->dw, grp->term, term_len, n, ptr);
+}
+
 /* ---------------- 建段 ---------------- */
 
 int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
@@ -246,7 +366,6 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     u32 head_pid = PAGE_ID_NIL;
     u32 n_terms = 0;
     u32 d;      /* 文档下标 */
-    u32 i;      /* posting 下标 */
     int rc = OK;
 
     if (!pg || !head_page_out)
@@ -298,47 +417,52 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     }
 
     /*
-     * 第三步：按词分组，先写倒排、再写字典。
+     * 第三步：**两趟**写页（坑 M4-23）—— 先把倒排写完，再写字典。
+     *
+     * 两趟分开是为了让**字典页连号**（段头只记连续区间，
+     * 读侧按连续区间读页；混着写就会读到倒排页）。
+     *
      * 一个词的 posting 连续、组内 doc_id 递增（都是排序保证的），
      * 所以 df = 组大小，posting 的 delta 全是非负的。
      */
-    i = 0;
-    while (i < n_posts) {
-        u32 j = i + 1;
-        u32 df;
-        u32 k;
-        u64 post_ptr = FT_PTR_NIL;
+    {
+        FtPass1Ctx p1;
+        FtPass2Ctx p2;
 
-        while (j < n_posts &&
-               ft_term_cmp(posts[i].term, posts[i].tlen,
-                           posts[j].term, posts[j].tlen) == 0)
-            j++;
+        memset(&p1, 0, sizeof(p1));
+        memset(&p2, 0, sizeof(p2));
+        p1.pw = pw;
+        p1.scratch = scratch;
 
-        df = j - i;
+        rc = ft_build_each_group(posts, n_posts, ft_build_pass1, &p1);
+        if (rc != OK) {
+            free(p1.ptrs);
+            goto done;
+        }
+        n_terms = p1.n_ptrs;
 
-        /* 写入器吃的是内存形态的 posting（绝对 doc_id），词不进倒排页 */
-        for (k = 0; k < df; k++) {
-            scratch[k].doc_id = posts[i + k].doc_id;
-            scratch[k].tf = posts[i + k].tf;
-            scratch[k].dl = posts[i + k].dl;
+        /* 收尾：最后半页倒排写盘（页链到此为止，H_NEXT = 0 表示没有下一页） */
+        rc = ft_post_writer_flush(pw);
+        if (rc != OK) {
+            free(p1.ptrs);
+            goto done;
         }
 
-        rc = ft_post_writer_put(pw, scratch, df, &post_ptr);
-        if (rc != OK)
+        /*
+         * 第二趟：按**同一个词序**写字典。
+         *
+         * posting 数组还在内存里，重新走一遍词组就是同一个顺序 ——
+         * 所以词本身不用另存一份（省内存）。
+         */
+        p2.dw = dw;
+        p2.ptrs = p1.ptrs;
+        p2.n_ptrs = p1.n_ptrs;
+        rc = ft_build_each_group(posts, n_posts, ft_build_pass2, &p2);
+        free(p1.ptrs);
+        if (rc != OK) {
             goto done;
-
-        rc = ft_dict_writer_put(dw, posts[i].term, posts[i].tlen, df, post_ptr);
-        if (rc != OK)
-            goto done;
-
-        n_terms++;
-        i = j;
+        }
     }
-
-    /* 收尾：最后半页写盘（页链到此为止，H_NEXT = 0 表示没有下一页） */
-    rc = ft_post_writer_flush(pw);
-    if (rc != OK)
-        goto done;
 
     /*
      * 收尾：最后半页字典写盘。

@@ -33,6 +33,18 @@
 #include "wal/wal.h"
 
 /*
+ * 恢复重放集合：一份 doc_id 的动态数组。
+ *
+ * 恢复阶段的钩子把 WAL 里的 tombstone 记录收进这里，
+ * ft_index_recover() 再拿它们去装配最终的删除标记集合。
+ */
+typedef struct {
+    u32 *ids;
+    u32 n;
+    u32 cap;
+} FtReplaySet;
+
+/*
  * 实例：所有连接共享的东西。
  *
  * 用引用计数：最后一个连接关掉时才真正关库。
@@ -108,6 +120,18 @@ typedef struct DbInstance {
     StorageAM    ft_am;
     FtAmCtx      ft_ctx;
 
+    /*
+     * 全文检索的**恢复重放集合**（v1.3 步骤 5）。
+     *
+     * 恢复阶段，WAL 层的钩子把日志里的 tombstone 记录收进这两个集合：
+     *   - redo：重放看到的删除；
+     *   - undo：回滚撤销的删除（未提交事务的）。
+     *
+     * 它们只活到 ft_index_recover() 跑完（用完即释放）。
+     */
+    FtReplaySet  ft_replay_redo;
+    FtReplaySet  ft_replay_undo;
+
     char     *walpath;
     char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
     int       nconns;       /* 引用计数 */
@@ -154,6 +178,25 @@ void db_vec_close(DbInstance *inst);
  * ---------------- 全文检索模态（v1.3，db_ft.c 实现） ----------------
  */
 
+/* 往集合里追加一个 doc_id */
+int  db_ft_replay_add(FtReplaySet *set, u32 doc_id);
+
+/* 释放集合 */
+void db_ft_replay_free(FtReplaySet *set);
+
+/*
+ * 恢复钩子（WAL 层不认识 FT 语义，由这一层解释）。
+ *
+ * WAL 层在重放/回滚时遇到**非页类**记录就调这个钩子，
+ * 把 (type, xid, payload, payload_len, phase) 原样转交过来。
+ *
+ * 这里只认 WAL_FT_TOMB（载荷 = u32 doc_id）：
+ *   - phase = REC_HOOK_REDO → 收进 redo 集合（这个删除生效了）；
+ *   - phase = REC_HOOK_UNDO → 收进 undo 集合（未提交事务 → 这个删除没发生过）。
+ */
+int db_ft_recovery_hook(void *ctx, u8 type, u32 xid,
+                        const u8 *payload, u16 payload_len, RecHookPhase phase);
+
 /*
  * 把 ft_docs 虚拟表接进注册表（仿 db_vec_register）。
  *
@@ -163,11 +206,9 @@ void db_vec_close(DbInstance *inst);
 int db_ft_register(DbInstance *inst);
 
 /*
- * 开库时建索引 + 注册虚拟表。
+ * 开库时建索引 + **从磁盘恢复**（扫页空间找段与 tombstone 页）。
  *
- * ⚠️ **本版建的是空索引**：段的清单与 tombstone 集合只在内存里，
- * 磁盘上没有"段目录页"（那是步骤 5 的事）。所以重开库**恢复不了**
- * 上次灌进去的文档 —— 如实建一个空的，不假装能恢复。
+ * 必须在恢复重放之后调 —— WAL 里的删除要先进集合。
  */
 int db_ft_open(DbInstance *inst);
 

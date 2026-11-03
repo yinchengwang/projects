@@ -16,6 +16,63 @@
 
 #include "storage/page.h"
 
+/* ---------------- 重放钩子（v1.3 步骤 5） ---------------- */
+
+/*
+ * 钩子是**进程级**的一份：WAL 是实例级共享的，恢复只跑一次，
+ * 所以用全局状态（而不是给 recovery_run 加参数 ——
+ * 它的签名被别处调用着，改签名会波及一片）。
+ */
+static RecoveryHookFn g_hook = NULL;
+static void          *g_hook_ctx = NULL;
+
+void recovery_set_hook(RecoveryHookFn fn, void *ctx)
+{
+    g_hook = fn;
+    g_hook_ctx = ctx;
+}
+
+/*
+ * 这个记录类型是不是"页类"（恢复层自己能处理）？
+ *
+ * 页类 = 能直接落到某一页上的修改。**不是**页类的（逻辑记录，
+ * 比如 WAL_FT_TOMB）一律转交给上层的钩子 ——
+ * WAL 层不认识它们的语义，只负责原样转交（见 recovery.h）。
+ */
+static bool rec_is_page_type(u8 type)
+{
+    return type == WAL_INSERT || type == WAL_DELETE ||
+           type == WAL_UPDATE || type == WAL_PAGEINIT ||
+           type == WAL_PAGEDATA;
+}
+
+/*
+ * 把一条非页类记录交给钩子。
+ *
+ * 载荷 = before + after 拼起来的字节（逻辑记录一般 blen = 0，
+ * 所以载荷全在 after 里）。
+ */
+static int recovery_call_hook(Wal *w, const WalRec *r, RecHookPhase phase)
+{
+    u8 payload[WAL_MAX_PAYLOAD];
+    u16 len;
+
+    if (!g_hook)
+        return OK;
+
+    len = (u16)((u32)r->blen + r->alen);
+    if (len > sizeof(payload))
+        return E_CORRUPT;         /* 逻辑记录不该带整页镜像 */
+
+    if (len > 0) {
+        int rc = wal_read_payload(w, r, payload, (u16)sizeof(payload));
+
+        if (rc != OK)
+            return rc;
+    }
+    return g_hook(g_hook_ctx, r->type, r->xid, payload, len, phase);
+}
+
 typedef struct {
     WalRec rec;
 } Ent;
@@ -438,6 +495,17 @@ int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover)
             free(vec.v);
             return rc;
         }
+        /*
+         * 非页类记录（逻辑记录）：WAL 层不认识它的语义，
+         * 原样转交给上层的钩子（见 recovery.h 的说明）。
+         */
+        if (!rec_is_page_type(vec.v[i].rec.type)) {
+            rc = recovery_call_hook(w, &vec.v[i].rec, REC_HOOK_REDO);
+            if (rc != OK) {
+                free(vec.v);
+                return rc;
+            }
+        }
     }
 
     /*
@@ -463,6 +531,17 @@ int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover)
         if (rc != OK) {
             free(vec.v);
             return rc;
+        }
+        /*
+         * 未提交事务的逻辑记录也要交给钩子（undo 阶段）——
+         * 上层据此把"这个删除没发生过"的事实传下去。
+         */
+        if (!rec_is_page_type(vec.v[i].rec.type)) {
+            rc = recovery_call_hook(w, &vec.v[i].rec, REC_HOOK_UNDO);
+            if (rc != OK) {
+                free(vec.v);
+                return rc;
+            }
         }
     }
 

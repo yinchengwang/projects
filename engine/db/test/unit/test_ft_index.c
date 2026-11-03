@@ -1,12 +1,13 @@
 /*
  * test_ft_index.c —— 全文检索**索引**（多段 + tombstone + 合并）的验收（v1.3 步骤 3）
  *
- * 3 项：
+ * 4 项：
  *   1. A1 多段一致性：跨段检索与"整个语料的线性扫描"逐位一致（BM25 与 TF-IDF 各一遍）
  *      —— 外加严格口径（top_k > max_out → E_NOSPACE，不静默截断）
  *   2. A3 删除生效：删掉的文档检索不到；合并之后依然检索不到，且段数下降
  *   3. A6 合并前后一致：merge 之前的结果与 merge 之后的结果逐位一致
  *      —— 外加页读累计（坑 M4-16）：合并不会让索引级累计页读缩水
+ *   4. 字典跨页（坑 M4-23）：字典页**连号**、词一个都不丢、检索与线性扫描逐位一致
  *
  * 【这一整个文件在证明什么】
  *
@@ -22,6 +23,20 @@
  * 合并的触发阈值是 FT_MERGE_THRESHOLD = 8：段数 ≤ 8 时合并什么都不做。
  * 要真的走到"合并"这条路径，段数必须 > 8 —— 所以这里用 9 段。
  * 每段 60 篇、总共 540 篇：段数够触发合并，语料又够大到"跨段统计量"有意义。
+ *
+ * 【第 4 项为什么单列：字典跨页（坑 M4-23）】
+ *
+ * 段头只记**连续区间**：dict_start + dict_count。
+ * 读侧（跨页二分、词条游标）都按"连续区间"读页 ——
+ * 所以字典页必须**连号**，否则读侧会把倒排页当成字典页。
+ *
+ * 单页字典时这个 bug **测不出来**（词表小的时候字典正好一页），
+ * 所以这里专门造一个"词表大到字典跨好几页"的语料：
+ * 每个段 600 篇文档、601 个词 → 字典 4 页。
+ *
+ * 症状是三种：查不到（E_NOTFOUND）、命中 0 篇、**静默丢词**。
+ * 最坏的是第三种 —— 不报错，只是词悄悄没了，
+ * 所以这一项把"每一个词都还能查到"逐个验一遍。
  *
  * 【删除的语义（别把它当成 bug）】
  *
@@ -437,20 +452,205 @@ static void test_a6_merge_consistency(void)
     pager_close(pg);
 }
 
+/* ---------------- 4. 字典跨页（坑 M4-23） ---------------- */
+
+/*
+ * 大词表语料：每个段 600 篇文档。
+ *
+ * 每篇文档 = 一个**私有词** tNNNN + 一个**公共词** common：
+ *   - 私有词 → 每个段各有 600 个不同的词，加上 common 共 601 个词；
+ *   - 公共词 → 每个词在每个段里都出现一次 → 跨段 df = 9（9 个段）。
+ *
+ * 601 个词 × 每条约 21 字节 ≈ 12.6 KB，而一页字典只能装 4076 字节
+ * → 字典要 4 页（≥ 3 页才算"跨页"）。
+ */
+#define BIG_SEGS  9u
+#define BIG_PER   600u
+#define BIG_TOTAL (BIG_SEGS * BIG_PER)
+#define BIG_TEXT  16u
+
+static char      g_big_text[BIG_TOTAL][BIG_TEXT];
+static FtDocText g_big_docs[BIG_TOTAL];
+
+static void build_big_corpus(void)
+{
+    u32 s, i;
+
+    for (s = 0; s < BIG_SEGS; s++) {
+        for (i = 0; i < BIG_PER; i++) {
+            u32 k = s * BIG_PER + i;
+
+            snprintf(g_big_text[k], BIG_TEXT, "t%04u common ", i);
+            g_big_docs[k].doc_id = s * 10000u + i;
+            g_big_docs[k].text = g_big_text[k];
+            g_big_docs[k].text_len = (u32)strlen(g_big_text[k]);
+        }
+    }
+}
+
+/*
+ * 字典页必须**连号**，而且区间里的每一页都得是 PT_FT_DICT。
+ *
+ * 这是坑 M4-23 的回归防线：
+ * 曾经的写法是"一个词先写倒排、再写字典"，两个写入器各自 pager_alloc
+ * → 倒排页与字典页交替分配，字典页**不连号**。
+ * 读侧按连续区间读页 → 读到的是倒排页 → 查不到 / 命中 0 / 静默丢词。
+ */
+static void check_dict_pages(Pager *pg, const FtSegment *seg, const char *tag)
+{
+    u32 i;
+
+    for (i = 0; i < seg->dict_count; i++) {
+        u32 pid = seg->dict_start + i;
+        PageFrame *fr = NULL;
+
+        if (pager_get(pg, pid, &fr) != OK) {
+            printf("    FAIL %s：字典页 %u（页号 %u）读不出来\n", tag, i, pid);
+            failures++;
+            continue;
+        }
+        if (fr->data[H_TYPE] != (u8)PT_FT_DICT) {
+            printf("    FAIL %s：字典页 %u（页号 %u）页类型是 0x%02x，不是 PT_FT_DICT(0x%02x)\n",
+                   tag, i, pid, fr->data[H_TYPE], (unsigned)PT_FT_DICT);
+            failures++;
+        }
+        pager_unpin(pg, pid, false);
+    }
+}
+
+/* 这个词还在段里吗？（df 与链头都要拿到 —— 拿不到就是"词丢了"） */
+static int term_present(const FtSegment *seg, const char *term, u32 len)
+{
+    u32 df = 0;
+    u64 ptr = 0;
+
+    return ft_segment_lookup(seg, term, len, &df, &ptr) == OK && df > 0;
+}
+
+static void test_dict_multipage(void)
+{
+    static FtHit idx_hits[64];
+    static FtHit lin_hits[64];
+    static FtHit before[64];
+    static FtHit after[64];
+    Pager *pg = NULL;
+    FtIndex *ix = NULL;
+    const FtSegment *seg = NULL;
+    const char *q = "t0000 t0300 t0599 common";
+    u32 qlen = (u32)strlen(q);
+    u32 n_idx = 0, n_lin = 0, n_before = 0, n_after = 0;
+    u32 df = 0;
+    u64 ptr = 0;
+    u32 merged = 0;
+    u32 s, i;
+
+    printf("  4. 字典跨页（坑 M4-23）：字典页连号 / 词不丢 / 与线性扫描逐位一致\n");
+    fresh();
+
+    CHECK(pager_open(PATH, 4096, &pg) == OK);
+    if (pg == NULL) {
+        return;
+    }
+    CHECK(ft_index_create(pg, NULL, NULL, 0, &ix) == OK);
+    if (ix == NULL) {
+        pager_close(pg);
+        return;
+    }
+    for (s = 0; s < BIG_SEGS; s++) {
+        u32 seg_id = 0;
+
+        CHECK(ft_index_add(ix, 0, &g_big_docs[s * BIG_PER], BIG_PER, &seg_id) == OK);
+    }
+
+    /* ---- 建出来的段：字典必须跨页（否则这个用例测不到 bug） ---- */
+    CHECK(ft_index_seg_at(ix, 0, &seg) == OK);
+    if (seg == NULL) {
+        ft_index_close(ix);
+        pager_close(pg);
+        return;
+    }
+    CHECK(seg->dict_count >= 3u);
+    CHECK(ft_segment_nterms(seg) == BIG_PER + 1u);
+    check_dict_pages(pg, seg, "建段后");
+
+    /* ---- 词表的首 / 中 / 尾都要查得到（它们落在不同的字典页上） ---- */
+    CHECK(ft_segment_lookup(seg, "common", 6, &df, &ptr) == OK);
+    CHECK(ft_segment_lookup(seg, "t0000", 5, &df, &ptr) == OK);
+    CHECK(ft_segment_lookup(seg, "t0300", 5, &df, &ptr) == OK);
+    CHECK(ft_segment_lookup(seg, "t0599", 5, &df, &ptr) == OK);
+    /* 查不到的词是 E_NOTFOUND（"词不在这个段里"是正常结果，不是"段坏了"） */
+    CHECK(ft_segment_lookup(seg, "nosuchword", 10, &df, &ptr) == E_NOTFOUND);
+
+    /* ---- 检索与线性扫描逐位一致 ---- */
+    {
+        FtToken qt[8];
+        u32 nq = tokenize_query(q, qt, 8);
+
+        CHECK(nq == 4);
+        CHECK(ft_index_search(ix, q, qlen, 32, 64, idx_hits, &n_idx) == OK);
+        CHECK(ft_score_linear_bm25(g_big_docs, BIG_TOTAL, qt, nq, 32, 64,
+                                   lin_hits, &n_lin) == OK);
+        cmp_hits("字典跨页 BM25", idx_hits, n_idx, lin_hits, n_lin);
+
+        n_idx = 0;
+        n_lin = 0;
+        CHECK(ft_index_search_tfidf(ix, q, qlen, 32, 64, idx_hits, &n_idx) == OK);
+        CHECK(ft_score_linear_tfidf(g_big_docs, BIG_TOTAL, qt, nq, 32, 64,
+                                    lin_hits, &n_lin) == OK);
+        cmp_hits("字典跨页 TF-IDF", idx_hits, n_idx, lin_hits, n_lin);
+    }
+
+    /* ---- 合并：合并写出来的段，字典页也必须连号、词也不能丢 ---- */
+    CHECK(ft_index_search(ix, q, qlen, 32, 64, before, &n_before) == OK);
+    CHECK(ft_index_merge(ix, 0, &merged) == OK);
+    CHECK(merged >= 2u);
+    CHECK(ft_index_search(ix, q, qlen, 32, 64, after, &n_after) == OK);
+    cmp_hits("字典跨页 合并前后", before, n_before, after, n_after);
+
+    {
+        const FtSegment *mseg = NULL;
+
+        CHECK(ft_index_seg_at(ix, 0, &mseg) == OK);
+        if (mseg != NULL) {
+            CHECK(mseg->dict_count >= 3u);
+            CHECK(ft_segment_nterms(mseg) == BIG_PER + 1u);
+            check_dict_pages(pg, mseg, "合并后");
+
+            /* 每一个词都还在（静默丢词是这里最该防的） */
+            for (i = 0; i < BIG_PER; i++) {
+                char term[8];
+
+                snprintf(term, sizeof(term), "t%04u", i);
+                if (!term_present(mseg, term, 5)) {
+                    printf("    FAIL 合并后词 %s 丢了\n", term);
+                    failures++;
+                    break;
+                }
+            }
+            CHECK(term_present(mseg, "common", 6));
+        }
+    }
+
+    ft_index_close(ix);
+    pager_close(pg);
+}
+
 int main(void)
 {
     printf("test_ft_index:\n");
 
     build_corpus();
+    build_big_corpus();
 
     test_a1_multisegment();
     test_a3_delete();
     test_a6_merge_consistency();
+    test_dict_multipage();
 
     if (failures) {
         printf("  %d 项断言失败\n", failures);
         return 1;
     }
-    printf("  3 项验收全部通过\n");
+    printf("  4 项验收全部通过\n");
     return 0;
 }

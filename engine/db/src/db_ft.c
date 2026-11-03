@@ -15,15 +15,16 @@
  * 执行器拿不到也没法独立重求值 —— "下推给超集、执行器重判"这条契约
  * 在相关性排序上不成立。详见 PLAN-v1.3 §1.2 的判决。
  *
- * 【本版的索引不落盘】
+ * 【索引现在落盘了】（v1.3 步骤 5）
  *
- * 段的内容在磁盘上，但**段的清单与 tombstone 集合只在内存里**
- * （段目录页是步骤 5 的事）。所以：
- *   - 打开库 → 建一个**空索引**（不假装能从磁盘恢复）；
- *   - 关库 → 释放索引（内存里的东西，丢了就是丢了）。
+ * 段的内容本来就在磁盘上；现在**段的清单**与 **tombstone 集合**
+ * 也落盘了：
+ *   - 段清单 = 段头页里的状态字段（live / dead / merging），
+ *     恢复时扫页空间把段找齐（坑 A）；
+ *   - tombstone 集合 = 专门的 tombstone 页（PT_FT_TOMB），
+ *     恢复时取"页里的内容 ∪ (WAL 重放 − WAL 回滚)"（坑 B）。
  *
- * 索引的**页**（段的内容）是真的写进 WAL 和数据文件的 ——
- * 也就是说"数据在盘上，只是清单没了"。这是本版的边界，如实记录。
+ * 所以重开库**恢复得回来**：上次灌进去的文档还在，被删的还在删着。
  */
 
 #include "db_internal.h"
@@ -33,6 +34,7 @@
 #include <string.h>
 
 #include "common/latch.h"
+#include "common/types.h"
 
 /* ---------------- 小工具 ---------------- */
 
@@ -41,6 +43,82 @@ static void dft_err(DB *db, const char *msg)
     if (db) {
         snprintf(db->errmsg, sizeof(db->errmsg), "%s", msg);
     }
+}
+
+/* ---------------- 恢复重放集合 ---------------- */
+
+/* 往集合里追加一个 doc_id */
+int db_ft_replay_add(FtReplaySet *set, u32 doc_id)
+{
+    if (set == NULL) {
+        return E_INVAL;
+    }
+    if (set->n == set->cap) {
+        u32 ncap = (set->cap == 0) ? 16u : set->cap * 2u;
+        u32 *ni = (u32 *)realloc(set->ids, sizeof(u32) * (size_t)ncap);
+
+        if (ni == NULL) {
+            return E_NOSPACE;
+        }
+        set->ids = ni;
+        set->cap = ncap;
+    }
+    set->ids[set->n++] = doc_id;
+    return OK;
+}
+
+void db_ft_replay_free(FtReplaySet *set)
+{
+    if (set == NULL) {
+        return;
+    }
+    free(set->ids);
+    set->ids = NULL;
+    set->n = 0;
+    set->cap = 0;
+}
+
+/*
+ * 恢复钩子：WAL 层把**非页类**记录原样转交过来，由这一层解释。
+ *
+ * 【为什么要分 redo / undo 两个集合】
+ *
+ *   - redo（重放看到的）：这个删除**生效了**；
+ *   - undo（回滚撤销的）：未提交事务的删除 = **这个删除没发生过**。
+ *
+ * 两者必须分开：最终集合 = 页里的内容 ∪ (redo − undo)。
+ * 只看 redo 的话，未提交事务的删除会"诈尸"（页被恢复了，集合却还删着）。
+ *
+ * 【只看 WAL_FT_TOMB】
+ *
+ * 其它类型的记录（BEGIN / COMMIT / ABORT……）不是 FT 的事，直接忽略。
+ */
+int db_ft_recovery_hook(void *ctx, u8 type, u32 xid,
+                        const u8 *payload, u16 payload_len, RecHookPhase phase)
+{
+    DbInstance *inst = (DbInstance *)ctx;
+    u32 doc_id;
+    int rc;
+
+    (void)xid;   /* FT 的删除一律记在系统事务（xid=0）下，见 db_ft_delete */
+
+    if (inst == NULL) {
+        return E_INVAL;
+    }
+    if (type != (u8)WAL_FT_TOMB) {
+        return OK;       /* 不是 FT 的记录：不管 */
+    }
+    if (payload_len != 4 || payload == NULL) {
+        return E_CORRUPT;    /* 载荷必须是 u32 doc_id */
+    }
+    doc_id = get_u32(payload);
+
+    if (phase == REC_HOOK_UNDO) {
+        rc = db_ft_replay_add(&inst->ft_replay_undo, doc_id);
+    } else {
+        rc = db_ft_replay_add(&inst->ft_replay_redo, doc_id);
+    }
+    return rc;
 }
 
 /* ---------------- 注册表接入 ---------------- */
@@ -67,16 +145,23 @@ int db_ft_register(DbInstance *inst)
 }
 
 /*
- * 开库：建索引 + 注册虚拟表。
+ * 开库：建索引 + **从磁盘恢复**。
  *
- * ⚠️ **建的是空索引** —— 磁盘上没有"段目录页"，
- * 所以读不到上次的段清单（步骤 5 才落盘）。
- * 这里**不假装能恢复**：如实建一个空的，让 ft_docs 是一张空表，
- * 而不是"打开库失败"。
+ * 【恢复什么】
  *
- * 为什么这与 graph/vector 的做法不同：graph/vector 磁盘上**有**自己的
- * 目录（能打开就接管，打开不了就是 E_NOTFOUND）。ft 本版磁盘上什么都没有，
- * 所以"没有"就是"空"，不是错误。
+ *   - 段目录：扫页空间，把还活着的段找齐并打开（死段不算数，坑 A）；
+ *   - tombstone 集合：页里的内容 ∪ (WAL 重放看到的 − WAL 回滚撤销的)（坑 B）。
+ *
+ * 必须在**恢复重放之后**调 —— WAL 里的删除要先进集合（inst->ft_replay_*）。
+ *
+ * 注册 ft_docs 虚拟表是**另一步**（db_ft_register）：
+ * 注册表在恢复之后才建，所以这一步得等注册表好了再做。
+ *
+ * 【为什么"没有 FT 数据"不是错误】
+ *
+ * 磁盘上一个段都没有（新库、或还没灌过文档）→ 扫出来是空的 → 空索引。
+ * 这与 graph 的"没有图 → 不注册表"不同：ft 的磁盘上**根本没有**
+ * "有没有索引"这个标记，所以"没有"就是"空"，不是错误。
  */
 int db_ft_open(DbInstance *inst)
 {
@@ -92,7 +177,14 @@ int db_ft_open(DbInstance *inst)
     }
     inst->ft = ix;
 
-    rc = db_ft_register(inst);
+    /* 从磁盘恢复：段目录 + tombstone 集合 */
+    rc = ft_index_recover(ix,
+                           inst->ft_replay_redo.ids, inst->ft_replay_redo.n,
+                           inst->ft_replay_undo.ids, inst->ft_replay_undo.n);
+    /* 重放集合用完了，释放（它只活到这一刻） */
+    db_ft_replay_free(&inst->ft_replay_redo);
+    db_ft_replay_free(&inst->ft_replay_undo);
+
     if (rc != OK) {
         ft_index_close(ix);
         inst->ft = NULL;
@@ -125,10 +217,10 @@ void db_ft_close(DbInstance *inst)
  *
  * 【xid 传 0（系统事务）】
  *
- * 与 blob / vector 同款：段页要进 WAL，但 ft 的**段清单只在内存里**，
- * 恢复时段的清单本来就找不回来（步骤 5 落盘之后才有意义）。
- * 所以用系统事务，恢复时这些页永远视为已提交 —— 不会因为"没提交"
- * 而被回滚掉（那会让段的内容和清单更加对不上）。
+ * 段页要进 WAL，而段的**清单**（段头页里的状态字段）也在盘上，
+ * 恢复时靠扫页空间把段找齐 —— 所以这些页必须永远视为已提交：
+ * 用系统事务就不会因为"没提交"而被回滚掉
+ * （那会让段的内容和清单更加对不上）。
  */
 db_err db_ft_add(DB *db, uint32_t doc_id, const char *text, uint32_t len)
 {
@@ -232,14 +324,47 @@ db_err db_ft_search(DB *db, const char *query, uint32_t top_k,
 }
 
 /*
+ * 写一条 WAL_FT_TOMB 记录（载荷 = u32 doc_id）。
+ *
+ * 【为什么要这条逻辑记录】
+ *
+ * tombstone 的**权威存储**是 tombstone 页（整页镜像进 WAL）。
+ * 但"这篇文档被删了"这件事本身，用一条 4 字节的逻辑记录表达更直接：
+ *   - 重放时不必依赖"页镜像在不在"；
+ *   - 未提交事务的删除可以被**撤销**（语义：这次删除没发生过）。
+ *
+ * WAL 层不认识 FT 语义（分层铁律），所以由**这一层**直接写记录。
+ */
+static int dft_write_tomb_wal(DbInstance *inst, u32 xid, u32 doc_id)
+{
+    u8 payload[4];
+
+    put_u32(payload, doc_id);
+    /* page_id = PAGE_ID_NIL：这条记录不落在任何一页上 */
+    (void)wal_append_xid(inst->wal, (u8)WAL_FT_TOMB, xid, PAGE_ID_NIL, 0, 0,
+                          NULL, 0, payload, 4);
+    return OK;
+}
+
+/*
  * 删一篇文档（打 tombstone）。
  *
  * 立刻生效：之后的检索不再返回它；ft_docs 里它的 sealed = 1。
  * 删一个不存在的文档是合法的空操作（内核返回 OK）。
+ *
+ * 【xid 怎么取】
+ *
+ *   - 在事务里（显式 BEGIN 或语句级事务）→ 用当前事务号：
+ *     这样崩溃恢复时，**未提交**事务的删除会被撤销（"这个删除没发生过"）；
+ *   - 不在事务里 → 用系统事务（xid = 0，永远视为已提交）。
+ *
+ * tombstone 页的整页镜像与这条逻辑记录用的是**同一个 xid** ——
+ * 两边必须一致，否则会出现"页被撤销了、日志说删了"这种自相矛盾。
  */
 db_err db_ft_delete(DB *db, uint32_t doc_id)
 {
     DbInstance *inst;
+    u32 xid;
     int rc;
 
     if (!db) {
@@ -251,8 +376,13 @@ db_err db_ft_delete(DB *db, uint32_t doc_id)
         return DB_E_NOTFOUND;
     }
 
+    xid = db->in_txn ? db->xid : 0u;
+
     latch_lock();
-    rc = ft_index_delete(inst->ft, 0, doc_id);
+    rc = ft_index_delete(inst->ft, xid, doc_id);
+    if (rc == OK) {
+        rc = dft_write_tomb_wal(inst, xid, doc_id);
+    }
     latch_unlock();
 
     if (rc != OK) {

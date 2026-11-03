@@ -433,9 +433,46 @@ db_err db_open(const char *path, DB **out)
         }
     }
 
-    /* 恢复必须在打开 catalog 之前：catalog 也是普通表，也要恢复 */
+    /*
+     * 恢复必须在打开 catalog 之前：catalog 也是普通表，也要恢复。
+     *
+     * 【全文检索的恢复钩子】（v1.3 步骤 5）
+     *
+     * WAL 层不认识 FT 语义（wal/ 是 L1，不许 include modalities/），
+     * 所以恢复阶段遇到**非页类**记录（逻辑记录）时，
+     * 由钩子把 (type, xid, payload) 转交给 db 层解释。
+     *
+     * 钩子是**进程级**的一份（recovery_set_hook 是全局状态），
+     * 所以注册与注销必须配对：注册 → recovery_run → 注销。
+     */
     bool did_recover = false;
+    recovery_set_hook(db_ft_recovery_hook, inst);
     rc = recovery_run(pg, inst->wal, ckpt_lsn, &did_recover);
+    recovery_set_hook(NULL, NULL);
+    if (rc != OK) {
+        db_ft_replay_free(&inst->ft_replay_redo);
+        db_ft_replay_free(&inst->ft_replay_undo);
+        txn_clog_close(&inst->txns);
+        wal_close(inst->wal);
+        pager_close(pg);
+        free(inst->clogpath);
+        free(inst->walpath);
+        free(inst);
+        free(db);
+        return map_rc(rc);
+    }
+
+    /*
+     * 全文检索模态：**先把索引从磁盘恢复出来**（v1.3 步骤 5）。
+     *
+     * 为什么放在这里（catalog 之前）：
+     *   - 恢复重放刚跑完，WAL 里的 tombstone 记录已经收进了
+     *     inst->ft_replay_* —— 现在正好用来装配删除标记集合；
+     *   - 扫页空间找段只需要 pager，不依赖 catalog。
+     *
+     * ft_docs 虚拟表的注册是**另一步**（注册表在后面才建）。
+     */
+    rc = db_ft_open(inst);
     if (rc != OK) {
         txn_clog_close(&inst->txns);
         wal_close(inst->wal);
@@ -450,6 +487,7 @@ db_err db_open(const char *path, DB **out)
     Catalog *cat = NULL;
     rc = catalog_open(pg, db_wal_hook, inst, &cat);
     if (rc != OK) {
+        db_ft_close(inst);
         txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
@@ -475,6 +513,7 @@ db_err db_open(const char *path, DB **out)
     rc = blob_store_create(pg, db_wal_hook, inst, &inst->blobs);
     if (rc != OK) {
         catalog_close(cat);
+        db_ft_close(inst);
         txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
@@ -502,6 +541,7 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
+        db_ft_close(inst);
         txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
@@ -525,6 +565,7 @@ db_err db_open(const char *path, DB **out)
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
+        db_ft_close(inst);
         txn_clog_close(&inst->txns);
         wal_close(inst->wal);
         pager_close(pg);
@@ -595,26 +636,22 @@ db_err db_open(const char *path, DB **out)
     }
 
     /*
-     * 全文检索模态（v1.3）。
+     * 全文检索模态（v1.3）：**注册 ft_docs 虚拟表**。
      *
-     * 和 blob / graph / vector 一样是**实例级共享**：所有连接看同一批文档。
+     * 索引本体已经在恢复之后建好了（db_ft_open，见上），
+     * 这一步只把它接进注册表 —— 和 blob / graph / vector 同一个套路：
+     * 注册表只知道"名字 → 一个 StorageAM"，它不需要知道全文检索是什么。
      *
-     * 【打开时得到的是一个空索引】
-     *
-     * 段的**内容**在磁盘上，但段的清单与 tombstone 集合**不落盘**
-     * （段目录页是步骤 5 的事）。所以这里建的是一个空索引 ——
-     * **不假装能从磁盘上恢复**上次的文档。
-     *
-     * 为什么不像 graph 那样"没有就不注册"：ft 的磁盘上**根本没有**
-     * "有没有索引"这个标记 —— 打开就建一个空的，ft_docs 是一张空表。
+     * 磁盘上**没有** FT 数据（新库）→ 索引是空的 → ft_docs 是一张空表。
      * 这与 graph 的"没有图 → 查它得到表不存在"是两种不同的状态，
      * 如实区分开（见 db_ft_open 的注释）。
      */
     if (rc == OK) {
-        rc = db_ft_open(inst);
+        rc = db_ft_register(inst);
     }
 
     if (rc != OK) {
+        db_ft_close(inst);
         graph_destroy(inst->graph);
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);

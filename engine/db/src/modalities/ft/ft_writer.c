@@ -82,6 +82,108 @@ static int ft_write_page(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     return OK;
 }
 
+/* ---------------- 通用整页写（v1.3 步骤 5） ---------------- */
+
+/*
+ * 写一页：前像 = 这一页**现在**的内容。
+ *
+ * 【为什么不能沿用 ft_write_page 的"前像 = 全 0"】
+ *
+ * ft_write_page 写的是**刚分配的新页**（前像确实是 0）。
+ * 而 tombstone 页与段头页是反复改写的老页 ——
+ * 前像必须是"改之前的内容"，否则 undo 拿到的是垃圾，
+ * 未提交事务的修改就撤不回去。
+ *
+ * 【写日志 → 填 LSN → 算校验和 → 标脏放开】
+ *
+ * 顺序是硬要求：反过来的话，页会带着"日志里还没有"的 LSN 落盘，
+ * 崩溃后重放会跳过这条记录（幂等判断就错了）。
+ */
+int ft_page_write(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+                   u32 pid, PageFrame *fr, const u8 *buf, u32 *lsn_out)
+{
+    u8 *before = NULL;
+    u32 lsn = 0;
+    int rc;
+
+    if (pg == NULL || fr == NULL || buf == NULL)
+        return E_INVAL;
+
+    before = (u8 *)malloc(PAGE_SIZE);
+    if (before == NULL)
+        return E_NOSPACE;
+
+    /* 前像 = 这一页现在的内容（在被 buf 覆盖之前取） */
+    memcpy(before, fr->data, PAGE_SIZE);
+    /* memmove：buf 有可能就是 fr->data（自拷贝） */
+    memmove(fr->data, buf, PAGE_SIZE);
+
+    if (wal) {
+        rc = wal(wal_ctx, xid, LOG_PAGEDATA, pid, PAGE_SLOT_NONE, LOG_NO_SLOT_OFF,
+                 before, (u16)PAGE_SIZE, fr->data, (u16)PAGE_SIZE, &lsn);
+        if (rc != OK) {
+            /* 日志没写好 → 这一页不许改（还原成原样） */
+            memcpy(fr->data, before, PAGE_SIZE);
+            free(before);
+            pager_unpin(pg, pid, false);
+            return rc;
+        }
+    }
+    free(before);
+
+    page_set_lsn(fr->data, lsn);
+    page_set_checksum(fr->data);
+
+    rc = pager_unpin(pg, pid, true);
+    if (rc != OK)
+        return rc;
+
+    if (lsn_out)
+        *lsn_out = lsn;
+    return OK;
+}
+
+/*
+ * 改段头页的状态字段。
+ *
+ * 整页镜像进 WAL —— 状态也是数据：合并崩在中间时，
+ * 恢复阶段要靠它判断"老段还算不算数"（坑 M4-20 / M4-21）。
+ */
+int ft_write_segment_state(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+                           u32 head_pid, u32 state, u32 merge_to)
+{
+    PageFrame *fr = NULL;
+    u8 *buf = NULL;
+    int rc;
+
+    if (pg == NULL)
+        return E_INVAL;
+
+    rc = pager_get(pg, head_pid, &fr);
+    if (rc != OK)
+        return rc;
+
+    if (fr->data[H_TYPE] != (u8)PT_FT_HEAD) {
+        /* 不是段头页 → 改不了（如实报错，别把别的页写坏） */
+        pager_unpin(pg, head_pid, false);
+        return E_CORRUPT;
+    }
+
+    /* 在副本上改：ft_page_write 要用 fr->data 当前内容当前像 */
+    buf = (u8 *)malloc(PAGE_SIZE);
+    if (buf == NULL) {
+        pager_unpin(pg, head_pid, false);
+        return E_NOSPACE;
+    }
+    memcpy(buf, fr->data, PAGE_SIZE);
+    put_u32(buf + FTH_STATE, state);
+    put_u32(buf + FTH_MERGE_TO, merge_to);
+
+    rc = ft_page_write(pg, wal, wal_ctx, xid, head_pid, fr, buf, NULL);
+    free(buf);
+    return rc;
+}
+
 /* ---------------- 倒排页写入器 ---------------- */
 
 struct FtPostWriter {
@@ -582,6 +684,15 @@ int ft_write_segment_head(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
      * 而日志镜像里必须已经带着它，否则重放出来的页和原页不一样。
      */
     put_u32(buf + FTH_CREATE_LSN, create_lsn);
+    /*
+     * 新建的段一律是 LIVE。
+     *
+     * 段头页是**最后**写的（内容页都写完了才写它），
+     * 所以"段头页在磁盘上"就等于"这个段建完了"。
+     * 崩溃在写段头页之前 → 那一页的页类型不是 PT_FT_HEAD → 恢复时扫不到它。
+     */
+    put_u32(buf + FTH_STATE, FT_SEG_LIVE);
+    put_u32(buf + FTH_MERGE_TO, 0);
 
     /*
      * 段头页的页是调用方**先分配**的（页号要最小，内容最后写）。
