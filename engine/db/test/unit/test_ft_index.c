@@ -292,6 +292,71 @@ static void test_a1_multisegment(void)
     pager_close(pg);
 }
 
+/* ---------------- 物理丢弃检查：某篇文档的 posting 是否还在段里 ---------------- */
+
+/*
+ * 【为什么要有这个检查】
+ *
+ * A3 的"检索不到"是**查询侧**的过滤（tombstone 集合）——
+ * 就算合并时**没有物理丢弃**被删文档，检索照样查不到它。
+ * 所以"检索不到"这条断言**区分不出**"物理丢弃"有没有真的发生。
+ *
+ * 真正能区分的检查是：**合并之后，段里还有没有这篇文档的 posting**。
+ * 这才是"物理丢弃"的定义。
+ *
+ * （v1.3 步骤 6 的反向验证就是靠这一条把"合并不过滤 tombstone"的注入打红的。）
+ */
+
+typedef struct {
+    const FtSegment *seg;
+    u32  doc_id;
+    u32  hits;       /* 命中的 posting 条数 */
+} PhysScanCtx;
+
+static int phys_term_cb(void *ctx, const char *term, u32 term_len, u32 df, u64 post_ptr)
+{
+    PhysScanCtx *c = (PhysScanCtx *)ctx;
+    static FtPosting ps[4096];
+    u32 n = 0;
+    int rc;
+
+    (void)term;
+    (void)term_len;
+    rc = ft_segment_postings(c->seg, post_ptr, df, ps, 4096, &n);
+
+    if (rc != OK) {
+        return rc;
+    }
+    for (u32 i = 0; i < n; i++) {
+        if (ps[i].doc_id == c->doc_id) {
+            c->hits++;
+        }
+    }
+    return OK;
+}
+
+/* 索引里所有段中，doc_id 出现的 posting 条数（0 = 已经被物理丢弃） */
+static u32 count_doc_postings(const FtIndex *ix, u32 doc_id)
+{
+    u32 total = 0;
+
+    for (u32 s = 0;; s++) {
+        const FtSegment *seg = NULL;
+        PhysScanCtx c;
+
+        if (ft_index_seg_at(ix, s, &seg) != OK) {
+            break;
+        }
+        c.seg = seg;
+        c.doc_id = doc_id;
+        c.hits = 0;
+        if (ft_segment_scan_terms(seg, phys_term_cb, &c) == OK) {
+            total += c.hits;
+        }
+    }
+    return total;
+}
+
 /* ---------------- 2. A3：删除生效 ---------------- */
 
 static void test_a3_delete(void)
@@ -344,6 +409,9 @@ static void test_a3_delete(void)
     CHECK(ft_index_delete(ix, 0, victim) == OK);
     CHECK(ft_index_ntombstones(ix) == 1);
 
+    /* 删掉只是"打标记"：posting 此刻还在段里（要到合并才被物理丢弃） */
+    CHECK(count_doc_postings(ix, victim) > 0u);
+
     n = 0;
     CHECK(ft_index_search(ix, "w05", 3, 512, 512, hits, &n) == OK);
     CHECK(has_hit(hits, n, victim) == 0);
@@ -368,6 +436,12 @@ static void test_a3_delete(void)
     n = 0;
     CHECK(ft_index_search(ix, "w05", 3, 512, 512, hits, &n) == OK);
     CHECK(has_hit(hits, n, victim) == 0);
+
+    /*
+     * 合并之后，它必须**从段里被物理丢掉**（不只是查询时被过滤掉）。
+     * 这一条才是"物理丢弃"的判据 —— 见上面 count_doc_postings 的说明。
+     */
+    CHECK(count_doc_postings(ix, victim) == 0u);
 
     ft_index_close(ix);
     pager_close(pg);
