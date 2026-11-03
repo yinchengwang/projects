@@ -2,6 +2,7 @@
 #define DB_CATALOG_PRIV_H
 
 #include "catalog/catalog.h"
+#include "common/rwlock.h"
 
 #include <pthread.h>
 
@@ -79,9 +80,17 @@ struct Catalog {
      * 元数据读多写少（只有建表 / 建索引 / VACUUM 才写），
      * 所以用读写锁：读读不互斥。
      *
+     * 【为什么不是 pthread_rwlock】（v1.2 步骤 7 修正）
+     *
+     * winpthreads 的 pthread_rwlock **不允许读者并发**，
+     * 实测 4 线程比 1 线程还慢 5 倍（见 src/common/rwlock.h）。
+     * 换句话说，catalog 域的"读锁"实际上是一把更慢的互斥量 ——
+     * 每条语句都要过一次它，四线程就排成一条队。
+     * 换成自研的 db_rwlock（读者真并发）之后，这条排队才消失。
+     *
      * 锁的原语与线程本地递归状态在 catalog_lock.c 里。
      */
-    pthread_rwlock_t rw;
+    DbRwLock rw;
 };
 
 /* 按 table_id 找内存里的表项（catalog.c 实现） */

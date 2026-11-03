@@ -23,6 +23,7 @@
 
 #include "common/crc.h"
 #include "common/latch.h"
+#include "common/lockstat.h"
 
 /*
  * 每个事务的 undo 链尾。
@@ -109,6 +110,26 @@ struct Wal {
     _Atomic u32 flushed_lsn; /* 已经 fsync 落盘的最大 LSN */
     _Atomic u32 nrecords;
     _Atomic u32 max_xid;
+    /*
+     * 日志文件当前占用的字节数（v1.2 步骤 7 / A3）。
+     *
+     * 【为什么自己记，而不是每次去问文件】
+     *
+     * 原来 wal_bytes() 是 fseek 到文件尾 + ftell —— 要动 FILE* 的位置，
+     * 所以必须取域锁。而 wal_bytes() 在**每条语句结束**时都会被调一次
+     * （db_checkpoint_maybe 拿它和 checkpoint 阈值比），
+     * 于是**每条只读语句也要抢 WAL 的全局锁**。
+     *
+     * 而 COMMIT 的 fsync 是**持着这把锁**做的 ——
+     * 于是每条 SELECT 都要排在别的线程的 fsync 后面。
+     * 实测（bench/probe_lockstat.sh，4 线程）：
+     * WAL 锁累计等待 1048 ms / 18561 次 = **56.5 us/次**，
+     * 而池级锁只有 0.06 us/次 —— 瓶颈根本不在缓冲池，在 WAL。
+     *
+     * 记一个字节数就绕开了整件事：append 时加、truncate/reset 时重置，
+     * 读的时候原子读一下就行，**一把锁都不用碰** ✓
+     */
+    _Atomic u64 bytes;
     long  scan_pos;
     u8   *scratch;      /* 一条完整记录的临时缓冲 */
     PrevSlot prev[WAL_PREV_SLOTS];   /* 按 xid 维护的 undo 链 */
@@ -123,7 +144,16 @@ struct Wal {
  */
 static void wal_lock(Wal *w)
 {
+    LS_ENTER(LS_WAL);
+#ifdef DB_LOCKSTAT
+    if (pthread_mutex_trylock(&w->mu) != 0) {
+        atomic_fetch_add(&g_ls_cont[LS_WAL], 1ull);
+        pthread_mutex_lock(&w->mu);
+    }
+#else
     pthread_mutex_lock(&w->mu);
+#endif
+    LS_LEAVE(LS_WAL);
     latch_order_acquire(LATCH_WAL);
 }
 
@@ -199,6 +229,19 @@ int wal_open(const char *path, Wal **out)
         return E_IO;
     }
     strcpy(w->path, path);
+    /*
+     * 字节数从文件当前大小起算（打开一个已存在的库时，
+     * 日志里已经有记录了）。
+     */
+    {
+        u64 sz = 0;
+        if (FSEEK(f, 0, SEEK_END) == 0) {
+            long long p = FTELL(f);
+            if (p > 0)
+                sz = (u64)p;
+        }
+        atomic_store(&w->bytes, sz);
+    }
     w->scratch = malloc(WAL_HDR + WAL_MAX_PAYLOAD + 4);
     if (!w->scratch) {
         fclose(f);
@@ -262,6 +305,7 @@ int wal_reset(Wal *w)
     atomic_store(&w->flushed_lsn, 0);
     atomic_store(&w->nrecords, 0);
     atomic_store(&w->max_xid, 0);
+    atomic_store(&w->bytes, 0);
     w->scan_pos = 0;
     memset(w->prev, 0, sizeof(w->prev));
     wal_unlock(w);
@@ -365,6 +409,8 @@ static u32 wal_append_locked(Wal *w, u8 type, u32 xid, u32 page_id, u16 slot,
      */
     atomic_store(&w->last_lsn, lsn);
     atomic_store(&w->nrecords, atomic_load(&w->nrecords) + 1);
+    /* 字节数跟着记录走 —— wal_bytes() 靠它（原子读，不取锁） */
+    atomic_fetch_add(&w->bytes, (u64)n + 4);
     if (xid > atomic_load(&w->max_xid))
         atomic_store(&w->max_xid, xid);
 
@@ -395,41 +441,86 @@ u32 wal_append_xid(Wal *w, u8 type, u32 xid, u32 page_id, u16 slot, u16 slot_off
     return lsn;
 }
 
+/*
+ * 把 WAL 刷到磁盘。
+ *
+ * ==================== 为什么 fsync 不在域锁里做 ====================
+ *
+ * 原来 fsync 是**持着 WAL 域锁**做的。后果：
+ *   - 一个线程在 fsync（毫秒级）时，所有别的线程 —— 连只读语句 ——
+ *     都得排在后面（连 append 都得等）。
+ *   - 实测（bench/probe_lockstat.sh，4 线程）：WAL 锁累计等待 765 ms，
+ *     而其余各域锁全是 0.05 us/次 —— 瓶颈全在 WAL 域锁上。
+ *
+ * 现在拆成两段：
+ *
+ *   ① **域锁内**：fflush（把 stdio 缓冲推给内核）+ 记下 target LSN
+ *   ② **域锁外**：fsync（真正落盘）
+ *
+ * ② 之所以能挪出来，靠的是三个前提：
+ *
+ *   - fflush 必须在锁内：**两个线程同时 fflush 同一个 FILE* 是未定义行为**
+ *     （stdio 的缓冲状态会被搅乱）。write(2) 本身是原子的。
+ *   - fsync(fileno(f)) 是 **fd 级**调用，不依赖文件位置，
+ *     和别的线程的 write(2) 并发是安全的。
+ *   - 并发的 fsync 允许"各刷各的"：A 的 fsync 至少保证 A 自己那批字节落盘。
+ *
+ * 于是多个线程的 fsync 可以**重叠** —— 磁盘队列能流水，
+ * 而原来它们是排成一队的。
+ *
+ * ==================== flushed_lsn 只能前进 ====================
+ *
+ * 两个线程的 fsync 完成的先后是随机的，所以落盘水位只能用 **max** 更新，
+ * 不能用 store —— 否则慢的那个线程会把水位**倒退**，
+ * 而恢复逻辑拿 flushed_lsn 判断"这条日志落盘了没有"，
+ * 倒退会导致已落盘的日志被当成没落盘（重放两次）或反之。
+ */
 int wal_fsync(Wal *w)
 {
     if (!w || !w->f)
         return E_INVAL;
+
+    /* ① 域锁内：把缓冲推给内核，并记住"我要保证这些落盘" */
     wal_lock(w);
-    fflush(w->f);
-    if (WAL_FSYNC(w->f) != 0) {
+    if (fflush(w->f) != 0) {
         wal_unlock(w);
         return E_IO;
     }
-    /* 到这一刻为止的都落盘了 */
-    atomic_store(&w->flushed_lsn, atomic_load(&w->last_lsn));
+    u32 target = atomic_load(&w->last_lsn);
     wal_unlock(w);
+
+    /* ② 域锁外：真正落盘（可以和别的线程的 fsync 重叠） */
+    if (WAL_FSYNC(w->f) != 0)
+        return E_IO;
+
+    /* 水位只前进，不后退 */
+    u32 cur = atomic_load(&w->flushed_lsn);
+    while (target > cur &&
+           !atomic_compare_exchange_weak(&w->flushed_lsn, &cur, target)) {
+        /* cur 已被刷新为当前值，重试 */
+    }
     return OK;
 }
 
 /*
  * 日志文件当前占用的字节数。
  *
- * 取域锁 —— 因为它要动 FILE* 的位置（fseek 到文件尾）。
- * 和 append 抢同一个 FILE*，不能并发。
+ * 【读路径不取域锁】（v1.2 步骤 7 / A3）
+ *
+ * 字节数由 append 维护在一个原子量里，读的时候原子读一下就行 ——
+ * 不需要 fseek/ftell，也就不需要动 FILE* 的位置，
+ * 更不需要和 append 抢那把全局锁。
+ *
+ * 这条路径在**每条语句结束**时都会走一遍
+ * （db_checkpoint_maybe 拿它和阈值比）——
+ * 之前它每条语句都要排在别的线程的 COMMIT fsync 后面，
+ * 是四线程吞吐的头号瓶颈（实测 WAL 锁等待 56.5 us/次）。
  */
 u64 wal_bytes(Wal *w)
 {
-    if (!w || !w->f)
+    if (!w)
         return 0;
-    wal_lock(w);
-    u64 n = 0;
-    if (FSEEK(w->f, 0, SEEK_END) == 0) {
-        long long sz = FTELL(w->f);
-        if (sz > 0)
-            n = (u64)sz;
-    }
-    wal_unlock(w);
-    return n;
+    return atomic_load(&w->bytes);
 }
 
 /*
@@ -546,6 +637,8 @@ int wal_truncate(Wal *w, u32 keep_lsn)
     atomic_store(&w->max_xid, max_xid);
     /* 保留的记录本来就已经落盘了（截断之前调用方 fsync 过） */
     atomic_store(&w->flushed_lsn, max_lsn);
+    /* 文件长度变了 → 字节数跟着变（wal_bytes() 靠它） */
+    atomic_store(&w->bytes, (u64)newlen);
     w->scan_pos = 0;
 
     /* 截断本身也要落盘（文件长度变了） */

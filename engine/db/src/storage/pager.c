@@ -13,13 +13,69 @@
  *
  * 帧这一层的锁分两把：
  *
- *   【池级锁 pg->mu】—— 管**帧的元数据**：
+ *   【池级锁 pg->mu（读写锁）】—— 管**帧的元数据**：
  *       哈希表（page_id → 帧下标）、Clock 手、pin_count、npages。
  *       这几样是"整个池子共用的账本"，必须互斥。
  *
  *   【内容锁 pg->latches[i]】—— 管**一帧的页内容**：
  *       从 pager_get / pager_alloc 拿到帧，一直持有到 pager_unpin。
  *       同一时刻只有一个线程能改这一页的内容。
+ *
+ * ==================== v1.2 步骤 7：池级锁从互斥量换成读写锁 ====================
+ *
+ * 【为什么换】
+ *
+ * 步骤 7 的 A3（细粒度 vs 大锁基线 ≥ 2×）实测只拿到 0.78x–1.01x，
+ * gdb 采样里 4 个工作线程有 3 个堵在 pool_lock。
+ * 根因不是 latch 分得不够细，而是**这把池级互斥量把所有页访问串成了一条线**：
+ * 一次页访问要抢它 4 次（查 npages / 查哈希 / 查哈希 / 减 pin_count），
+ * 4 个线程就排成一条队 —— 细粒度 latch 的收益全被它吃掉了。
+ *
+ * 【怎么换】
+ *
+ * 这把锁保护的是账本，访问方式**读多写少**：
+ *   - 读：哈希查找（每一次页访问一次）—— 现在用**读锁**，读读不互斥
+ *   - 写：逐出（摘映射 / 载页）、分配新页 —— 用**写锁**，独占
+ *
+ * 另外把两个纯计数器从锁里挪出来：
+ *   - `npages` → 原子量（pager_get 的越界检查不再碰锁）
+ *   - `pin_count` → 原子量（pager_unpin 的减一不再碰锁）
+ *
+ * 效果：一次页访问从 **4 次全局锁** 降到 **2 次读锁**，
+ * 而读锁之间**不互斥** —— 多线程终于能并行跑。
+ *
+ * 【为什么这样还是安全的】
+ *
+ * 不变式没变：
+ *
+ *     **持有内容锁 ⇒ 该帧的 pin_count ≥ 1**
+ *
+ * 由它推出两条：
+ *
+ *   1. pin_count == 0 的帧，**内容锁一定是空的**
+ *      → 逐出路径（持写锁 → 取受害者内容锁）不会阻塞在内容锁上
+ *      → 不存在"池级锁等内容锁、内容锁持有者等池级锁"的环
+ *   2. 逐出路径只可能挑 pin_count == 0 的帧（Clock 的规矩），
+ *      所以内容锁的持有者不可能是"正在被逐出的那一帧"
+ *
+ * 命中路径上的顺序也没变：**先加 pin_count，再取内容锁**
+ * （在读锁里做完加一，放开读锁才去取内容锁）——
+ * 所以"取内容锁时 pin_count 一定已经 ≥ 1" ✓。
+ * 读锁与写锁互斥 ⇒ 逐出路径挑受害者时，
+ * 绝不会挑到一个"刚被读者加过 pin"却还没反映出来的帧 ✓。
+ *
+ * 【逐出路径的 IO 还在写锁里】
+ *
+ * 逐出要读盘/写盘，现在仍在写锁里做 ——
+ * 临界区偏长，但换来的是"逐出和载入是原子的"。
+ * 命中路径不再被它挡住（读锁与写锁互斥，但逐出本身很少发生）。
+ * 把 IO 挪出写锁是下一步的事（需要把"帧在途"这件事显式化）。
+ *
+ * 【锁的全序】
+ *
+ * 内容锁与池级锁都属于 frame 域（序号 3）。
+ * WAL 钩子是在**持有内容锁**的时候调的 →
+ * 锁序是 frame(3) → wal(4)，符合全序 ✓。
  *
  * 【为什么内容锁要"get 到 unpin"这么久】
  *
@@ -70,13 +126,12 @@
  * 步骤 4d 退役大锁之后会重新审视这里的并发度。
  */
 
-#include "storage/pager.h"
+#include "storage/pager_internal.h"
 
-#include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #include "common/latch.h"
+#include "common/lockstat.h"
 #include "storage/page.h"
 
 /* 4GB 以上文件必须用 64 位偏移的 fseek。MinGW 用 _fseeki64。 */
@@ -88,184 +143,67 @@
 #define FTELL ftello
 #endif
 
-struct Pager {
-    FILE       *f;
-    u64         npages;      /* 页数 = 文件大小 / PAGE_SIZE */
-    u32         nframes;
-    u32         hand;        /* Clock 手 */
-    PageFrame  *frames;
-    pthread_mutex_t  mu;     /* 池级锁：哈希表 / Clock 手 / pin_count / npages */
-    pthread_mutex_t *latches; /* 每帧一把内容锁（递归） */
-    pthread_t  *latch_owner; /* 内容锁的持有线程（用来发现"不是自己拿的锁"） */
-    int         *latch_depth;/* 内容锁的重入深度 */
-    u32        *hash_keys;   /* page_id -> frame 下标 */
-    u32        *hash_vals;
-    u32         hash_cap;    /* 2 的幂 */
-    u32         hash_tombs;  /* 墓碑数。会无限累积，
-                                不回收的话探测序列总有一天遇不到 EMPTY，
-                                hash_find 就死循环了 —— 写 1 万页必触发 */
-    PagerFlushLogFn wal_flush;   /* WAL 规则：刷页前保证日志落盘 */
-    void          *wal_ctx;
-};
+/* struct Pager 的定义在 pager_internal.h（pager.c 与 pager_frame.c 共享） */
 
-/* ---------------- 两把锁 ---------------- */
+/* ---------------- 池级锁 ---------------- */
 
 /*
  * 池级锁 —— frame 域（序号 3）。
  *
  * 它保护的是"整个池子共用的账本"，所以它和内容锁同属一个域。
+ *
+ * 【读写锁的三种拿法】
+ *
+ *   pager_pool_rdlock   —— 只读账本（哈希查找）。**读读不互斥**，
+ *                         多个线程可以同时查哈希表 ✓
+ *   pager_pool_wrlock   —— 改账本（逐出 / 分配）。独占
+ *   pager_pool_lock     —— 兼容旧名字，等价于 pager_pool_wrlock
+ *
+ * 域的记账（latch_order_acquire）两种拿法都要做 ——
+ * 它记的是"本线程持有哪些域"，与锁本身的共享/独占无关。
+ *
+ * （内容锁在 pager_frame.c 里，两把锁的分工见本文件头部的说明。）
  */
-static void pool_lock(Pager *pg)
+void pager_pool_rdlock(Pager *pg)
 {
-    pthread_mutex_lock(&pg->mu);
+    LS_ENTER(LS_POOL);
+    db_rwlock_rdlock(&pg->mu);
+    LS_LEAVE(LS_POOL);
     latch_order_acquire(LATCH_FRAME);
 }
 
-static void pool_unlock(Pager *pg)
+void pager_pool_rdunlock(Pager *pg)
 {
     latch_order_release(LATCH_FRAME);
-    pthread_mutex_unlock(&pg->mu);
+    db_rwlock_rdunlock(&pg->mu);
 }
 
-/*
- * 内容锁 —— frame 域（序号 3），**递归**。
- *
- * 递归的原因：同一线程可能对同一页 get 两次。
- * 不可重入的锁会自己把自己锁死。
- *
- * depth[] 既是重入计数，也是"这把锁有没有人拿着"的标志：
- * depth == 0 ⇒ 无人持有（因此 owner 字段此刻无意义）。
- *
- * owner[] 记的是**持有者线程** ——
- * 用途是发现"释放了一把不是自己拿的锁"（调用方的 bug）。
- */
-static void frame_lock(Pager *pg, u32 fi)
+void pager_pool_wrlock(Pager *pg)
 {
-    /*
-     * 先拿锁，再记 owner。
-     *
-     * 顺序反了会出这种错：线程 A 先写 owner=A，
-     * 线程 B 也写 owner=B（还没拿到锁），A 就再也对不上了。
-     */
-    pthread_mutex_lock(&pg->latches[fi]);
-    if (pg->latch_depth[fi] == 0)
-        pg->latch_owner[fi] = pthread_self();
-    pg->latch_depth[fi]++;
+    db_rwlock_wrlock(&pg->mu);
     latch_order_acquire(LATCH_FRAME);
 }
 
-/*
- * 释放内容锁。
- *
- * 返回 E_INVAL 表示"这把锁不是当前线程拿的" ——
- * 那是调用方的 bug（unpin 了一个自己没 get 过的页）。
- * 这种情况**绝不能真的去 unlock**：POSIX 里释放非自己持有的锁是未定义行为，
- * 可能把锁的状态搅坏。
- */
-static int frame_unlock(Pager *pg, u32 fi)
+void pager_pool_wrunlock(Pager *pg)
 {
-    if (pg->latch_depth[fi] <= 0)
-        return E_INVAL;
-    if (!pthread_equal(pg->latch_owner[fi], pthread_self()))
-        return E_INVAL;
-
-    pg->latch_depth[fi]--;
     latch_order_release(LATCH_FRAME);
-    pthread_mutex_unlock(&pg->latches[fi]);
-    return OK;
+    db_rwlock_wrunlock(&pg->mu);
 }
 
-/* ---------------- 哈希表：开放定址 + 线性探测 + 墓碑 ---------------- */
-
-#define KEY_EMPTY ((u32)0xFFFFFFFFu)   /* 即 PAGE_ID_NIL，合法页号不会是它 */
-#define KEY_TOMB  ((u32)0xFFFFFFFEu)
-
-static u32 hash_u32(u32 k)
+/* 旧名保留：改账本的地方一律用它（等价于写锁） */
+void pager_pool_lock(Pager *pg)
 {
-    return k * 2654435761u;   /* Knuth 乘法散列 */
+    pager_pool_wrlock(pg);
 }
 
-static u32 next_pow2(u32 n)
+void pager_pool_unlock(Pager *pg)
 {
-    u32 p = 16;
-    while (p < n)
-        p <<= 1;
-    return p;
+    pager_pool_wrunlock(pg);
 }
 
-static void hash_init(Pager *pg)
-{
-    pg->hash_cap = next_pow2(pg->nframes * 2);   /* 装填因子 <= 0.5 */
-    pg->hash_keys = malloc(pg->hash_cap * sizeof(u32));
-    pg->hash_vals = malloc(pg->hash_cap * sizeof(u32));
-    for (u32 i = 0; i < pg->hash_cap; i++)
-        pg->hash_keys[i] = KEY_EMPTY;
-}
+/* 内容锁（pager_frame_lock / pager_frame_unlock）在 pager_frame.c 里 */
 
-/* 以下哈希函数都必须在池级锁下调用 */
-
-static bool hash_find(Pager *pg, u32 key, u32 *val)
-{
-    u32 mask = pg->hash_cap - 1;
-    u32 i = hash_u32(key) & mask;
-    for (;;) {
-        u32 k = pg->hash_keys[i];
-        if (k == KEY_EMPTY)
-            return false;
-        if (k == key) {
-            *val = pg->hash_vals[i];
-            return true;
-        }
-        i = (i + 1) & mask;
-    }
-}
-
-static void hash_ins(Pager *pg, u32 key, u32 val)
-{
-    u32 mask = pg->hash_cap - 1;
-    u32 i = hash_u32(key) & mask;
-    while (pg->hash_keys[i] != KEY_EMPTY &&
-           pg->hash_keys[i] != KEY_TOMB &&
-           pg->hash_keys[i] != key)
-        i = (i + 1) & mask;
-    pg->hash_keys[i] = key;
-    pg->hash_vals[i] = val;
-}
-
-static void hash_del(Pager *pg, u32 key)
-{
-    u32 mask = pg->hash_cap - 1;
-    u32 i = hash_u32(key) & mask;
-    for (;;) {
-        u32 k = pg->hash_keys[i];
-        if (k == KEY_EMPTY)
-            return;               /* 不在里面，静默返回 */
-        if (k == key) {
-            pg->hash_keys[i] = KEY_TOMB;
-            pg->hash_tombs++;
-            return;
-        }
-        i = (i + 1) & mask;
-    }
-}
-
-/*
- * 墓碑回收：清表重插。真值来源是 frames 数组（page_id 字段），
- * 所以重建不需要额外的持久化结构。
- * 触发条件：墓碑超过容量 1/4。活跃条目 <= 帧数 <= 容量/2，
- * 加上 <=1/4 的墓碑，总占用 < 3/4 容量，探测永远能遇到 EMPTY。
- */
-static void hash_rebuild(Pager *pg)
-{
-    for (u32 i = 0; i < pg->hash_cap; i++)
-        pg->hash_keys[i] = KEY_EMPTY;
-    pg->hash_tombs = 0;
-    for (u32 i = 0; i < pg->nframes; i++) {
-        u32 pid = pg->frames[i].page_id;
-        if (pid != PAGE_ID_NIL)
-            hash_ins(pg, pid, i);
-    }
-}
+/* 帧哈希表（pager_hash_init / pager_hash_find）在 pager_frame.c 里 */
 
 /* ---------------- 文件读写 ---------------- */
 
@@ -280,7 +218,7 @@ static int file_size(FILE *f, u64 *out)
     return OK;
 }
 
-static int read_page(Pager *pg, u32 page_id, u8 *buf)
+int pager_read_page(Pager *pg, u32 page_id, u8 *buf)
 {
     long long off = (long long)((u64)page_id * PAGE_SIZE);
     if (FSEEK(pg->f, off, SEEK_SET) != 0)
@@ -319,7 +257,7 @@ static int write_page(Pager *pg, u32 page_id, const u8 *buf)
  * 这样"WAL 先落盘、页后落盘"这条规则是在内容锁的保护下完成的，
  * 而且锁序是 frame(3) → wal(4) ✓。
  */
-static int flush_page(Pager *pg, u32 page_id, const u8 *buf)
+int pager_flush_page(Pager *pg, u32 page_id, const u8 *buf)
 {
     if (pg->wal_flush) {
         u32 lsn = get_u32(buf + H_LSN);
@@ -330,151 +268,7 @@ static int flush_page(Pager *pg, u32 page_id, const u8 *buf)
     return write_page(pg, page_id, buf);
 }
 
-/* ---------------- Clock 替换 ---------------- */
-
-/*
- * 找一个可逐出的帧。pin_count == 0 且 clock_ref == 0 的帧被选中；
- * ref == 1 的给第二次机会（清零放行）。
- * 全部被 pin 时返回 E_NOSPACE —— 宁可报错，绝不丢别人正拿着的页。
- *
- * 必须在池级锁下调用。
- */
-static int pick_victim(Pager *pg, u32 *victim)
-{
-    u32 bound = BP_MAX_PIN_TRIES * pg->nframes;
-    for (u32 tries = 0; tries < bound; tries++) {
-        PageFrame *f = &pg->frames[pg->hand];
-        if (f->pin_count == 0) {
-            if (f->clock_ref == 0) {
-                *victim = pg->hand;
-                pg->hand = (pg->hand + 1) % pg->nframes;
-                return OK;
-            }
-            f->clock_ref = 0;   /* 第二次机会用掉了 */
-        }
-        pg->hand = (pg->hand + 1) % pg->nframes;
-    }
-    return E_NOSPACE;
-}
-
-/* ---------------- 核心：命中 / 逐出 / 载入 ---------------- */
-
-/*
- * 取一页并 pin 住（内容锁也一并拿到）。
- *
- * 返回时：池级锁已释放，**内容锁由调用方持有**，
- * 一直到 pager_unpin 才释放。
- */
-static int fetch_frame(Pager *pg, u32 page_id, PageFrame **out)
-{
-    int rc;
-
-    pool_lock(pg);
-
-    /* 命中：pin 住直接给 */
-    u32 fi;
-    if (hash_find(pg, page_id, &fi)) {
-        PageFrame *f = &pg->frames[fi];
-        f->pin_count++;
-        f->clock_ref = 1;
-
-        /*
-         * 内容锁在**池级锁之外**拿。
-         *
-         * 反过来（持池级锁等内容锁）会死锁：
-         *   线程 A 持池级锁，等页 P 的内容锁；
-         *   线程 B 持 P 的内容锁（还没 unpin），等池级锁减 pin_count。
-         * A 等 B，B 等 A。
-         */
-        pool_unlock(pg);
-        frame_lock(pg, fi);
-        *out = f;
-        return OK;
-    }
-
-    /* 未命中：挑一个受害者 */
-    rc = pick_victim(pg, &fi);
-    if (rc != OK) {
-        pool_unlock(pg);
-        return rc;
-    }
-
-    PageFrame *f = &pg->frames[fi];
-
-    /*
-     * 受害者的内容锁。
-     *
-     * 按不变式（持有内容锁 ⇒ pin_count ≥ 1），
-     * 受害者的 pin_count == 0 ⇒ 此刻**没人持有**它的内容锁
-     * ⇒ 这一步不会阻塞 ✓
-     */
-    frame_lock(pg, fi);
-
-    /* 受害者若还缓存着别的页：脏的先刷盘，再从哈希表摘掉 */
-    if (f->page_id != PAGE_ID_NIL) {
-        if (f->dirty) {
-            /* WAL 钩子在这里被调 —— 锁序 frame → wal ✓ */
-            rc = flush_page(pg, f->page_id, f->data);
-            if (rc != OK) {
-                frame_unlock(pg, fi);
-                pool_unlock(pg);
-                return rc;
-            }
-        }
-        hash_del(pg, f->page_id);
-        f->page_id = PAGE_ID_NIL;
-        f->dirty = false;
-    }
-
-    rc = read_page(pg, page_id, f->data);
-    if (rc != OK) {
-        frame_unlock(pg, fi);
-        pool_unlock(pg);
-        return rc;
-    }
-
-    /*
-     * 同一页被两个线程同时载入的兜底。
-     *
-     * 正常情况下不会发生（页号是分配器给的，别人拿不到），
-     * 但万一发生（恢复路径按日志里的页号取页），
-     * 哈希表里就会有两个条目指向同一页 → 哈希和帧对不上 → 页内容错乱。
-     * 这里以"先到先得"为准：后来者丢掉自己这份，用先到的那份。
-     */
-    u32 other;
-    if (hash_find(pg, page_id, &other)) {
-        f->page_id = PAGE_ID_NIL;
-        f->dirty = false;
-        frame_unlock(pg, fi);
-
-        PageFrame *of = &pg->frames[other];
-        of->pin_count++;
-        of->clock_ref = 1;
-        pool_unlock(pg);
-        frame_lock(pg, other);
-        *out = of;
-        return OK;
-    }
-
-    if (pg->hash_tombs > pg->hash_cap / 4)
-        hash_rebuild(pg);   /* 墓碑回收，防探测死循环 */
-
-    f->page_id = page_id;
-    f->pin_count = 1;
-    f->clock_ref = 1;
-    /*
-     * 帧被复用了：上一任主人留下的 rec_lsn 与新页无关。
-     * 不清零的话，新页的第一次改动会继承别人的 recLSN →
-     * 重放点被压低（安全方向，但白费功夫）。
-     */
-    f->rec_lsn = 0;
-    hash_ins(pg, page_id, fi);
-
-    /* 内容锁已经持有着（frame_lock 那一步），不用再拿一次 */
-    pool_unlock(pg);
-    *out = f;
-    return OK;
-}
+/* Clock 逐出（pick_victim）与取帧（pager_fetch_frame）在 pager_frame.c 里 */
 
 /* ---------------- 公开 API ---------------- */
 
@@ -505,10 +299,7 @@ int pager_open(const char *path, u32 nframes, Pager **out)
     pg->f = f;
     pg->nframes = nframes;
 
-    if (pthread_mutex_init(&pg->mu, NULL) != 0) {
-        rc = E_IO;
-        goto fail;
-    }
+    db_rwlock_init(&pg->mu);
 
     u64 sz = 0;
     rc = file_size(f, &sz);
@@ -516,7 +307,7 @@ int pager_open(const char *path, u32 nframes, Pager **out)
         goto fail;
     /* 尾部若有半页（上次写一半断了），先忽略，npages 向下取整。
      * 等 WAL 的 FPI 机制上线后再回头处理撕页。 */
-    pg->npages = sz / PAGE_SIZE;
+    atomic_store(&pg->npages, sz / PAGE_SIZE);
 
     pg->frames = calloc(nframes, sizeof(PageFrame));
     if (!pg->frames) {
@@ -543,7 +334,7 @@ int pager_open(const char *path, u32 nframes, Pager **out)
         pthread_mutexattr_destroy(&attr);
     }
 
-    hash_init(pg);
+    pager_hash_init(pg);
     if (!pg->hash_keys || !pg->hash_vals) {
         rc = E_IO;
         goto fail;
@@ -564,7 +355,7 @@ fail:
         free(pg->frames);
         free(pg->hash_keys);
         free(pg->hash_vals);
-        pthread_mutex_destroy(&pg->mu);
+        db_rwlock_destroy(&pg->mu);
         free(pg);
     }
     fclose(f);
@@ -585,7 +376,7 @@ int pager_close(Pager *pg)
     free(pg->frames);
     free(pg->hash_keys);
     free(pg->hash_vals);
-    pthread_mutex_destroy(&pg->mu);
+    db_rwlock_destroy(&pg->mu);
     free(pg);
     return rc;
 }
@@ -594,12 +385,11 @@ int pager_get(Pager *pg, u32 page_id, PageFrame **out)
 {
     if (!pg || !out)
         return E_INVAL;
-    pool_lock(pg);
-    u64 np = pg->npages;
-    pool_unlock(pg);
+    /* npages 是原子量 → 越界检查**完全不碰锁** ✓ */
+    u64 np = atomic_load(&pg->npages);
     if (page_id >= (u32)np)
         return E_NOTFOUND;
-    return fetch_frame(pg, page_id, out);
+    return pager_fetch_frame(pg, page_id, out);
 }
 
 int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
@@ -610,20 +400,15 @@ int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
     /*
      * 先占号再取帧。
      *
-     * 占号必须在池级锁里做，而且要在取帧**之前** ——
-     * 否则两个线程会拿到同一个页号。
+     * 占号必须在取帧**之前** —— 否则两个线程会拿到同一个页号。
+     * 用原子 fetch_add 一次搞定"读号 + 加一"，不用碰锁 ✓
      */
-    pool_lock(pg);
-    u32 id = (u32)pg->npages;
-    pg->npages++;
-    pool_unlock(pg);
+    u32 id = (u32)atomic_fetch_add(&pg->npages, 1);
 
-    int rc = fetch_frame(pg, id, out);
+    int rc = pager_fetch_frame(pg, id, out);
     if (rc != OK) {
         /* 取帧失败：把号退回去（否则文件里会留下一个空洞） */
-        pool_lock(pg);
-        pg->npages--;
-        pool_unlock(pg);
+        atomic_fetch_sub(&pg->npages, 1);
         return rc;
     }
 
@@ -639,17 +424,26 @@ int pager_unpin(Pager *pg, u32 page_id, bool dirty)
     if (!pg)
         return E_INVAL;
 
-    pool_lock(pg);
+    /*
+     * 查哈希表用**读锁**（读读不互斥）。
+     *
+     * dirty / rec_lsn 的更新不用池级锁保护 ——
+     * 它们由**内容锁**保护，而内容锁此刻就在我们手里
+     * （pager_unpin 的调用方一直持有到我们 pager_frame_unlock）。
+     */
+    pager_pool_rdlock(pg);
     u32 fi;
-    if (!hash_find(pg, page_id, &fi)) {
-        pool_unlock(pg);
+    if (!pager_hash_find(pg, page_id, &fi)) {
+        pager_pool_rdunlock(pg);
         return E_NOTFOUND;
     }
     PageFrame *f = &pg->frames[fi];
-    if (f->pin_count <= 0) {
-        pool_unlock(pg);
+    if (atomic_load(&f->pin_count) <= 0) {
+        pager_pool_rdunlock(pg);
         return E_INVAL;      /* unpin 不配对：这是调用方的 bug */
     }
+    pager_pool_rdunlock(pg);
+
     if (dirty) {
         /*
          * 记 rec_lsn：**这一页自上次刷盘以来的第一次改动**的 LSN。
@@ -662,25 +456,25 @@ int pager_unpin(Pager *pg, u32 page_id, bool dirty)
             f->rec_lsn = page_lsn(f->data);
         f->dirty = true;
     }
-    pool_unlock(pg);
 
     /*
      * 关键顺序：**先放内容锁，再减 pin_count**。
      *
      * 反过来的话会出现一个窗口："pin_count 已经是 0，
      * 但内容锁还捏在手里"。这时候逐出线程会挑中这一帧，
-     * 拿着池级锁去等这个内容锁 —— 而内容锁的持有者
-     * （我们）正要去拿池级锁减 pin_count → 死锁。
+     * 拿着写锁去等这个内容锁 —— 而内容锁的持有者
+     * （我们）正要去拿写锁减 pin_count → 死锁。
      *
      * 现在这个顺序下，"持有内容锁 ⇒ pin_count ≥ 1" 恒成立 ✓
+     *
+     * 减一用**原子操作**，不再碰池级锁 ——
+     * 这样一次页访问的池级锁次数从 4 次降到 2 次（读锁）✓
      */
-    int rc = frame_unlock(pg, fi);
+    int rc = pager_frame_unlock(pg, fi);
     if (rc != OK)
         return rc;
 
-    pool_lock(pg);
-    f->pin_count--;
-    pool_unlock(pg);
+    atomic_fetch_sub(&f->pin_count, 1);
     return OK;
 }
 
@@ -693,12 +487,12 @@ int pager_flush_all(Pager *pg)
          * 逐帧取内容锁，**不持池级锁** ——
          * 持着池级锁去等别人的内容锁 = 死锁。
          */
-        frame_lock(pg, i);
+        pager_frame_lock(pg, i);
         PageFrame *f = &pg->frames[i];
         if (f->page_id != PAGE_ID_NIL && f->dirty) {
-            int rc = flush_page(pg, f->page_id, f->data);
+            int rc = pager_flush_page(pg, f->page_id, f->data);
             if (rc != OK) {
-                frame_unlock(pg, i);
+                pager_frame_unlock(pg, i);
                 return rc;
             }
             f->dirty = false;
@@ -710,7 +504,7 @@ int pager_flush_all(Pager *pg)
              */
             f->rec_lsn = 0;
         }
-        frame_unlock(pg, i);
+        pager_frame_unlock(pg, i);
     }
     return OK;
 }
@@ -719,10 +513,10 @@ void pager_set_wal_flush(Pager *pg, PagerFlushLogFn fn, void *ctx)
 {
     if (!pg)
         return;
-    pool_lock(pg);
+    pager_pool_lock(pg);
     pg->wal_flush = fn;
     pg->wal_ctx = ctx;
-    pool_unlock(pg);
+    pager_pool_unlock(pg);
 }
 
 /*
@@ -744,14 +538,14 @@ u32 pager_min_dirty_lsn(const Pager *pg)
     bool any = false;
 
     for (u32 i = 0; i < m->nframes; i++) {
-        frame_lock(m, i);
+        pager_frame_lock(m, i);
         PageFrame *f = &m->frames[i];
         if (f->page_id != PAGE_ID_NIL && f->dirty && f->rec_lsn != 0) {
             if (!any || f->rec_lsn < min_lsn)
                 min_lsn = f->rec_lsn;
             any = true;
         }
-        frame_unlock(m, i);
+        pager_frame_unlock(m, i);
     }
 
     if (!any)
@@ -772,7 +566,7 @@ void pager_abandon(Pager *pg)
     free(pg->frames);
     free(pg->hash_keys);
     free(pg->hash_vals);
-    pthread_mutex_destroy(&pg->mu);
+    db_rwlock_destroy(&pg->mu);
     free(pg);
 }
 
@@ -780,10 +574,13 @@ int pager_extend_to(Pager *pg, u32 npages)
 {
     if (!pg)
         return E_INVAL;
-    pool_lock(pg);
-    if ((u64)npages > pg->npages)
-        pg->npages = npages;
-    pool_unlock(pg);
+    /* 只增不减：用 CAS 循环，npage 更小的时候不动它 */
+    u64 cur = atomic_load(&pg->npages);
+    while ((u64)npages > cur) {
+        if (atomic_compare_exchange_weak(&pg->npages, &cur, (u64)npages))
+            break;
+        /* cur 已被刷新为最新值，循环重试 */
+    }
     return OK;
 }
 
@@ -791,25 +588,22 @@ u64 pager_npages(const Pager *pg)
 {
     if (!pg)
         return 0;
-    /* 见 freelist.c 的同类说明：const 是调用方视角的约束，
-     * 锁的状态当然要变。 */
-    Pager *m = (Pager *)pg;
-    pool_lock(m);
-    u64 n = pg->npages;
-    pool_unlock(m);
-    return n;
+    /* npages 是原子量 → 读它不需要锁 */
+    return atomic_load(&pg->npages);
 }
 
 u32 pager_frames_used(const Pager *pg)
 {
     if (!pg)
         return 0;
+    /* 见 freelist.c 的同类说明：const 是调用方视角的约束，
+     * 锁的状态当然要变。 */
     Pager *m = (Pager *)pg;
-    pool_lock(m);
+    pager_pool_rdlock(m);
     u32 n = 0;
-    for (u32 i = 0; i < pg->nframes; i++)
-        if (pg->frames[i].page_id != PAGE_ID_NIL)
+    for (u32 i = 0; i < m->nframes; i++)
+        if (m->frames[i].page_id != PAGE_ID_NIL)
             n++;
-    pool_unlock(m);
+    pager_pool_rdunlock(m);
     return n;
 }

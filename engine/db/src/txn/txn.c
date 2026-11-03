@@ -17,6 +17,7 @@
 #endif
 
 #include "common/latch.h"
+#include "common/lockstat.h"
 
 /*
  * 事务表 + clog 实现。
@@ -61,7 +62,9 @@ static pthread_mutex_t g_txn_lock = PTHREAD_MUTEX_INITIALIZER;
  */
 static void txn_lock(void)
 {
+    LS_ENTER(LS_TXN);
     pthread_mutex_lock(&g_txn_lock);
+    LS_LEAVE(LS_TXN);
     latch_order_acquire(LATCH_TXN);
 }
 

@@ -63,6 +63,7 @@
 #include <time.h>
 
 #include "db.h"
+#include "common/lockstat.h"
 
 /* ---------------- 参数 ---------------- */
 
@@ -365,6 +366,10 @@ int main(int argc, char **argv)
     /* 机器可读的一行 */
     printf("RESULT ops_per_sec=%.1f elapsed_ms=%.1f statements=%ld errors=%d\n",
            ops, elapsed, statements, errors);
+
+#ifdef DB_LOCKSTAT
+    lockstat_dump();
+#endif
 
     free(th);
     free(w);

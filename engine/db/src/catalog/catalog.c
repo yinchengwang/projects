@@ -183,11 +183,13 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
     cat->wal_fn = fn;
     cat->wal_ctx = ctx;
 
-    /* catalog 域的读写锁（v1.2 步骤 3）。此时还没有别的线程能用它 */
-    if (pthread_rwlock_init(&cat->rw, NULL) != 0) {
-        free(cat);
-        return E_IO;
-    }
+    /*
+     * catalog 域的读写锁（v1.2 步骤 3）。此时还没有别的线程能用它。
+     *
+     * 用自研的 db_rwlock 而不是 pthread_rwlock —— 后者在 winpthreads 上
+     * 不允许读者并发，等于一把更慢的互斥量（见 common/rwlock.h）。
+     */
+    db_rwlock_init(&cat->rw);
 
     int rc;
     if (pager_npages(pg) == 0) {
@@ -196,7 +198,7 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
         PageFrame *f;
         rc = pager_get(pg, PAGE_ID_META, &f);
         if (rc != OK) {
-            pthread_rwlock_destroy(&cat->rw);
+            db_rwlock_destroy(&cat->rw);
             free(cat);
             return rc;
         }
@@ -208,7 +210,7 @@ int catalog_open(Pager *pg, HeapWalFn fn, void *ctx, Catalog **out)
         pager_unpin(pg, PAGE_ID_META, false);
 
         if (magic != CAT_MAGIC || psz != PAGE_SIZE) {
-            pthread_rwlock_destroy(&cat->rw);
+            db_rwlock_destroy(&cat->rw);
             free(cat);
             return E_CORRUPT;      /* 不是我们的文件，或页大小变了 */
         }
@@ -245,7 +247,7 @@ void catalog_close(Catalog *cat)
         freelist_destroy(cat->t[i].fl);
     }
     free(cat->t);
-    pthread_rwlock_destroy(&cat->rw);
+    db_rwlock_destroy(&cat->rw);
     free(cat);
 }
 

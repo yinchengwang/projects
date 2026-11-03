@@ -29,7 +29,9 @@ endif
 CFLAGS  := $(CSTD) $(WARN) $(OPT) $(HARDEN) $(INC) $(SAN)
 
 SRC_DIR := src
-OBJ_DIR := build
+# OBJ_DIR 可用命令行覆盖（make OBJ_DIR=build_xxx）——
+# 多个构建同时跑时各写各的目录，免得 gcc 写坏同一个 .o。
+OBJ_DIR ?= build
 SRCS    := $(shell find $(SRC_DIR) -name '*.c')
 OBJS    := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS    := $(OBJS:.o=.d)
@@ -87,7 +89,7 @@ endif
 # 【为什么基线是"整个语句持锁"】
 # 因为那**就是**步骤 4d 退役之前的写法（锁的范围覆盖 parse / 开事务 /
 # 执行 / 提交含 fsync）。少放一点就不是基线了。
-BIGLOCK_DIR   := build_biglock
+BIGLOCK_DIR   ?= build_biglock
 BIGLOCK_FLAGS := -DDB_BIGLOCK_BASELINE=1
 BIGLOCK_OBJS  := $(patsubst $(SRC_DIR)/%.c,$(BIGLOCK_DIR)/%.o,$(SRCS))
 BIGLOCK_DEPS  := $(BIGLOCK_OBJS:.o=.d)

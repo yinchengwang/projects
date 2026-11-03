@@ -2,11 +2,12 @@
 #define DB_SRC_DB_INTERNAL_H
 
 /*
- * db.c / db_blob.c 共享的内部定义。
+ * db.c / db_blob.c / db_instance.c / db_result.c 共享的内部定义。
  *
  * 【为什么要拆文件】
- * 硬规则：单文件不超过 800 行。db.c 一度到 1075 行。
- * blob 的公开 API 是一块完整的功能，单独成文件正好。
+ * 硬规则：单文件不超过 800 行。db.c 一度到 1075 行，后来又到 888 行。
+ * blob 的公开 API 是一块完整的功能，单独成文件正好；
+ * 关库路径（db_instance.c）和结果集访问器（db_result.c）同理。
  *
  * 这些定义**不是**公共 API —— 公共 API 只有 include/db.h。
  */

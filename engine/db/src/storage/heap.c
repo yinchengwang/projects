@@ -1,70 +1,27 @@
 /*
- * heap.c — 堆表 AM
+ * heap.c — 堆表 AM：生命周期 + 写路径 + 观察
  *
  * 四条纪律：
  *   1. 每次修改页之前先调 WAL 钩子，拿到 LSN 写进页头。
  *   2. 任何时刻最多 pin 一页。扫描器每行 get/unpin 一次。
  *   3. 返回值一律拷贝到调用方缓冲区，不返回页内指针。
- *   4. 不依赖页链：扫描按页号区间走，靠页头的 table_id 过滤。
+ *   4. 不依赖页链：扫描走「本表页号表」（见下），崩溃恢复不会丢页。
+ *
+ * 本文件负责：heap_create / heap_open / heap_destroy / heap_set_wal、
+ * heap_insert / heap_write_ver / heap_update / heap_delete / heap_get、
+ * heap_npages / heap_wal_calls。
+ *
+ * 扫描在 heap_scan.c，页内 compact 在 heap_compact.c。
+ * 共享的宏、类型与内部辅助在 storage/heap_internal.h。
  */
 
-#include "storage/heap.h"
+#include "storage/heap_internal.h"
 
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "storage/record.h"
-
-struct Heap {
-    Pager    *pager;
-    FreeList *fl;
-    u32       root;
-
-    /*
-     * 本表的页数。
-     *
-     * 【为什么是原子量】
-     *
-     * Heap 是**实例级共享**的（catalog 里每张表一个，所有连接共用）。
-     * 追加新页时 `npages++` 会被多个线程同时做 ——
-     * 不加保护就是数据竞争（UB），加普通锁又太重。
-     *
-     * 这个计数只用于观察（heap_npages），所以用 C11 原子量最省事 ✓
-     */
-    _Atomic u32 npages;
-
-    u16       tid;
-    HeapWalFn wal;
-    void     *wal_ctx;
-
-    /* WAL 调用次数（同上：实例级共享的计数器） */
-    _Atomic u64 wal_calls;
-};
-
-struct HeapScan {
-    Heap *h;
-    u32   page_id;
-    u16   next_slot;
-    u32   max_page;
-
-    /*
-     * 当前 pin 着的页。
-     *
-     * 【为什么扫一页只 get 一次】
-     * pager_get 和 pager_unpin **各自都要做一次哈希查找**
-     * （get 里查一次定位帧，unpin 里又查一次）。原来每行都 get+unpin 一轮，
-     * 10 万行就是 20 万次哈希查找 —— 实测占了扫描阶段的绝大部分。
-     *
-     * 一页能装约 100 行，所以 pin 住整页、扫完再放开，
-     * 哈希查找就从"每行 2 次"降到"每页 1 次"。
-     *
-     * 安全性：pin 住的页不会被逐出（pick_victim 只挑 pin_count == 0 的帧），
-     * 也不会被换出缓冲池。扫描结束（heap_scan_end）一定会放开 ✓。
-     */
-    PageFrame *cur;
-};
 
 /* ---------------- WAL 钩子 ---------------- */
 
@@ -76,10 +33,10 @@ struct HeapScan {
  *
  * xid 由调用方显式传进来（见 loghook.h 里关于"共享状态"的说明）。
  */
-static int wal_log(Heap *h, u32 xid, u8 logtype, u32 page_id, u16 slot,
-                   u16 slot_off,
-                   const u8 *before, u16 blen,
-                   const u8 *after, u16 alen, u32 *lsn_out)
+int heap_wal_log(Heap *h, u32 xid, u8 logtype, u32 page_id, u16 slot,
+                 u16 slot_off,
+                 const u8 *before, u16 blen,
+                 const u8 *after, u16 alen, u32 *lsn_out)
 {
     *lsn_out = 0;
     if (!h->wal)
@@ -113,6 +70,62 @@ void heap_set_wal(Heap *h, HeapWalFn fn, void *ctx)
  * 而版本号最终由 exec 层负责打（stamp_version / stamp_deleted），
  * 堆表根本不需要知道 xid —— 它只是把 xid 转交给日志钩子而已。
  */
+
+/* ---------------- 本表页号表 ---------------- */
+
+/*
+ * 追加一个页号到本表的页号表。
+ *
+ * 失败（内存不足）返回 E_IO —— 宁可让调用方报错，
+ * 也不能"页存在但扫不到"（那等于静默丢数据）。
+ */
+int heap_plist_add(Heap *h, u32 pid)
+{
+    int rc = OK;
+    pthread_mutex_lock(&h->plist_mu);
+    if (h->plist_n == h->plist_cap) {
+        u32 cap = h->plist_cap ? h->plist_cap * 2 : 16;
+        u32 *np = realloc(h->plist, (size_t)cap * sizeof(u32));
+        if (!np) {
+            rc = E_IO;
+        } else {
+            h->plist = np;
+            h->plist_cap = cap;
+        }
+    }
+    if (rc == OK)
+        h->plist[h->plist_n++] = pid;
+    pthread_mutex_unlock(&h->plist_mu);
+    return rc;
+}
+
+/*
+ * 拍一份页号表快照。
+ *
+ * 拷贝一份而不是直接读共享数组：扫描期间别的线程会追加新页
+ * （append_page），共享数组还可能 realloc 换指针 —— 直接读会读到半个数组。
+ */
+int heap_plist_snapshot(Heap *h, u32 **out, u32 *n_out)
+{
+    u32 *buf = NULL;
+    u32 n = 0;
+
+    pthread_mutex_lock(&h->plist_mu);
+    n = h->plist_n;
+    if (n) {
+        buf = malloc((size_t)n * sizeof(u32));
+        if (!buf) {
+            pthread_mutex_unlock(&h->plist_mu);
+            return E_IO;
+        }
+        memcpy(buf, h->plist, (size_t)n * sizeof(u32));
+    }
+    pthread_mutex_unlock(&h->plist_mu);
+
+    *out = buf;
+    *n_out = n;
+    return OK;
+}
 
 /* ---------------- 生命周期 ---------------- */
 
@@ -173,6 +186,10 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
     Heap *h = calloc(1, sizeof(*h));
     if (!h)
         return E_IO;
+    if (pthread_mutex_init(&h->plist_mu, NULL) != 0) {
+        free(h);
+        return E_IO;
+    }
     h->pager = pg;
     h->fl = fl;
     h->root = root_page;
@@ -182,11 +199,15 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
 
     int rc = freelist_grow(fl, (u32)pager_npages(pg));
     if (rc != OK) {
-        free(h);
+        heap_destroy(h);
         return rc;
     }
 
-    /* 扫一遍：登记本表的页，顺带统计页数 */
+    /*
+     * 扫一遍：登记本表的页，顺带统计页数，并把页号收进页号表。
+     *
+     * 页号表在打开时重建 —— 它不进 WAL，崩溃恢复后靠这一遍重建 ✓
+     */
     u32 np = (u32)pager_npages(pg);
     for (u32 p = 0; p < np; p++) {
         PageFrame *f;
@@ -196,6 +217,11 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
         if (mine) {
             freelist_set(fl, p, page_free_bytes(f->data));
             atomic_fetch_add(&h->npages, 1);
+            if (heap_plist_add(h, p) != OK) {
+                pager_unpin(pg, p, false);
+                heap_destroy(h);
+                return E_IO;
+            }
         }
         pager_unpin(pg, p, false);
     }
@@ -206,6 +232,10 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
 
 void heap_destroy(Heap *h)
 {
+    if (!h)
+        return;
+    pthread_mutex_destroy(&h->plist_mu);
+    free(h->plist);
     free(h);
 }
 
@@ -227,8 +257,8 @@ static int append_page(Heap *h, u32 *pid_out, PageFrame **frame_out)
     page_set_table_id(nf->data, h->tid);
 
     u32 lsn = 0;
-    rc = wal_log(h, 0, LOG_PAGEINIT, pid, 0, LOG_NO_SLOT_OFF,
-                 NULL, 0, nf->data, HDR_SIZE, &lsn);
+    rc = heap_wal_log(h, 0, LOG_PAGEINIT, pid, 0, LOG_NO_SLOT_OFF,
+                      NULL, 0, nf->data, HDR_SIZE, &lsn);
     if (rc != OK) {
         pager_unpin(h->pager, pid, false);
         return rc;
@@ -241,6 +271,21 @@ static int append_page(Heap *h, u32 *pid_out, PageFrame **frame_out)
         pager_unpin(h->pager, pid, false);
         return rc;
     }
+    /*
+     * 新页必须先进页号表，再进 freelist。
+     *
+     * 顺序不能反：freelist 先登记的话，别的线程可能挑中这一页插入数据，
+     * 而它还没进页号表 → 数据"插进去了但扫不到"。
+     *
+     * 失败（内存不足）就让整个 append 失败：
+     * 报了错，调用方不会拿着一个"看不见的页"继续跑。
+     */
+    rc = heap_plist_add(h, pid);
+    if (rc != OK) {
+        pager_unpin(h->pager, pid, false);
+        return rc;
+    }
+
     freelist_set(h->fl, pid, FL_USABLE);
     atomic_fetch_add(&h->npages, 1);
 
@@ -330,7 +375,7 @@ int heap_insert(Heap *h, u32 xid, const u8 *rec, u16 len, Rid *rid_out)
          */
         u16 slot_off = page_slot_offset(f->data, slot);
         u32 lsn = 0;
-        rc = wal_log(h, xid, LOG_INSERT, pid, slot, slot_off, NULL, 0, rec, len, &lsn);
+        rc = heap_wal_log(h, xid, LOG_INSERT, pid, slot, slot_off, NULL, 0, rec, len, &lsn);
         if (rc != OK) {
             pager_unpin(h->pager, pid, false);
             return rc;
@@ -382,8 +427,8 @@ int heap_write_ver(Heap *h, u32 xid, Rid rid, const u8 *rec, u16 len)
 
     u16 slot_off = page_slot_offset(f->data, rid.slot);
     u32 lsn = 0;
-    rc = wal_log(h, xid, LOG_UPDATE, rid.page, rid.slot, slot_off,
-                 old, old_len, rec, len, &lsn);
+    rc = heap_wal_log(h, xid, LOG_UPDATE, rid.page, rid.slot, slot_off,
+                      old, old_len, rec, len, &lsn);
     if (rc != OK) {
         pager_unpin(h->pager, rid.page, false);
         return rc;
@@ -432,7 +477,7 @@ int heap_delete(Heap *h, u32 xid, Rid rid)
 
     u16 slot_off = page_slot_offset(f->data, rid.slot);
     u32 lsn = 0;
-    rc = wal_log(h, xid, LOG_DELETE, rid.page, rid.slot, slot_off, old, old_len, NULL, 0, &lsn);
+    rc = heap_wal_log(h, xid, LOG_DELETE, rid.page, rid.slot, slot_off, old, old_len, NULL, 0, &lsn);
     if (rc != OK) {
         pager_unpin(h->pager, rid.page, false);
         return rc;
@@ -485,8 +530,8 @@ int heap_update(Heap *h, u32 xid, Rid rid, const u8 *rec, u16 len, Rid *new_rid)
     if (len <= old_len) {
         u16 slot_off = page_slot_offset(f->data, rid.slot);
         u32 lsn = 0;
-        rc = wal_log(h, xid, LOG_UPDATE, rid.page, rid.slot, slot_off,
-                     old, old_len, rec, len, &lsn);
+        rc = heap_wal_log(h, xid, LOG_UPDATE, rid.page, rid.slot, slot_off,
+                          old, old_len, rec, len, &lsn);
         if (rc != OK) {
             pager_unpin(h->pager, rid.page, false);
             return rc;
@@ -507,8 +552,8 @@ int heap_update(Heap *h, u32 xid, Rid rid, const u8 *rec, u16 len, Rid *new_rid)
     /* 变长：删旧插新，RID 会变 */
     u16 slot_off = page_slot_offset(f->data, rid.slot);
     u32 dlsn = 0;
-    rc = wal_log(h, xid, LOG_DELETE, rid.page, rid.slot, slot_off,
-                 old, old_len, NULL, 0, &dlsn);
+    rc = heap_wal_log(h, xid, LOG_DELETE, rid.page, rid.slot, slot_off,
+                      old, old_len, NULL, 0, &dlsn);
     if (rc != OK) {
         pager_unpin(h->pager, rid.page, false);
         return rc;
@@ -554,369 +599,6 @@ int heap_get(Heap *h, Rid rid, u8 *buf, u16 bufsize, u16 *len_out)
     }
     pager_unpin(h->pager, rid.page, false);
     return rc;
-}
-
-/* ---------------- 扫描：按页号区间，不依赖页链 ---------------- */
-
-int heap_scan_begin(Heap *h, HeapScan **out)
-{
-    if (!h || !out)
-        return E_INVAL;
-    HeapScan *s = calloc(1, sizeof(*s));
-    if (!s)
-        return E_IO;
-    s->h = h;
-    s->page_id = 0;
-    s->next_slot = 0;
-    s->max_page = (u32)pager_npages(h->pager);
-    *out = s;
-    return OK;
-}
-
-/* 放开当前 pin 着的页（如果有） */
-static void heap_scan_release(HeapScan *s)
-{
-    if (s->cur) {
-        pager_unpin(s->h->pager, s->page_id, false);
-        s->cur = NULL;
-    }
-}
-
-/*
- * 公开版：放开当前 pin 着的页。
- *
- * 为什么要给调用方用 —— 见 heap.h 里的说明：
- * 扫描器会一直 pin 着当前页，调用方拿着扫描器的时候手里就有 frame 域的锁，
- * 这时候去取 B+tree 的锁（btree 域）就变成了 "frame → btree" 的逆序。
- */
-void heap_scan_release_page(HeapScan *s)
-{
-    if (s)
-        heap_scan_release(s);
-}
-
-int heap_scan_next(HeapScan *s, Rid *rid, u8 *buf, u16 bufsize, u16 *len_out)
-{
-    if (!s || !rid || !buf || !len_out)
-        return E_INVAL;
-
-    Heap *h = s->h;
-
-    for (;;) {
-        if (s->page_id >= s->max_page) {
-            heap_scan_release(s);
-            return E_EOF;
-        }
-
-        /*
-         * 当前页还 pin 着就直接用 —— 省掉每行两次哈希查找。
-         * 换页时才重新 get。
-         */
-        PageFrame *f = s->cur;
-        if (!f) {
-            int rc = pager_get(h->pager, s->page_id, &f);
-            if (rc != OK) {
-                s->page_id++;
-                s->next_slot = 0;
-                continue;
-            }
-            s->cur = f;          /* 保持 pin 住，扫完这页再放开 */
-
-            /* 跳过别的表的页、非 heap 页 */
-            if (f->data[H_TYPE] != PT_HEAP || page_table_id(f->data) != h->tid) {
-                heap_scan_release(s);
-                s->page_id++;
-                s->next_slot = 0;
-                continue;
-            }
-        }
-
-        while (s->next_slot < page_slot_count(f->data)) {
-            u16 slot = s->next_slot++;
-            const u8 *rec;
-            u16 len;
-            if (page_get(f->data, slot, &rec, &len) != OK)
-                continue;
-
-            if (len > bufsize) {
-                heap_scan_release(s);
-                return E_NOSPACE;
-            }
-            memcpy(buf, rec, len);
-            *len_out = len;
-            *rid = rid_make(s->page_id, slot);
-            return OK;
-        }
-
-        /* 这一页扫完了 → 换下一页 */
-        heap_scan_release(s);
-        s->page_id++;
-        s->next_slot = 0;
-    }
-}
-
-void heap_scan_end(HeapScan *s)
-{
-    if (!s)
-        return;
-    heap_scan_release(s);
-    free(s);
-}
-
-/* ---------------- 批量扫描（v1.2 步骤 0） ---------------- */
-
-/*
- * 零拷贝批扫描：返回当前页里剩下的行，**行指针直接指向页内**。
- *
- * ==================== 为什么零拷贝 ====================
- *
- * 堆表的行是**内联在页里**的，所以"取一行"本来不需要拷贝 ——
- * 逐行路径的 memcpy 纯粹是接口逼出来的。
- *
- * 批路径把这件事摊开：一次给出整页的行指针，
- * 页保持 pin 住，指针就一直有效。
- *
- * 顺带消掉的还有 **4K 别名**：页缓冲（4 KB）和竞技场（256 KB）
- * 常常低 12 位相同，"从页里读、向竞技场写"撞上 store-to-load forwarding 误判，
- * 内存消歧器每次都要多等一拍 —— 实测这一项就占了 30% 的扫描时间。
- * 不拷就没有这个依赖。
- *
- * ==================== 语义必须与 heap_scan_next 一致 ====================
- *
- *   - 空洞（len == 0）跳过
- *   - 越界（off < HDR_SIZE 或 off + len > PAGE_SIZE）跳过
- *   - 非本表的页跳过
- *   - 行的物理顺序不变（页号递增、slot 递增）
- *
- * ==================== 有效期 ====================
- *
- * 行指针指向页内，所以**页必须在使用期间保持 pin**：
- * 本函数保持 s->cur 不释放，直到下一次调用（换页时释放旧页）或 heap_scan_end。
- * 调用方的约定：**行字节的有效期到下一次 batch_scan 调用为止。**
- *
- * 批次大小 = 一页里的行数（几十行），不是 1024。
- */
-int heap_scan_page_batch(HeapScan *s, AmRowRef *out, int max, int *n_out)
-{
-    if (!s || !out || !n_out || max <= 0)
-        return E_INVAL;
-
-    *n_out = 0;
-
-    Heap *h = s->h;
-
-    for (;;) {
-        if (s->page_id >= s->max_page) {
-            heap_scan_release(s);
-            return E_EOF;
-        }
-
-        PageFrame *f = s->cur;
-        if (!f) {
-            int rc = pager_get(h->pager, s->page_id, &f);
-            if (rc != OK) {
-                s->page_id++;
-                s->next_slot = 0;
-                continue;
-            }
-            s->cur = f;
-
-            if (f->data[H_TYPE] != PT_HEAP || page_table_id(f->data) != h->tid) {
-                heap_scan_release(s);
-                s->page_id++;
-                s->next_slot = 0;
-                continue;
-            }
-        }
-
-        const u8 *pg = f->data;
-        const u16 slots = page_slot_count(pg);
-        int n = 0;
-
-        while (s->next_slot < slots && n < max) {
-            const u16 slot = s->next_slot;
-            const u16 len = page_slot_len_raw(pg, slot);
-
-            if (len == 0) {                 /* 已删除（空洞） */
-                s->next_slot++;
-                continue;
-            }
-
-            const u16 off = page_slot_off_raw(pg, slot);
-            if (off < HDR_SIZE || (u32)off + (u32)len > PAGE_SIZE) {
-                s->next_slot++;
-                continue;
-            }
-
-            out[n].data = pg + off;         /* 零拷贝：直接指向页内 */
-            out[n].len = len;
-            out[n].rid = rid_make(s->page_id, slot);
-            n++;
-            s->next_slot++;
-        }
-
-        *n_out = n;
-        if (n > 0)
-            return OK;                     /* 页保持 pin 住 */
-
-        /* 这一页没有行 → 换下一页 */
-        heap_scan_release(s);
-        s->page_id++;
-        s->next_slot = 0;
-    }
-}
-
-/* ---------------- 页内 compact（v1.2 步骤 5） ---------------- */
-
-/*
- * 整理一页。
- *
- * ==================== 为什么在副本上整理 ====================
- *
- * WAL 规则要求"**先写日志，再改页**"。
- * 而整理的 after 镜像必须**整理完才知道** —— 这看着像个死结。
- *
- * 解法：在**副本**上整理。
- *
- *     before = 当前页的副本
- *     after  = 当前页的副本（在这个副本上整理）
- *     → 写日志（before / after）
- *     → 日志写好了，才把 after 盖回真页
- *
- * 这样"改页"这一步永远发生在"日志写好"之后，
- * 崩溃时不会出现"页变了、日志里没有"的窗口。
- *
- * ==================== 为什么只要一条日志记录 ====================
- *
- * 一条记录里带 before 和 after 两份整页镜像：
- *   - 重放（redo）：盖上 after → 最终态
- *   - 回滚（undo）：盖回 before → 整理被撤销
- *
- * 比"整理前后各写一条"好的地方是：日志里的信息是**原子的**，
- * 不会出现"日志里只有前半截"的状态。
- */
-int heap_compact_page(Heap *h, u32 xid, u32 page_id,
-                      u16 frag_threshold_pct, HeapPageCompact *out)
-{
-    HeapPageCompact res;
-    memset(&res, 0, sizeof(res));
-
-    if (!h || page_id == PAGE_ID_NIL)
-        return E_INVAL;
-    if (out)
-        *out = res;
-
-    PageFrame *f;
-    int rc = pager_get(h->pager, page_id, &f);
-    if (rc != OK)
-        return rc;
-
-    /* 不是本表的页 → 不碰（别人的页不能被整理） */
-    if (f->data[H_TYPE] != PT_HEAP || page_table_id(f->data) != h->tid) {
-        pager_unpin(h->pager, page_id, false);
-        return E_NOTFOUND;
-    }
-
-    res.frag_before = page_fragmentation(f->data);
-    res.used_before = page_used_bytes(f->data);
-    res.live_before = page_live_bytes(f->data);
-
-    if (res.frag_before == 0 ||
-        (frag_threshold_pct && res.frag_before < frag_threshold_pct)) {
-        pager_unpin(h->pager, page_id, false);
-        return OK;
-    }
-
-    u16 free_before = page_free_bytes(f->data);
-
-    /* before = 整理前；after = 在副本上整理后的结果 */
-    u8 before[PAGE_SIZE];
-    u8 after[PAGE_SIZE];
-    memcpy(before, f->data, PAGE_SIZE);
-    memcpy(after, f->data, PAGE_SIZE);
-    page_compact(after);
-
-    /* 先写日志 */
-    u32 lsn = 0;
-    rc = wal_log(h, xid, LOG_PAGEDATA, page_id, 0, LOG_NO_SLOT_OFF,
-                 before, (u16)PAGE_SIZE, after, (u16)PAGE_SIZE, &lsn);
-    if (rc != OK) {
-        /* 日志没写好 → 页不许动 */
-        pager_unpin(h->pager, page_id, false);
-        return rc;
-    }
-
-    /* 日志写好了，才把整理结果落到真页上 */
-    memcpy(f->data, after, PAGE_SIZE);
-    if (lsn)
-        page_set_lsn(f->data, lsn);
-
-    /*
-     * 空间回收了 → freelist 的档位必须更新。
-     *
-     * 不更新的后果：这一页在 freelist 里还挂着"旧的（更小的）档位"，
-     * 找页的时候会被当成"塞不下"而跳过 —— 空间明明空着却用不上。
-     */
-    freelist_set(h->fl, page_id, page_free_bytes(f->data));
-
-    res.compacted = true;
-    {
-        u16 free_now = page_free_bytes(f->data);
-        /* 回收量 = 整理后的可用空间 − 整理前的可用空间（整理只会变大） */
-        res.freed = (u64)(u16)(free_now - free_before);
-    }
-
-    if (out)
-        *out = res;
-
-    return pager_unpin(h->pager, page_id, true);
-}
-
-/*
- * 整理整张表。
- *
- * 逐页独立：一页整理失败不影响别的页 —— 维护操作不该因为
- * "某一页有点怪"就整体失败。
- */
-int heap_compact_table(Heap *h, u32 xid, u16 frag_threshold_pct,
-                       HeapCompactStats *stats_out)
-{
-    HeapCompactStats st;
-    memset(&st, 0, sizeof(st));
-    if (!h)
-        return E_INVAL;
-
-    u32 max_page = (u32)pager_npages(h->pager);
-    for (u32 pid = 0; pid < max_page; pid++) {
-        HeapPageCompact pc;
-        int rc = heap_compact_page(h, xid, pid, frag_threshold_pct, &pc);
-        if (rc == E_NOTFOUND)
-            continue;               /* 不是本表的页 */
-        if (rc != OK) {
-            if (stats_out)
-                *stats_out = st;
-            return rc;
-        }
-        st.pages_scanned++;
-        st.used_bytes += pc.used_before;
-        st.live_bytes += pc.live_before;
-        if (pc.compacted) {
-            st.pages_compacted++;
-            st.bytes_freed += pc.freed;
-        }
-    }
-
-    if (stats_out)
-        *stats_out = st;
-    return OK;
-}
-
-u16 heap_compact_frag_pct(const HeapCompactStats *st)
-{
-    if (!st || st->used_bytes == 0)
-        return 0;
-    u64 hole = st->used_bytes - st->live_bytes;
-    return (u16)((hole * 100u) / st->used_bytes);
 }
 
 /* ---------------- 观察 ---------------- */

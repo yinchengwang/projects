@@ -54,6 +54,7 @@
 #include "catalog/catalog_priv.h"
 
 #include "common/latch.h"
+#include "common/lockstat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,10 +142,10 @@ static CatLockSlot *slot_of(Catalog *cat, bool create)
     return reuse;
 }
 
-/* 底层 rwlock 的入口（Catalog 对外是不完整的，rw 是内部成员） */
-static pthread_rwlock_t *rw_of(const Catalog *cat)
+/* 底层读写锁的入口（Catalog 对外是不完整的，rw 是内部成员） */
+static DbRwLock *rw_of(const Catalog *cat)
 {
-    return (pthread_rwlock_t *)&cat->rw;
+    return (DbRwLock *)&cat->rw;
 }
 
 /* ---------------- 四个原语 ---------------- */
@@ -169,10 +170,9 @@ void catalog_read_lock(const Catalog *cat)
         return;
     }
     if (s->rd == 0) {
-        if (pthread_rwlock_rdlock(rw_of(cat)) != 0) {
-            catalog_violation("pthread_rwlock_rdlock 失败");
-            return;
-        }
+        LS_ENTER(LS_CAT);
+        db_rwlock_rdlock(rw_of(cat));
+        LS_LEAVE(LS_CAT);
     }
     s->rd++;
 
@@ -192,8 +192,9 @@ void catalog_read_unlock(const Catalog *cat)
     }
     s->rd--;
     latch_order_release(LATCH_CATALOG);
-    if (s->rd == 0)
-        pthread_rwlock_unlock(rw_of(cat));
+    if (s->rd == 0) {
+        db_rwlock_rdunlock(rw_of(cat));
+    }
 }
 
 /*
@@ -219,10 +220,7 @@ void catalog_write_lock(Catalog *cat)
         catalog_violation("持有读锁时取写锁（升级）");
         return;
     }
-    if (pthread_rwlock_wrlock(rw_of(cat)) != 0) {
-        catalog_violation("pthread_rwlock_wrlock 失败");
-        return;
-    }
+    db_rwlock_wrlock(rw_of(cat));
     s->wr = 1;
 
     latch_order_acquire(LATCH_CATALOG);
@@ -240,7 +238,7 @@ void catalog_write_unlock(Catalog *cat)
     }
     s->wr = 0;
     latch_order_release(LATCH_CATALOG);
-    pthread_rwlock_unlock(rw_of(cat));
+    db_rwlock_wrunlock(rw_of(cat));
 }
 
 /* ---------------- 公开 API 的包装层 ---------------- */

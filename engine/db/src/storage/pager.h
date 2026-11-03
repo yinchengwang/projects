@@ -1,6 +1,8 @@
 #ifndef DB_STORAGE_PAGER_H
 #define DB_STORAGE_PAGER_H
 
+#include <stdatomic.h>
+
 #include "common/config.h"
 #include "common/error.h"
 #include "common/types.h"
@@ -16,9 +18,29 @@ typedef struct Pager Pager;
 typedef struct PageFrame {
     u8   data[PAGE_SIZE];
     u32  page_id;     /* PAGE_ID_NIL = 空帧 */
-    int  pin_count;   /* >0 表示有人正拿着指针，不许逐出 */
+    /*
+     * pin_count：>0 表示有人正拿着指针，不许逐出。
+     *
+     * 【为什么是原子量】（v1.2 步骤 7 / A3）
+     *
+     * 读路径上它要被**读多写少**地更新：每次 pager_get 加一、
+     * 每次 pager_unpin 减一。以前它被池级互斥量保护，于是
+     * "加一"和"减一"都要抢那把全局锁 —— 一次页访问要抢 4 次。
+     *
+     * 它本身是个纯粹的计数器：加一减一之间不需要跟别的数据结构
+     * 保持一致，只要"最终算准"就行。改成原子量之后，
+     * unpin 路径上的减一**不再需要池级锁** ✓。
+     *
+     * 不变式「持有内容锁 ⇒ pin_count ≥ 1」依然成立 ——
+     * 见 pager.c 里的说明。
+     */
+    atomic_int pin_count;
     bool dirty;
-    int  clock_ref;   /* Clock 算法的引用位 */
+    /*
+     * clock_ref：Clock 算法的引用位。
+     * 命中时置 1（读路径上做），逐出时清零（写路径上做）→ 原子量。
+     */
+    atomic_int clock_ref;
 
     /*
      * rec_lsn：**自上次刷盘以来，这一页第一次被改动时**的日志 LSN。
