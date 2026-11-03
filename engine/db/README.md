@@ -201,8 +201,8 @@ gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Iinclude -Isrc \
 已验证：gcc 14.2.0 + mingw32-make，`-Werror` 零警告，
 crc32/crc16 对标准测试向量通过（且与逐位参考实现逐字节一致）。
 
-**当前状态**：v1.1 完成，**v1.2 步骤 0（SPI 批接口）、步骤 1（copy-out）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）已完成**，
-**43 个测试文件 / 55 处断言全绿 / 0 FAIL**（unit 28 + integration 15），零错误零警告，依赖方向正确。
+**当前状态**：v1.1 完成，**v1.2 步骤 0（SPI 批接口）、步骤 1（copy-out）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）、步骤 4b（wal 域）已完成**，
+**44 个测试文件 / 56 处断言全绿 / 0 FAIL**（unit 29 + integration 15），零错误零警告，依赖方向正确。
 执行器零改动（`grep -rn graph src/query/` 零命中）——
 加第 2 个模态不需要动执行器，这是 v0.9 定 SPI 时最想验证的事。
 
@@ -1218,5 +1218,51 @@ txn 域保护三样东西：`next_xid`、`clog`、活跃表。
 **验证性缩小实验**（去掉 `db_exec` 大锁）：`test_concurrent` 的失败项与步骤 3 **完全一样**
 （并发插入 / 缓冲池压力 / 崩溃恢复 / 并发读写）→ 竞态在 **heap / pager / WAL** 域，
 是步骤 4b / 4c 的活。**大锁仍然不能退役**，但 txn 域已经能独立站住。
+
+#### 步骤 4b（wal 域）已完成：它保护的不是内存，是**日志文件本身**
+
+wal 域保护：LSN 计数、undo 链（按 xid 分槽）、日志文件本身、扫描游标。
+
+`wal_append_xid` 里这三步必须是一个整体：
+
+```
+    lsn = last_lsn + 1;      ← 取号
+    FSEEK(f, 0, SEEK_END);   ← 定位到文件尾
+    fwrite(b, 1, n, f);      ← 写一条记录
+```
+
+两个线程同时进来 → 取到**同一个 LSN**（恢复时日志顺序错乱）；
+更糟的是各自 fseek 到尾再 fwrite → **字节交错** →
+文件里出现半条 A、半条 B → CRC 失败 → 恢复**截断** →
+截断点之后的**所有**记录作废。也就是说，**一次并发写日志的竞态能废掉整段日志**，
+而且没有报错、没有崩溃 —— 只是"数据不见了"。
+
+| 路径 | 手段 | 为什么 |
+|---|---|---|
+| **写**（append / fsync / reset） | wal 域的互斥锁 | 取号 → 定位 → 写必须独占；同一 `FILE*` 不能并发 fsync |
+| **扫描**（scan / read_payload） | **同一把**域锁 | 扫描与 append 争同一个 `FILE*` 和同一个 `scratch` 缓冲，不加锁会读到"写了一半"的记录 |
+| **读**（last_lsn / nrecords / max_xid / flushed_lsn） | **原子读，一把锁都不取** | 热路径（每条语句结束都查 `flushed_lsn`） |
+
+**锁的粒度**：**每实例一把**（`struct Wal` 里的 `pthread_mutex_t mu`）——
+与 txn 域不同：WAL 是实例级资源（一个库一个日志文件），不同库之间没有共享状态；
+`Wal` 的生命周期由 `wal_open`/`wal_close` 管住 → 不需要改任何调用点。
+
+**发布顺序**：`last_lsn` 在 `fwrite` 成功**之后**才发布 ——
+反过来读者会看到"已分配但没落盘"的 LSN，刷页时会误判"日志已落盘"。
+
+**验收**（`test/unit/test_wal_domain.c`，4 项）：并发 append 的 LSN 唯一且连续
+（2400 条，0 重复 0 断号）/ 并发写出的日志一条不差地扫回来（2400/2400）/
+append 与 fsync 混跑时计数器单调不减 / undo 链按 xid 独立。
+**这个测试是真的会红的**：拿上一步的 `wal.c` 跑同一个测试，
+立刻报"LSN 重复 2087 个、2400 条只扫回 125 条"。
+
+**验证性缩小实验**（去掉 `db_exec` 大锁）：`test_concurrent` 的失败项与步骤 4a **完全一样**
+（同批行号），`test_mvcc_it` / `test_copyout` 全绿 →
+竞态仍在 **heap / pager / frame** 域。**大锁仍然不能退役**，
+但 wal 域已经能独立站住（新测试不经过 `db_exec`，直接压 `wal_append_xid`）。
+
+⚠️ **给步骤 4c 的约束**：刷页前要调 WAL flush 钩子，那时若已握着 frame 域的锁，
+就是"frame(5) → wal(3)"**逆序** → 全序断言 abort；
+刷页路径必须**先落日志、再取 frame 锁**。
 
 **执行 v1.2 之前要读**：`docs/PLAN-v1.2.md`（七步计划 + 验收 A1–A9 + §3 执行记录）。
