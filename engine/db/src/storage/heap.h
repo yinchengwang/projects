@@ -128,4 +128,88 @@ int  heap_scan_page_batch(HeapScan *s, AmRowRef *out, int max, int *n_out);
 u32  heap_npages(const Heap *h);
 u64  heap_wal_calls(const Heap *h);
 
+/* ---------------- 页内 compact（v1.2 步骤 5） ---------------- */
+
+/*
+ * 碎片率阈值：碎片率超过这个百分比的页才值得整理。
+ *
+ * 为什么要阈值而不是"每次都整理"：
+ *   整理要写两次整页镜像进 WAL（8KB/页），很贵。
+ *   而碎片率低的时候整理几乎回收不到空间 —— 白花钱。
+ *
+ * 50% 是计划里定的值：整理一次能把页内空间回收一半以上。
+ */
+#define HEAP_COMPACT_FRAG_PCT 50u
+
+/* compact 的统计 */
+typedef struct {
+    u32 pages_scanned;   /* 看过的页数 */
+    u32 pages_compacted; /* 真正整理过的页数 */
+    u64 bytes_freed;     /* 回收的空间（整理前后 free_bytes 之差） */
+    u64 used_bytes;      /* 整理前：全表已占字节（含空洞） */
+    u64 live_bytes;      /* 整理前：全表活记录字节 */
+} HeapCompactStats;
+
+/* 单页整理的结果 */
+typedef struct {
+    bool compacted;   /* 这一页有没有被整理 */
+    u16  frag_before; /* 整理前的碎片率（百分比） */
+    u16  used_before; /* 整理前已占字节（含空洞） */
+    u16  live_before; /* 整理前活记录字节 */
+    u64  freed;       /* 回收的字节 */
+} HeapPageCompact;
+
+/*
+ * 整理一页：把活记录压到页尾，回收页内空洞。
+ *
+ * ==================== RID 不变 ====================
+ *
+ * 整理只改**物理位置**，slot 编号不变
+ * → RID = (page, slot) 不变 → 索引项、游标全都有效。
+ * 这是"compact"而不是"重表"的分界线。
+ *
+ * ==================== 崩溃安全 ====================
+ *
+ * 写一条 WAL_PAGEDATA 整页镜像记录：
+ *   before = 整理前的整页
+ *   after  = 整理后的整页
+ *
+ * - 重放（redo）：直接盖上 after → 最终态 ✓
+ * - 回滚（undo）：盖回 before → 整理被撤销 ✓
+ *
+ * 只写一条而不是"前后各一条"：一条记录里两份镜像，
+ * 日志里的信息是**原子的** —— 不会出现"日志里只有前半截"的状态。
+ *
+ * ==================== 锁 ====================
+ *
+ * 整理全程在 pager_get / pager_unpin 之间，
+ * 页的内容锁（frame 域）一直持有 ✓
+ * 写 WAL 时是 frame(4) → wal(5)，符合获取全序 ✓
+ *
+ * 返回值：
+ *   OK      —— 成功（out 告诉你到底有没有整理）
+ *   E_NOTFOUND —— 这一页不属于本表
+ *   其它    —— 出错
+ *
+ * frag_threshold_pct = 0 表示"只要有碎片就整理"。
+ */
+int  heap_compact_page(Heap *h, u32 xid, u32 page_id,
+                       u16 frag_threshold_pct, HeapPageCompact *out);
+
+/*
+ * 整理整张表：逐页看碎片率，超过阈值的就整理。
+ *
+ * 逐页独立 —— 一页整理失败不影响别的页。
+ */
+int  heap_compact_table(Heap *h, u32 xid, u16 frag_threshold_pct,
+                        HeapCompactStats *stats_out);
+
+/*
+ * 全表碎片率（百分比）：(已占 - 活记录) / 已占。
+ *
+ * 用的是 heap_compact_table **统计的整理前**的字节数 ——
+ * 也就是说，它回答的是"这次 VACUUM 收拾的是多碎的一张表"。
+ */
+u16  heap_compact_frag_pct(const HeapCompactStats *st);
+
 #endif /* DB_STORAGE_HEAP_H */

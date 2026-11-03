@@ -319,7 +319,8 @@ static void t6_relational_unchanged(DB *db)
     r = NULL;
     CHECK(run_sql(db, "VACUUM users;", &r) == DB_OK);
     if (r) {
-        CHECK(db_result_cols(r) == 3);
+        /* 六列：scanned/removed/kept/compacted_pages/freed_bytes/frag_pct */
+        CHECK(db_result_cols(r) == 6);
         db_result_free(r);
     }
 }

@@ -492,7 +492,12 @@ static void t10_vacuum_sql(void)
     CHECK(r != NULL);
     if (r) {
         CHECK(db_result_rows(r) == 1);
-        CHECK(db_result_cols(r) == 3);
+        /*
+         * 六列（v1.2 步骤 5 起）：
+         *   scanned / removed / kept / compacted_pages / freed_bytes / frag_pct
+         * 前三列是老的三列，后面三列是页内 compact 的成果。
+         */
+        CHECK(db_result_cols(r) == 6);
         /*
          * 物理版本数是 2，不是 3：
          *   原始版本（INSERT）→ 被 UPDATE 替换，打 xmax

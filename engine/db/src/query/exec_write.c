@@ -419,6 +419,7 @@ int exec_vacuum(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
     }
 
     AmVacuumStats stats;
+    memset(&stats, 0, sizeof(stats));
     rc = tc.am->vacuum(tc.am, db->txns, db->cur_xid, &stats);
     if (rc != OK) {
         snprintf(err, (size_t)errcap, "VACUUM 失败: %s", err_name(rc));
@@ -444,21 +445,30 @@ int exec_vacuum(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
     }
 
     /*
-     * 汇报成一行三列：scanned / removed / kept。
+     * 汇报成一行六列：
+     *   scanned / removed / kept / compacted_pages / freed_bytes / frag_pct
      *
      * 用 affected = removed —— 这样调用方（db_result_affected）
      * 拿到的就是"回收了多少版本"，和 PG 的 VACUUM 语义接近。
+     *
+     * compacted_pages / freed_bytes / frag_pct 是 v1.2 步骤 5 加的
+     * —— 页内 compact 干了多少活，得能看见，
+     * 否则"VACUUM 说成功"和"空间真回收了"分不开。
+     *
+     * frag_pct 是**整理前**的碎片率：它回答的是
+     * "这次 VACUUM 收拾的是多碎的一张表"。
+     * 整理之后再来一次 VACUUM，frag_pct 应该是 0。
      */
     QueryResult *r = calloc(1, sizeof(QueryResult));
     if (!r)
         return E_IO;
 
-    r->ncols = 3;
+    r->ncols = 6;
     r->nrows = 1;
     r->affected = (int)stats.removed;
 
-    r->colnames = calloc(3, sizeof(char *));
-    r->cells = calloc(3, sizeof(char *));
+    r->colnames = calloc(6, sizeof(char *));
+    r->cells = calloc(6, sizeof(char *));
     if (!r->colnames || !r->cells) {
         qr_free(r);
         return E_IO;
@@ -467,13 +477,19 @@ int exec_vacuum(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
     r->colnames[0] = strdup("scanned");
     r->colnames[1] = strdup("removed");
     r->colnames[2] = strdup("kept");
+    r->colnames[3] = strdup("compacted_pages");
+    r->colnames[4] = strdup("freed_bytes");
+    r->colnames[5] = strdup("frag_pct");
 
-    char buf[3][32];
+    char buf[6][32];
     snprintf(buf[0], sizeof(buf[0]), "%llu", (unsigned long long)stats.scanned);
     snprintf(buf[1], sizeof(buf[1]), "%llu", (unsigned long long)stats.removed);
     snprintf(buf[2], sizeof(buf[2]), "%llu", (unsigned long long)stats.kept);
+    snprintf(buf[3], sizeof(buf[3]), "%llu", (unsigned long long)stats.compacted_pages);
+    snprintf(buf[4], sizeof(buf[4]), "%llu", (unsigned long long)stats.freed_bytes);
+    snprintf(buf[5], sizeof(buf[5]), "%llu", (unsigned long long)stats.frag_pct);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 6; i++) {
         r->cells[i] = strdup(buf[i]);
         if (!r->cells[i]) {
             qr_free(r);

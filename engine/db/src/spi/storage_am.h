@@ -89,6 +89,9 @@ typedef struct {
     u64 scanned;
     u64 removed;
     u64 kept;
+    u64 compacted_pages; /* 页内 compact 整理过的页数 */
+    u64 freed_bytes;     /* 页内 compact 回收的空间（字节） */
+    u64 frag_pct;        /* 整理前的全表碎片率（百分比） */
 } AmVacuumStats;
 
 /*

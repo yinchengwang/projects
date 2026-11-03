@@ -13,6 +13,7 @@
  *   1. 扫全表的所有版本
  *   2. 对每个版本判断是不是死版本
  *   3. 是死版本 → heap_delete（写日志 + 置空 slot）
+ *   4. **页内 compact**（v1.2 步骤 5）：把删除造出来的空洞压掉
  *
  * 【为什么必须先收集再删除】
  *
@@ -94,6 +95,41 @@ int vacuum_table(Heap *h, TxnTable *txn, u32 xid, VacuumStats *stats)
     }
 
     free(dead);
+
+    /*
+     * ---- 第三遍：页内 compact（v1.2 步骤 5）----
+     *
+     * ==================== 为什么必须排在删除之后 ====================
+     *
+     * 页内空洞是**删除**造出来的 —— 不删就没有空洞可整理。
+     * 所以整理必须排在删除之后，而不是"扫描时顺手"：
+     * 扫描的时候那些死版本还在页里，整理它们等于白整理。
+     *
+     * ==================== 阈值为什么是 0 ====================
+     *
+     * 计划（PLAN-v1.2 §1.4）写的是"碎片率 > 50% 的页进入 compact 队列"。
+     * 那是**插入路径**的取舍标准：插入时顺手整理一下，
+     * 碎片率不到一半就不值得为它写一条整页日志。
+     *
+     * 但 VACUUM 是**显式的维护操作** —— 用户就是要"把表收拾干净"，
+     * 而且验收 A5 要求"全表碎片率 < 20%"：
+     * 逐页 50% 的阈值**保证不了**这个结果
+     * （一堆 40% 碎片的页摊在一起，全表就是 40%）。
+     *
+     * 所以这里的阈值取 0：**只要有空洞就整理**。
+     * 代价是每个整理过的页写一条 8KB 的日志记录
+     * （before + after 两份整页镜像）—— WAL 增长换空间回收，
+     * 这个取舍交给步骤 6 的 checkpoint 去兜（日志会被截断）。
+     */
+    if (rc == OK) {
+        HeapCompactStats cst;
+        rc = heap_compact_table(h, xid, 0, &cst);
+        if (rc == OK) {
+            local.compacted_pages = cst.pages_compacted;
+            local.freed_bytes = cst.bytes_freed;
+            local.frag_pct = heap_compact_frag_pct(&cst);
+        }
+    }
 
     if (stats)
         *stats = local;

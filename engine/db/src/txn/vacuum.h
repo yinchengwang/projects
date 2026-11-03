@@ -33,6 +33,14 @@
  * 我们这里索引存的是 (page, slot)，搬移就得重写所有索引项，
  * 复杂度太高。v0.7 先做"标记删除"，页空间回收留给 v0.8。
  *
+ * ==================== v1.2 步骤 5 的更正 ====================
+ *
+ * 上面那段"compact 会让 RID 变化"的判断**是错的** ——
+ * 我们的 `page_compact` 只改**物理位置**，slot 编号不变，
+ * 所以 RID = (page, slot) 稳定，索引与游标都不受影响。
+ *
+ * v1.2 步骤 5 把 compact 接上了（见 vacuum.c 里的说明）。
+ *
  * 【一个重要的教学点】
  *
  * 「slot 永不复用」这条铁律在这里依然成立 —— vacuum 删掉 slot 后，
@@ -42,9 +50,12 @@
  */
 
 typedef struct {
-    u64 scanned;      /* 扫描过的版本数 */
-    u64 removed;      /* 回收的死版本数 */
-    u64 kept;         /* 保留的活版本数 */
+    u64 scanned;         /* 扫描过的版本数 */
+    u64 removed;         /* 回收的死版本数 */
+    u64 kept;            /* 保留的活版本数 */
+    u64 compacted_pages; /* 整理过（页内 compact）的页数 */
+    u64 freed_bytes;     /* 页内 compact 回收的空间（字节） */
+    u64 frag_pct;        /* 整理**前**的全表碎片率（百分比） */
 } VacuumStats;
 
 /*

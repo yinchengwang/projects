@@ -361,6 +361,9 @@ static int heap_am_vacuum(StorageAM *am, TxnTable *txns, u32 xid,
         out->scanned = st.scanned;
         out->removed = st.removed;
         out->kept = st.kept;
+        out->compacted_pages = st.compacted_pages;
+        out->freed_bytes = st.freed_bytes;
+        out->frag_pct = st.frag_pct;
     }
     return OK;
 }
