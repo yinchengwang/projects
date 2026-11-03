@@ -2066,7 +2066,7 @@ blob 的两张虚拟表接进了 SQL。详见 PLAN-v0.9.md。
 
 **八模态盘点**（目标 §1.1 与最初竞争力分析对照）：
 关系 ✅(v0.1–7) / blob ✅(v0.8) / 图→v0.11 / 向量→v1.0 /
-全文→v1.3 / 空间→v1.4 / 时序→v1.5 / 文档→v1.6。
+全文 ✅(v1.3) / 空间→v1.4 / 时序→v1.5 / 文档→v1.6。
 **v1.6 收官时新增复盘章节**：三条贯穿线索（不变文件+合并 ×4、外部值 ×3、下推超集 ×7）
 与事务语义三足鼎立表（MVCC / 不可变 / 锁+WAL）。
 
@@ -2076,6 +2076,35 @@ blob 的两张虚拟表接进了 SQL。详见 PLAN-v0.9.md。
 两者指向同一批判决 —— PLAN 是判决的源头，`MODALITIES.md` 是按模态的重排，
 **没有第二份真相**。加第 9 个模态时，模板是 `MODALITIES.md` §10（SPI 三件套对照）
 与 §12（跨模态公共约定）。
+
+**v1.3（全文检索）已完成（2026-11-03）** —— 模态 4 落地，
+执行记录见 `PLAN-v1.3.md` §3，模态机制见 `MODALITIES.md` §6。
+
+#### v1.3 的复盘：三条能带走的结论
+
+**① 「段头记区间」这件事，必须同时约束写入顺序。**
+段头记的是 `dict_start` + `dict_count` 这样的**连续区间**，
+读侧就一定会按连续区间读页 —— 于是写入侧**必须**保证那批页连号。
+我们把"一个词先写倒排、再写字典"当成了理所当然，
+两个写入器各自 `pager_alloc` → 字典页与倒排页交替分配 →
+**只要字典超过一页，检索就命中 0 篇、合并就静默丢词**。
+而且**单页字典时测不出来** —— 是基准一上量（10 万文档 / 词表 5000）才撞出来的。
+**教训**：区间型元数据 = 一个隐式的写入顺序约束。
+写这类元数据时，要同时问"我写的这批东西连号吗"。
+
+**② 验收断言要能区分"机制真的发生了"和"结果看起来对"。**
+"删除后检索不到"是**查询侧**的过滤，就算合并时**没有物理丢弃**，
+它照样成立 → 这条断言**区分不出**"物理丢弃"有没有发生。
+真正的判据是"合并之后段里还有没有这篇文档的 posting"。
+**教训**：写断言时要问"如果我把那个机制关掉，这条断言会红吗"。
+关不掉，说明这条断言测的不是那个机制。
+
+**③ 代价的量纲要实测，不能靠"段有多大"来推。**
+我们一直以为"合并的代价 ∝ 段的大小"，
+实测却是 ∝ **段内的词数**（两个老段共 142 页，一次合并取了 ~8700 页）：
+倒排按 term 分散存放，合并时每个 term 单独取一次页，同一页被反复取。
+**教训**：先测"代价随什么增长"，再谈优化；
+否则优化的是一个自己假设出来的量纲。
 
 ---
 
@@ -2203,11 +2232,11 @@ blob 的两张虚拟表接进了 SQL。详见 PLAN-v0.9.md。
 | v1.1 分组执行 | `src/query/exec_group.c` | ✅ | v1.1 |
 | v1.1 代价估算 | `src/query/exec_cost.c` | ✅ | v1.1 |
 | v1.1 统计信息 | `src/catalog/catalog_stats.c` | ✅ | v1.1 |
-| 全文模态 | `modalities/ft/{segment,dict,posting,bm25}.{h,c}` + `spi/ft_am.{h,c}` | | v1.3 |
+| 全文模态 | `modalities/ft/{tokenizer,bm25,ft_internal,ft_segment,ft_writer,ft_scan,ft_index,ft_merge,ft_catalog,ft_tomb,ft_recover}.{h,c}` + `modalities/ft/ft_am.{h,c}` | ✅ | v1.3 步骤 1–5 |
 | 空间模态 | `modalities/geo/{rtree,zorder}.{h,c}` + `spi/geo_am.{h,c}` | | v1.4 |
 | 时序模态 | `modalities/ts/{partition,compress}.{h,c}` + `spi/ts_am.{h,c}` | | v1.5 |
 | 文档 JSON | `modalities/json/{jsonb,path}.{h,c}`（寄生于 heap，无独立页） | | v1.6 |
-| REPL | `main.c`（BLOB / GRAPH 命令） | 占位 | v0.4（v0.11 加 GRAPH） |
+| REPL | `main.c`（BLOB / GRAPH / VEC / FT 命令） | 占位 | v0.4（v0.11 加 GRAPH / v1.0 加 VEC / v1.3 加 FT） |
 | CRC 查表 | `common/crc.c` | ✅ | v0.11 步骤 6 |
 | checkpoint + 日志截断 | `src/db_ckpt.c` | ✅ | v1.2 步骤 6 |
 | 页的 recLSN（ARIES） | `storage/pager.{h,c}`（`PageFrame.rec_lsn`） | ✅ | v1.2 步骤 6 |
