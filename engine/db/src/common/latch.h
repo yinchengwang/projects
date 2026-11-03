@@ -69,22 +69,46 @@ int latch_depth(void);
  *
  * 【获取全序（绝不逆序）】
  *
- *     catalog → txn → wal → freelist → frame
+ *     catalog → txn → frame → wal → freelist
  *
- * 顺序来源：真实调用路径 ——
- * 绑定先查 catalog → 开事务碰 txn → 写路径先 wal 后页。
+ * ⚠️ **v1.2 步骤 4c 勘误：全序与计划里写的不同。**
+ *
+ * 计划（PLAN-v1.2 §1.3）写的是 `catalog → txn → wal → freelist → frame`，
+ * 理由是"写路径先 wal 后页"。**但真实代码不是这样** ——
+ * 页内容锁一旦落地，真实嵌套关系是：
+ *
+ *   1. **frame → wal**：堆的写路径是
+ *      `pager_get(帧锁) → page_insert(改页) → wal_log(写日志)`，
+ *      日志钩子是在**页还捏在手里**的时候调的；
+ *      刷页路径同理（`flush_page` 先问钩子再写页）。
+ *   2. **frame → freelist**：`freelist_set(fl, pid, page_free_bytes(f->data))`
+ *      要读页内容算剩余空间，页还捏在手里；
+ *      B+tree 回收孩子页时也一样。
+ *
+ * 也就是说：**页比日志"更外层"**，不是相反。
+ * 计划那句"先 wal 后页"说的是**语义顺序**（日志必须先落盘才能刷页），
+ * 把它当成**锁的获取顺序**就错了 ——
+ * 语义顺序靠 WAL 规则保证（WAL 钩子 + page_lsn），不靠锁顺序。
+ *
+ * 现在的全序由**真实调用图**反推，每一条边都有代码位置支撑：
+ *
+ *   catalog → txn   绑定先查 catalog，再开事务
+ *   catalog → frame catalog 写元数据页时持 catalog 锁
+ *   frame   → wal   heap.c 的 wal_log / pager.c 的 flush_page 钩子
+ *   frame   → freelist  heap.c / btree.c 的 freelist_set
+ *
+ * 反过来没有一条边：wal 锁里不会去碰页，freelist 锁里也不会去碰页
+ * （`freelist_find` 先返回、`freelist_grow` 在页被捏住之后才调）。
  *
  * 【编号 = 获取序号】
  *
- * 计划（PLAN-v1.2 §1.3）里 frame 记作 L4、freelist 记作 L5，
- * 但**全序**是 freelist 在 frame 之前 ——
- * 本实现按**获取序号**编号（= 全序位置），对应关系：
+ * 按**获取序号**编号（= 全序位置），对应关系：
  *
  *     L1 catalog → LATCH_CATALOG  = 1
  *     L2 txn     → LATCH_TXN      = 2
- *     L3 wal     → LATCH_WAL      = 3
- *     L5 freelist→ LATCH_FREELIST = 4
- *     L4 frame   → LATCH_FRAME    = 5
+ *     L4 frame   → LATCH_FRAME    = 3
+ *     L3 wal     → LATCH_WAL      = 4
+ *     L5 freelist→ LATCH_FREELIST = 5
  *
  * 【为什么断言比测试可靠】
  *
@@ -102,9 +126,9 @@ int latch_depth(void);
 typedef enum {
     LATCH_CATALOG  = 1,   /* L1：表/列/索引元数据缓存（读写锁） */
     LATCH_TXN      = 2,   /* L2：next_xid、clog、活跃表（独占，很短） */
-    LATCH_WAL      = 3,   /* L3：日志缓冲、LSN 计数、append（独占） */
-    LATCH_FREELIST = 4,   /* L5：空闲页链（独占，很短） */
-    LATCH_FRAME    = 5,   /* L4：单页数据 + pin_count（每帧一把，极短） */
+    LATCH_FRAME    = 3,   /* L4：单页数据 + pin_count（每帧一把，极短） */
+    LATCH_WAL      = 4,   /* L3：日志缓冲、LSN 计数、append（独占） */
+    LATCH_FREELIST = 5,   /* L5：空闲页链（独占，很短） */
     LATCH_NDOMAIN  = 6
 } LatchId;
 

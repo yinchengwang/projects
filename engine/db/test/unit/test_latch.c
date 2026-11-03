@@ -60,31 +60,46 @@ static void reset_order(void)
 
 /* ---------------- 1) 全序获取 ---------------- */
 
+/*
+ * ⚠️ **v1.2 步骤 4c 勘误：全序变了。**
+ *
+ * 计划（PLAN-v1.2 §1.3）写的全序是：
+ *
+ *     catalog → txn → wal → freelist → frame
+ *
+ * 但真实代码不是这样嵌套的（详见 common/latch.h 的说明）：
+ * WAL 钩子和 freelist_set 都是在**页还捏在手里**的时候调的，
+ * 所以页比它们更外层。真实全序是：
+ *
+ *     catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)
+ *
+ * 这一项按**新全序**取域。
+ */
 static void t1_in_order(void)
 {
     reset_order();
 
     CHECK(latch_order_depth() == 0);
 
-    /* 全序：catalog → txn → wal → freelist → frame */
+    /* 全序：catalog → txn → frame → wal → freelist */
     CHECK(latch_order_acquire(LATCH_CATALOG) == OK);
     CHECK(latch_order_acquire(LATCH_TXN) == OK);
+    CHECK(latch_order_acquire(LATCH_FRAME) == OK);
     CHECK(latch_order_acquire(LATCH_WAL) == OK);
     CHECK(latch_order_acquire(LATCH_FREELIST) == OK);
-    CHECK(latch_order_acquire(LATCH_FRAME) == OK);
 
     CHECK(latch_order_depth() == 5);
     CHECK(latch_order_held(LATCH_CATALOG));
     CHECK(latch_order_held(LATCH_TXN));
+    CHECK(latch_order_held(LATCH_FRAME));
     CHECK(latch_order_held(LATCH_WAL));
     CHECK(latch_order_held(LATCH_FREELIST));
-    CHECK(latch_order_held(LATCH_FRAME));
     CHECK(g_violations == 0);
 
     /* 逆序释放（后取先放） */
-    CHECK(latch_order_release(LATCH_FRAME) == OK);
     CHECK(latch_order_release(LATCH_FREELIST) == OK);
     CHECK(latch_order_release(LATCH_WAL) == OK);
+    CHECK(latch_order_release(LATCH_FRAME) == OK);
     CHECK(latch_order_release(LATCH_TXN) == OK);
     CHECK(latch_order_release(LATCH_CATALOG) == OK);
     CHECK(latch_order_depth() == 0);
@@ -97,8 +112,8 @@ static void t2_reverse_order_rejected(void)
     reset_order();
     latch_set_violation_handler(on_violation);
 
-    /* 先拿最高序号的 frame */
-    CHECK(latch_order_acquire(LATCH_FRAME) == OK);
+    /* 先拿最高序号的 freelist（步骤 4c 之后全序最高位是 freelist = 5） */
+    CHECK(latch_order_acquire(LATCH_FREELIST) == OK);
     CHECK(latch_order_depth() == 1);
 
     /* 再拿 txn（序号 2 < 5）→ 逆序 */
@@ -115,7 +130,7 @@ static void t2_reverse_order_rejected(void)
     CHECK(latch_order_depth() == 1);
 
     /* 逆序释放之后，正序获取就应该正常了 */
-    CHECK(latch_order_release(LATCH_FRAME) == OK);
+    CHECK(latch_order_release(LATCH_FREELIST) == OK);
     CHECK(latch_order_acquire(LATCH_TXN) == OK);
     CHECK(latch_order_held(LATCH_TXN));
     CHECK(g_violations == 1);
