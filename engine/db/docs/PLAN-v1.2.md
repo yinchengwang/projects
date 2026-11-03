@@ -1,10 +1,12 @@
 # v1.2 执行方案与计划 · 内核收尾（copy-out → 细粒度 latch → compact → checkpoint）
 
-> 状态：**步骤 0（SPI 批接口）、步骤 1（copy-out 重构）、步骤 2（latch 框架）已执行** ——
-> A9 达标（扫描+过滤 5.47–5.73×）；
+> 状态：**步骤 0（SPI 批接口）、步骤 1（copy-out 重构）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）已执行** ——
+> A9 达标（扫描+过滤 5.47–5.77×）；
 > copy-out 三个接口已改，A2 回归测试已就位；
-> latch 框架（全序断言 + 线程本地记账）已就位，**调用点一行未改**（零行为变化）。
-> 步骤 3 – 步骤 7 待执行。执行记录见 §3。
+> latch 框架（全序断言 + 线程本地记账）已就位；
+> **catalog 域已换成读写锁**（公开 API 自己拿锁，内部走 `_locked` 版本），
+> `db_exec` 大锁**仍在**（步骤 4 才退役）。
+> 步骤 4 – 步骤 7 待执行。执行记录见 §3。
 > 前置：v1.1（向量化执行 + 规则 CBO）已完成。
 
 ---
@@ -122,6 +124,13 @@ L1 catalog → L2 txn → L3 wal → L5 freelist → L4 frame
 
 顺序来源：真实调用路径 —— 绑定先查 catalog → 开事务碰 txn → 写路径先 wal 后页。
 
+> **状态（步骤 3 后）**：L1 `catalog_latch` **已落地** —— 读写锁，
+> 公开 API 自己拿锁（`src/catalog/catalog_lock.c`），内部走 `_locked` 版本。
+> L2–L5 尚未接线（步骤 4）。步骤 3 同时向 latch 框架记账，
+> 于是"catalog 排在最前"这条纪律从此刻起是**机器检查**的。
+> 另：计划的 L 编号与实现的全序位置不一致（frame 记 L4、freelist 记 L5，
+> 但全序里 freelist 在 frame 之前）—— 实现按**获取序号**编号，见步骤 2 的记录。
+
 **调试构建的顺序断言**：每个 latch 带编号，
 `latch_lock(L4)` 时若当前线程已持有更小编号的锁之外的组合 → **abort**。
 这是"死锁不可能发生"的**机器证明**（测试只是抽样，断言是全量）。
@@ -223,12 +232,13 @@ vacuum 只删死版本，不整理页内碎片 —— 长期写负载下页利�
 
 **验证**：编译 + 全绿（零行为变化）。
 
-### 步骤 3 · 分域 ①：catalog（读写锁）
+### 步骤 3 · 分域 ①：catalog（读写锁） ✅ 已完成（2026-11-04）
 
-1. catalog 访问走 `catalog_latch`；`db_exec` 的大锁**保留**。
-2. **验证性缩小**：把 `db_exec` 大锁临时去掉 → 并发测试应暴露 catalog 竞态
-   （copy-out 已就位，竞态面被 A2 测试覆盖）→ 恢复大锁。
-   本步只验证"catalog 域自己站得住"。
+1. catalog 访问走 `catalog_latch`；`db_exec` 的大锁**保留**。 ✅
+2. **验证性缩小**：把 `db_exec` 大锁临时去掉 → 看并发测试暴露的是哪一类竞态
+   （copy-out 已就位，catalog 的竞态面被 A2 测试覆盖）→ 恢复大锁。
+   本步只验证"catalog 域自己站得住"。 ✅ 已做，结果见 §3 步骤 3
+   （⚠️ **实测结论与计划预期不同**，见 §3 的勘误说明）。
 
 ### 步骤 4 · 分域 ②③④：txn / wal / freelist+frame
 
@@ -586,6 +596,131 @@ mingw32-make bench && ./build/exec_bench.exe 100000 10
                                            # A9 5.70× ✓ / 对拍全绿 ✓（与步骤 1 同量级）
 ```
 
-### 步骤 3 – 步骤 7
+### 步骤 3 · 分域 ①：catalog 读写锁（2026-11-04）
+
+**结论：完成。catalog 域换成读写锁，大锁仍在。
+验证性缩小实验证明：catalog 域已经能独立站住；剩下的是 txn / 页 / WAL 域（步骤 4 的活）。**
+
+#### 落地的东西
+
+| 文件 | 作用 |
+|---|---|
+| `src/catalog/catalog_lock.c`（新） | 4 个锁原语（read/write lock/unlock）+ 15 个公开 API 的包装层 + 违规处理钩子 |
+| `src/catalog/catalog.h` | 锁 API 声明 + `CatalogViolationFn`（测试用） |
+| `src/catalog/catalog_priv.h` | `struct Catalog` 增加 `pthread_rwlock_t rw`；声明 15 个 `_locked` 内部版本 |
+| `src/catalog/catalog.c` | 11 个公开实现改名为 `_locked`；`catalog_open` 初始化 rwlock、`catalog_close` 销毁 |
+| `src/catalog/catalog_stats.c` | 4 个公开实现改名为 `_locked` |
+| `test/unit/test_catalog_lock.c`（新） | 验收 7 项 |
+
+#### 三个设计决定
+
+**① 锁画在"公开 API"这一层，内部一律走 `_locked`。**
+
+```c
+/* src/catalog/catalog_lock.c */
+int catalog_table_cols(Catalog *cat, u32 table_id, ColDesc *buf, int cap, int *ncols)
+{
+    catalog_read_lock(cat);
+    int rc = catalog_table_cols_locked(cat, table_id, buf, cap, ncols);
+    catalog_read_unlock(cat);
+    return rc;
+}
+```
+
+两个硬理由：
+
+- 每个公开 API 只有**一个出口** → 加锁/解锁不会漏路径
+  （把 lock/unlock 写在函数体内的话，多一个 `return` 就漏一次解锁）；
+- 内部函数互调**不会递归取锁** —— POSIX 规定"重复取读锁"是未定义行为，
+  有写者在等时会死锁；重复取写锁直接自锁。
+
+调用方**不要**自己拿锁（拿两次 = 递归取读写锁）。
+`catalog_create_table_locked` 内部要查重名，走的也是 `catalog_find_table_locked`。
+
+**② 读锁可重入，写锁不可重入，不许升级/降级。**
+
+| 纪律 | 实现 |
+|---|---|
+| 读锁可重入 | 线程本地计数 +1，**只有第一次**才碰底层 rwlock |
+| 写锁不可重入 | 第二次取写锁 → 违规 |
+| 升级（读→写）/ 降级（写→读） | 都违规 —— 读写锁的升级没有正确实现（读者一多就死锁） |
+
+违规默认**打印 + `abort()`**（"不可能发生"要有机器证明），
+测试可以装 `catalog_set_violation_handler` 换成"记一笔"。
+
+持锁状态是**线程本地**的（`_Thread_local` 槽位表）——
+"我持有什么锁"是当前线程的属性，不是共享状态。
+槽位会**回收**（释放后可以给别的 catalog 实例用），
+否则一个线程先后开 4 个库就再也拿不到槽位了
+（这个洞第一版就踩了：测试跑到一半报"锁槽位已满"）。
+
+**③ 锁与 latch 框架记账同时做。**
+
+取锁的同时向 latch 框架**记账**（`LATCH_CATALOG`，序号 1 = 全序最前）。
+这样步骤 4 换 txn / wal / freelist / frame 时，
+"catalog 必须排在它们之前"这条纪律是**机器检查**的，不是口头约定。
+
+#### 验收（7 项，`test/unit/test_catalog_lock.c`）
+
+1. **读锁可重入** —— 用**写者当探针**：主线程取两层读锁，
+   写者线程必须被挡住；放一层仍挡（说明还剩一层），全放才进。
+   （"读者还剩几层"能从外面看出来，才算真的测到了重入语义。）
+2. **读读不互斥** —— 两个线程同时持读锁都能进。
+3. **写锁排他** —— 持写锁时读者进不来；放锁后立刻进。
+4. **升级被拒** —— 持读锁取写锁 → 违规计数 +1，消息含"升级"。
+5. **降级被拒** —— 持写锁取读锁 → 违规计数 +1，消息含"降级"。
+6. **写锁不可重入** —— 违规计数 +1。
+7. **默认行为真 abort** —— `system()` 另起子进程去撞升级，
+   检查退出码非 0；并且子进程先写一个标记文件 ——
+   否则"命令没找到"也是非 0，测试会**假通过**。
+
+#### 验证性缩小实验（本步最有价值的一次实验）
+
+计划要求："把 `db_exec` 大锁临时去掉 → 并发测试应暴露 catalog 竞态 → 恢复大锁"。
+
+**实测结果**（去掉大锁，重跑全量测试）：
+
+| 测试 | 结果 | 说明 |
+|---|---|---|
+| `test_copyout` 第 3 项（**catalog 域**：30 轮建表 + 30 轮查询） | **仍然全绿**（查询侧错误 0 次） | catalog 域**自己站得住** —— 这正是本步要证明的 |
+| `test_concurrent`（并发插入 / xid 不串号 / 缓冲池压力 / 崩溃恢复 / 并发读写） | **13 项断言失败**（插入报错、行数不对、恢复后行数不对） | 竞态在 **txn / heap / pager / WAL** 域 —— 步骤 4 的活 |
+
+⚠️ **勘误：计划预期"暴露 catalog 竞态"，实测暴露的是别的域的竞态。**
+计划写这段时的前提是"catalog 只有 copy-out、还没有锁"。
+步骤 3 把 catalog 的读写锁接上之后，catalog 这一域**本来就不该**再暴露竞态 ——
+所以实测结果与计划预期不一致，是**计划写早了**，不是实现有问题。
+两种解释都指向同一个动作：**下一步必须处理 txn / wal / freelist / frame**，
+大锁现在**还不能**退役。
+
+实验结束后大锁已恢复（`src/db_stmt.c` 的 `git diff` 为空）。
+
+#### 如实记录（不注水）
+
+- **大锁保留期间，catalog 锁是"备而不用"的。**
+  所有 catalog 访问都在 `db_exec` 的大锁里面，锁与锁之间不会真的并发争用。
+  它的价值是**在步骤 4 之前，把 catalog 这一域的并发正确性单独证明一遍**。
+
+- **catalog 锁只保护 catalog 内部结构，不保护它指向的对象。**
+  `catalog_heap()` 返回的 `Heap*`、`catalog_table_indexes()` 拷出来的
+  `IndexInfo` 里的 `BTree*` —— 这些指向的对象归 catalog 所有，
+  但它们**自身的内部状态**（页、slot）由别的域（frame / freelist）保护。
+  步骤 4 之前，这些域仍然靠大锁兜着。
+
+- **验证性缩小实验期间可能有未定义行为的"幸运通过"。**
+  去掉大锁后，`test_concurrent` 是**报错**而不是崩溃 —— 但那 13 项失败
+  只说明"竞态被观察到了"，不说明"只有这 13 处"。
+  实验的价值在于**定位到下一个要修的域**，不在于穷举所有竞态。
+
+#### 验证方式
+
+```
+mingw32-make clean && mingw32-make all     # -Werror 零警告
+sh tools/check_deps.sh                     # ✓ 依赖方向正确
+sh test/run.sh                             # 42 个测试文件，54 处断言，0 FAIL（新增 test_catalog_lock）
+mingw32-make bench && ./build/exec_bench.exe 100000 10
+                                           # A9 5.47–5.77× ✓ / 对拍全绿 ✓（与步骤 1/2 同量级）
+```
+
+### 步骤 4 – 步骤 7
 
 （待执行）
