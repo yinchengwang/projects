@@ -201,12 +201,17 @@ gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Iinclude -Isrc \
 已验证：gcc 14.2.0 + mingw32-make，`-Werror` 零警告，
 crc32/crc16 对标准测试向量通过（且与逐位参考实现逐字节一致）。
 
-**当前状态**：v1.1 完成，**v1.2 步骤 0（SPI 批接口）、步骤 1（copy-out）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）、步骤 4b（wal 域）、步骤 4c（freelist + frame 域）已完成**，
-**46 个测试文件 / 58 处断言全绿 / 0 FAIL**（unit 31 + integration 15），零错误零警告，依赖方向正确。
+**当前状态**：v1.1 完成，**v1.2 步骤 0（SPI 批接口）、步骤 1（copy-out）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）、步骤 4b（wal 域）、步骤 4c（freelist + frame 域）、步骤 4d（大锁退役 + btree 域）已完成**，
+**48 个测试文件 / 60 处断言全绿 / 0 FAIL**（unit 33 + integration 15），零错误零警告，依赖方向正确。
 执行器零改动（`grep -rn graph src/query/` 零命中）——
 加第 2 个模态不需要动执行器，这是 v0.9 定 SPI 时最想验证的事。
-⚠️ 步骤 4c **勘误了获取全序**：真实全序是 `catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)`；
-去掉 `db_exec` 大锁后全套测试仍然全绿（步骤 4d 待执行）。
+⚠️ 获取全序**勘误过两次**：真实全序是 `catalog(1) → txn(2) → btree(3) → frame(4) → wal(5) → freelist(6)`。
+✅ **`db_exec` 大锁已退役**（关系型语句不再取全局 latch；模态语句仍取，
+因为 blob / graph / vector 内部还没有域锁）。
+⚠️ **步骤 4c 记的"去掉大锁后全套测试 58 PASS / 0 FAIL"是错的** ——
+步骤 4d 复核时重跑 5 次，`test_concurrent` 每次都失败 14~15 项断言，
+那次全绿是撞运气的偶然。真正让"去掉大锁"稳定全绿的是 4d 修的两处缺陷
+（堆的 freelist「find → use」窗口 + B+tree 一把锁都没有）。
 
 ## 实现顺序
 
@@ -1006,6 +1011,8 @@ v1.1 的 A2 只拿到 1.11×，原因量得很清楚：**81% 的时间在 SPI �
 ⚠️ 原来靠全局 latch 兜着；**v1.2 步骤 4c 已落地** ——
 frame 域给每一帧配了内容锁，`pager_get` → `pager_unpin` 全程持有，
 解码窗口落在内容锁的保护期内（见下"步骤 4c"一节）。
+⚠️ **v1.2 步骤 4d 之后**：关系型语句**不再取全局 latch**，
+这条零拷贝边界**完全依赖 frame 域的内容锁**。
 
 **② 批能力是可选加速，不是正确性前提。**
 
@@ -1056,7 +1063,8 @@ frame 域给每一帧配了内容锁，`pager_get` → `pager_unpin` 全程持�
   这不是挑口径，物化是 v1.1 就存在的固定成本，两边一样。
 - **扫描阶段的绝对值已经很小（0.141 ms）。** 再往上优化的空间在**解码**（0.62 ms），不在扫描。
 - **零拷贝的安全性原来依赖全局 latch**；v1.2 步骤 4c 已把解码窗口放进**页内容锁**
-  （`pager_get` → `pager_unpin` 全程持有），这条债已经还掉。
+  （`pager_get` → `pager_unpin` 全程持有），这条债已经还掉；
+  步骤 4d 退役大锁后，这条边界**只剩内容锁**在护着。
 
 #### 步骤 1（copy-out 重构）已完成：三个读接口改成拷贝出参
 
@@ -1103,6 +1111,8 @@ rc = catalog_table_cols(cat, tid, buf, 16, &n);  /* 再拷贝；不够 → E_NOS
 
 > 第 3 项现在是**靠大锁兜底**的，是绿的。它的价值要到**步骤 4 拆掉大锁之后**才兑现 ——
 > 那时它必须**继续绿**。
+> ✅ **步骤 4d 已经兑现**：`db_exec` 大锁已退役（关系型语句），
+> 这一项在**没有大锁**的情况下依然全绿。
 
 #### 步骤 2（latch 框架）已完成：域编号 + 获取全序 + 断言
 
@@ -1112,12 +1122,18 @@ rc = catalog_table_cols(cat, tid, buf, 16, &n);  /* 再拷贝；不够 → E_NOS
 |---|---|---|---|
 | `LATCH_CATALOG` | 1 | 表 / 列 / 索引元数据缓存 | 读写锁 |
 | `LATCH_TXN` | 2 | `next_xid`、clog、活跃表 | 独占（很短） |
-| `LATCH_WAL` | 3 | 日志缓冲、LSN 计数、append | 独占 |
-| `LATCH_FREELIST` | 4 | 空闲页链 | 独占（很短） |
-| `LATCH_FRAME` | 5 | 单页数据 + `pin_count` | 每帧一把（极短） |
+| `LATCH_BTREE` | 3 | B+tree 的结构与页内容 | 独占（中） |
+| `LATCH_FRAME` | 4 | 单页数据 + `pin_count` | 每帧一把（极短） |
+| `LATCH_WAL` | 5 | 日志缓冲、LSN 计数、append | 独占 |
+| `LATCH_FREELIST` | 6 | 空闲页链 | 独占（很短） |
 
-**获取全序**：`catalog → txn → wal → freelist → frame`
-（顺序来源：绑定先查 catalog → 开事务碰 txn → 写路径先 wal 后页）。
+**获取全序**：`catalog → txn → btree → frame → wal → freelist`
+
+⚠️ **上表是当前的编号**（⚠️ 勘误过两次）：
+步骤 2 当初写的是 `catalog → txn → wal → freelist → frame`，
+步骤 4c 改成 `catalog → txn → frame → wal → freelist`，
+步骤 4d 又补上了 btree 域，并把 btree 放在 frame 之前
+（B+tree 插入是"先改树结构、再写页"，页在树结构之内）。
 
 **本步骤只做"记账 + 断言"，不加真实互斥** —— 真实互斥在步骤 3/4 接线，
 那时才改调用点。所以这一步对现有行为是**零变化**：现有代码一行都不用动。
@@ -1314,20 +1330,70 @@ WAL 钩子与 `freelist_set(..., page_free_bytes(f->data))`
 真实的边是 **frame → wal** 与 **frame → freelist**。
 "先 wal 后页"说的是**语义顺序**（日志先落盘才能刷页），
 语义顺序靠 WAL 规则保证，不靠锁顺序。
-**新全序**：`catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)`，
+**4c 当时的新全序**：`catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)`，
 枚举按获取序号重编号（`src/common/latch.h`）。
 
 **验证性缩小实验**（去掉 `db_exec` 大锁）：
 
-| 测试 | 步骤 4b 后 | **步骤 4c 后** |
-|---|---|---|
-| `test_concurrent` | FAIL（13 行 / 12 项断言） | ✅ **PASS** |
-| `test_mvcc_it` / `test_copyout` | 绿 | ✅ 绿 |
-| **全套 `sh test/run.sh`** | — | ✅ **58 PASS / 0 FAIL** |
+| 测试 | 步骤 4b 后 | 步骤 4c 后 · **原文写的** | **步骤 4d 复核（2026-11-03）** |
+|---|---|---|---|
+| `test_concurrent` | FAIL（13 行 / 12 项断言） | ✅ **PASS** | ❌ **FAIL**（重跑 5 次，每次 14~15 项断言） |
+| `test_mvcc_it` / `test_copyout` | 绿 | ✅ 绿 | ✅ 绿 |
+| **全套 `sh test/run.sh`** | — | ✅ **58 PASS / 0 FAIL** | ❌ **不成立** |
 
-步骤 4b 留下的那批失败（heap 的 slot 分配 + pager 的 pin/unpin）
-正是 frame + freelist 域要治的病 —— **大锁退役（步骤 4d）具备开工条件**。
+⚠️ **勘误（步骤 4d 复核）**：上表"步骤 4c 后"那一列**不成立**。
+复核方法：把 4c 的 `src/` 与 `test/` 原样取回，只保留步骤 4d 的 `db_stmt.c`
+（去掉大锁），干净重建后单独跑 `test_concurrent.exe` 5 次 —— **5/5 全部失败**。
+当初那次全绿是**撞运气**的偶然。
+
+**正确的结论是**：
+
+> frame + freelist 两个域确实治好了它们各自的病，
+> 但**"两个域落地就够去掉大锁"这个推论是错的** ——
+> 堆里还剩一个 **freelist「find → use」窗口**，
+> B+tree 里还有"**一把锁都没有**"，
+> 这两处以前是被大锁顺手罩住的。
+> **只有真把大锁拆掉，才会露出这些洞**（这正是步骤 4d 的价值）。
+
 ⚠️ 但"测试全绿"不等于"没有竞态"：测试是抽样，竞态是概率事件；
 真正的证明要靠步骤 7 的反向验证（关掉全序断言 + 看门狗）。
+
+#### 步骤 4d（大锁退役 + btree 域）已完成
+
+| 变更 | 内容 |
+|---|---|
+| **大锁退役** | `db_exec` 不再对关系型语句取全局 latch；**模态语句仍取**（blob / graph / vector 内部还没有域锁） |
+| **新增 btree 域** | 每棵 B+tree 一把锁；公开入口统一持锁；**游标把锁带在身上**，`btree_cursor_close` 才放 |
+| **全序第二次勘误** | `catalog(1) → txn(2) → **btree(3)** → frame(4) → wal(5) → freelist(6)` |
+| **堆插入修竞态** | freelist 的 **「find → use」窗口**：`heap_insert` 加有界重试（`E_NOSPACE` 就 unpin 重找） |
+| **修掉一条真实逆序边** | `heap_am_reindex` 跨 `heap_scan_next` 捏着堆页 → `frame → btree` 逆序，**被断言当场 abort**；新增 `heap_scan_release_page()` |
+
+**为什么 btree 排在 frame 之前**：B+tree 插入是"先改树结构、再写页"，
+页在树结构之内。
+
+**两个被大锁长期掩盖的缺陷**（拆掉大锁才露出来）：
+
+| 缺陷 | 现象 | 修法 |
+|---|---|---|
+| 堆的 freelist「find → use」 | 4 线程 × 500 行并发插入，**500 次全部失败**（`E_NOSPACE`） | `heap_insert` 有界重试（`HEAP_INSERT_MAX_RETRY 64`） |
+| **B+tree 一把锁都没有** | 4 线程 × 300 行写带索引的表，堆里 1200 行全在，**点查漏掉 213 / 7 / 178 个** —— 静默的数据不一致 | 新增 btree 域，每棵树一把锁 |
+
+**验收**：`test/unit/test_heap_insert_domain.c`（3 项）+
+`test/unit/test_btree_domain.c`（3 项）。
+**RED 证据**：
+
+| 测试 | 修好后 | 修坏后 |
+|---|---|---|
+| 堆并发插入 | `errors=0` | **500/500 失败** |
+| 索引点查 | `缺失=0` | **缺失 213 / 7 / 178** |
+| `test_concurrent` | 6 项全过（5/5 次） | **失败 14~15 项断言**（5/5 次） |
+
+**如实记录**：
+- **btree 域是"每棵树一把粗锁"** —— 一棵树的并发写被完全串行化。
+  它解决的是**正确性**，不是**并发度**；细粒度（crabbing、页级 latch）得等步骤 7。
+- **`BtStats.items` 含内部节点的分隔键** —— 真正的"存着的 key→rid 条目数"
+  是新加的 **`leafitems`**。
+- **堆插入的重试是"退让"不是"同步"** —— 根因（档位在插入后才更新）没改，
+  改的是撞车之后的反应。
 
 **执行 v1.2 之前要读**：`docs/PLAN-v1.2.md`（七步计划 + 验收 A1–A9 + §3 执行记录）。

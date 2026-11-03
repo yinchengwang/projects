@@ -1,6 +1,6 @@
 # v1.2 执行方案与计划 · 内核收尾（copy-out → 细粒度 latch → compact → checkpoint）
 
-> 状态：**步骤 0（SPI 批接口）、步骤 1（copy-out 重构）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）、步骤 4b（wal 域）、步骤 4c（freelist + frame 域）已执行** ——
+> 状态：**步骤 0（SPI 批接口）、步骤 1（copy-out 重构）、步骤 2（latch 框架）、步骤 3（catalog 读写锁）、步骤 4a（txn 域）、步骤 4b（wal 域）、步骤 4c（freelist + frame 域）、步骤 4d（大锁退役 + btree 域）已执行** ——
 > A9 达标（扫描+过滤 5.47–5.83×）；
 > copy-out 三个接口已改，A2 回归测试已就位；
 > latch 框架（全序断言 + 线程本地记账）已就位；
@@ -8,13 +8,19 @@
 > **txn 域已自带保护**（写路径域锁 + 读路径原子）；
 > **wal 域已自带保护**（每实例一把域锁，写路径与扫描路径持锁、读路径原子）；
 > **freelist 域已自带保护**（桶计数的读-改-写互斥，读路径也持锁）；
-> **frame 域已自带保护**（池级锁 + **每帧一把内容锁**，覆盖 get→unpin 的借用期）。
-> ⚠️ **获取全序已勘误**：真实全序是 `catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)`，
-> 不是计划里写的 `catalog → txn → wal → freelist → frame`（理由见 §1.3）。
-> **`db_exec` 大锁仍在**（步骤 4d 才退役），
-> 但 ⚠️ **步骤 4c 的缩小实验已经跑通：去掉大锁后全套测试 58 PASS / 0 FAIL**，
-> 4d 具备开工条件。
-> 步骤 4d – 步骤 7 待执行。执行记录见 §3。
+> **frame 域已自带保护**（池级锁 + **每帧一把内容锁**，覆盖 get→unpin 的借用期）；
+> **btree 域已自带保护**（每棵树一把锁，公开入口统一持锁，游标把锁带在身上）。
+> ⚠️ **获取全序已两次勘误**：真实全序是
+> `catalog(1) → txn(2) → btree(3) → frame(4) → wal(5) → freelist(6)`
+> （第一次勘误见步骤 4c：计划里写的顺序是错的；第二次见步骤 4d：多了一个 btree 域）。
+> **`db_exec` 大锁已退役**（步骤 4d）—— 关系型语句不再取全局 latch，
+> 只有模态语句（blob / graph / vector）仍在入口取大锁（模态内部还没有域锁）。
+> ⚠️ **步骤 4c 记录的"去掉大锁后 58 PASS / 0 FAIL"是错的**：
+> 步骤 4d 复核时重跑 5 次，`test_concurrent` **每次都失败 14~15 项断言**
+> （行号 97/103/265/270/323/435/446）—— 那次全绿是撞运气的偶然。
+> 真正让"去掉大锁"稳定全绿的是步骤 4d 修的两个缺陷
+> （堆的 freelist「find → use」窗口 + B+tree 完全没有锁）。
+> 步骤 5 – 步骤 7 待执行。执行记录见 §3。
 > 前置：v1.1（向量化执行 + 规则 CBO）已完成。
 
 ---
@@ -120,15 +126,23 @@ v0.10 说"所有读接口都得改成拷出来" —— **说宽了**。
 |---|---|---|---|---|
 | L1 | `catalog_latch` | 表/列/索引元数据缓存 | **读写锁** | 读多写少（建表/建索引才写） |
 | L2 | `txn_latch` | `next_xid`、clog、活跃表 | 独占（短） | xid 分配 ~纳秒级 |
-| L3 | `wal_latch` | 日志缓冲、LSN 计数、append | 独占 | append + 偶发 fsync |
+| L3 | `btree_latch`（**每棵树一把**） | B+tree 的结构与页内容 | 独占（中） | 插入 / 删除 / 查找 / 扫描 |
 | L4 | `frame_latch`（**每帧一把**） | 单页数据 + pin_count | 独占（极短） | 页读改写 |
-| L5 | `freelist_latch` | 空闲页链 | 独占（短） | 分配/回收 |
+| L5 | `wal_latch` | 日志缓冲、LSN 计数、append | 独占 | append + 偶发 fsync |
+| L6 | `freelist_latch` | 空闲页链 | 独占（短） | 分配/回收 |
 
 **获取全序（绝不逆序）**：
 
 ```
-catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)
+catalog(1) → txn(2) → btree(3) → frame(4) → wal(5) → freelist(6)
 ```
+
+⚠️ **v1.2 步骤 4d 勘误：全序里多了一个 btree 域。**
+
+4c 定下的顺序是 `catalog → txn → frame → wal → freelist`，
+步骤 4d 真正退役大锁之后才发现：**B+tree 原来一把锁都没有**，
+必须补一个域（详见 §3 步骤 4d）。补进来的位置是 **frame 之前** ——
+因为 B+tree 插入要**先改树结构、再写页**，页在树结构之内。
 
 ⚠️ **v1.2 步骤 4c 勘误：计划里写的全序是错的。**
 
@@ -151,10 +165,12 @@ catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)
 **实现按"获取序号"编号**（= 全序位置）：
 
 ```
-LATCH_CATALOG = 1   LATCH_TXN = 2   LATCH_FRAME = 3   LATCH_WAL = 4   LATCH_FREELIST = 5
+LATCH_CATALOG = 1   LATCH_TXN = 2   LATCH_BTREE = 3
+LATCH_FRAME  = 4    LATCH_WAL  = 5   LATCH_FREELIST = 6
 ```
 
-编号变了，`test_latch.c` 的"按全序获取 5 个域"也跟着改了（步骤 4c 一并更新）。
+编号变了，`test_latch.c` 的"按全序获取 N 个域"也跟着改
+（步骤 4c 改成 5 个域，步骤 4d 改成 6 个域）。
 
 > **状态（步骤 3 后）**：L1 `catalog_latch` **已落地** —— 读写锁，
 > 公开 API 自己拿锁（`src/catalog/catalog_lock.c`），内部走 `_locked` 版本。
@@ -182,7 +198,16 @@ LATCH_CATALOG = 1   LATCH_TXN = 2   LATCH_FRAME = 3   LATCH_WAL = 4   LATCH_FREE
 > **每帧一把内容锁**"；freelist 域是一把实例级锁，
 > **读路径也持锁**（`levels` 是 `realloc` 出来的，不持锁就是悬空指针）。
 > 全序同步改成 `catalog → txn → frame → wal → freelist`（见上面的勘误）。
-> **去掉 `db_exec` 大锁后全套测试 58 PASS / 0 FAIL**（见 §3 步骤 4c 的缩小实验）。
+> ⚠️ **当时写的"去掉 `db_exec` 大锁后全套测试 58 PASS / 0 FAIL"是错的** ——
+> 步骤 4d 复核时重跑 5 次，`test_concurrent` **每次都失败 14~15 项断言**。
+> 那次全绿是撞运气的偶然，不是"两个域落地就够"的证据。见 §3 步骤 4c / 步骤 4d。
+
+> **状态（步骤 4d 后）**：**新增 L3 `btree_latch`** —— 每棵 B+tree 一把锁，
+> 公开入口（insert / delete / search / scan / reset / stats / height…）统一持锁，
+> 游标把锁带在身上、`btree_cursor_close` 才放。
+> 全序再勘误一次：`catalog → txn → **btree** → frame → wal → freelist`。
+> **`db_exec` 大锁已退役**（关系型语句不再取全局 latch；模态语句仍取，
+> 因为模态内部还没有域锁）。见 §3 步骤 4d。
 
 **调试构建的顺序断言**：每个 latch 带编号，
 `latch_lock(L4)` 时若当前线程已持有更小编号的锁之外的组合 → **abort**。
@@ -302,8 +327,9 @@ vacuum 只删死版本，不整理页内碎片 —— 长期写负载下页利�
 **验证**：A1 / A4（全序断言此时真正开始工作）。
 
 **执行进度**：**4a（txn 域）✅ 已完成**、**4b（wal 域）✅ 已完成**、
-**4c（freelist + frame 域）✅ 已完成**（含全序勘误），
-4d（大锁退役）待执行。
+**4c（freelist + frame 域）✅ 已完成**（含全序勘误）、
+**4d（大锁退役 + btree 域）✅ 已完成**（含第二次全序勘误），
+5–7 待执行。
 子步骤划分与结果见 §3。
 
 ### 步骤 5 · 页内 compact
@@ -995,9 +1021,21 @@ mingw32-make bench && ./build/exec_bench.exe 100000 10
 
 ### 步骤 4c · 分域 ④⑤：freelist 域 + frame 域（2026-11-04）
 
-**结论：完成。freelist 域与 frame 域都已自带保护，
-且 ⚠️ **去掉 `db_exec` 大锁后全套测试 58 PASS / 0 FAIL** ——
-大锁退役（步骤 4d）具备开工条件。**
+**结论：完成。freelist 域与 frame 域都已自带保护。**
+
+⚠️ **勘误（2026-11-03，步骤 4d 复核时发现）**：
+本节原文写的是"去掉 `db_exec` 大锁后全套测试 58 PASS / 0 FAIL ——
+大锁退役（步骤 4d）具备开工条件"。**这句话是错的**：
+
+- 步骤 4d 把 4c 的代码原样取回、只去掉大锁，重跑 5 次，
+  `test_concurrent` **每次都失败 14~15 项断言**
+  （行号 97/103/265/270/323/435/446），5/5 失败；
+- 当初那次"全绿"是**撞运气**的偶然，不是"两个域落地就够"的证据；
+- 真正让"去掉大锁"稳定全绿的是步骤 4d 修的两个缺陷：
+  堆的 freelist「find → use」窗口，与 **B+tree 完全没有锁**。
+
+也就是说：**4c 只治好了两个域，剩下两个失败面在堆与 B+tree 里**，
+大锁当时之所以能撑住，是因为它顺手把这两处也一起罩住了。
 
 #### 落地的东西
 
@@ -1127,28 +1165,49 @@ WAL 规则要求"日志先落盘、页后落盘"，钩子必须在刷页那一�
 | frame ① 计数器 | 16000 | **15996**（丢了 4 次更新） |
 | frame ② 临界区重叠 | 0 次 | **43 次** |
 
-#### 验证性缩小实验（去掉 `db_exec` 大锁）—— **本步最有价值的结果**
+#### 验证性缩小实验（去掉 `db_exec` 大锁）
 
-| 测试 | 步骤 4b 后（去掉大锁） | **步骤 4c 后（去掉大锁）** |
-|---|---|---|
-| `test_concurrent` | **FAIL**（13 行，12 项断言；行号 97/103/265/270/323/435/446） | ✅ **PASS**（6 项全过） |
-| `test_mvcc_it` | 绿 | ✅ 绿 |
-| `test_copyout` | 绿 | ✅ 绿 |
-| **全套 `sh test/run.sh`** | — | ✅ **58 PASS / 0 FAIL** |
+⚠️ **本节的结论已被步骤 4d 推翻，下表保留原样并标注复核结果。**
 
-也就是说：**步骤 4b 留下的那批失败（heap 的 slot 分配 + pager 的 pin/unpin）
-正是 frame + freelist 域要治的病**，两个域一落地，全套测试在**没有大锁**的情况下全绿。
+| 测试 | 步骤 4b 后（去掉大锁） | 步骤 4c 后（去掉大锁）· **原文写的** | **步骤 4d 复核（2026-11-03）** |
+|---|---|---|---|
+| `test_concurrent` | **FAIL**（13 行，12 项断言；行号 97/103/265/270/323/435/446） | ✅ **PASS**（6 项全过） | ❌ **FAIL**（重跑 5 次，每次失败 **14~15 项断言**，行号同上） |
+| `test_mvcc_it` | 绿 | ✅ 绿 | ✅ 绿 |
+| `test_copyout` | 绿 | ✅ 绿 | ✅ 绿 |
+| **全套 `sh test/run.sh`** | — | ✅ **58 PASS / 0 FAIL** | ❌ **不成立**（`test_concurrent` 稳定失败，套件退出码 1） |
 
-⚠️ **如实记录**：这是"测试全绿"，**不是**"证明没有竞态"。
+**复核方法**：把 4c 的 `src/` 与 `test/` 原样取回
+（`git checkout 09b962a1c -- engine/db/src engine/db/test`），
+**只保留步骤 4d 的 `db_stmt.c`（去掉大锁）**，
+干净重建后单独跑 `test_concurrent.exe` 5 次 —— **5/5 全部失败**。
+
+**结论要改的是这句**：
+
+> ~~也就是说：步骤 4b 留下的那批失败（heap 的 slot 分配 + pager 的 pin/unpin）
+> 正是 frame + freelist 域要治的病，两个域一落地，全套测试在**没有大锁**的情况下全绿。~~
+
+**改为**：
+
+> frame + freelist 两个域确实治好了它们各自的病，
+> 但**"两个域落地就够去掉大锁"这个推论是错的** ——
+> 堆里还剩一个 **freelist「find → use」窗口**，
+> B+tree 里还有"**一把锁都没有**"，
+> 这两处以前是被大锁顺手罩住的。
+> 这正是步骤 4d 的价值：**只有真把大锁拆掉，才会露出这些洞**。
+
+⚠️ **如实记录**：即使现在（步骤 4d 之后）"全套测试在去掉大锁时全绿"，
+这也只是**测试全绿**，**不是**"证明没有竞态"。
 测试是抽样，竞态是概率事件；能说的是"已知的失败面已经消失，
-且四个域各自有直接压它的单元测试（不经过 `db_exec`）"。
+且每个域各自有直接压它的单元测试（不经过 `db_exec`）"。
 真正的"没有竞态"要靠步骤 7 的**反向验证**（把全序断言关掉 + 看门狗）来补。
 
 #### 如实记录（不注水）
 
 - **逐出路径在池级锁里做 IO**（刷盘 + 读盘）。
   换来的是"逐出与载入是原子的"，代价是临界区偏长。
-  步骤 4d 退役大锁之后要重新审视这里的并发度（现在有大锁兜着，看不出来）。
+  ⚠️ **步骤 4d 之后这条已经可见了**：大锁退役后，逐出路径的临界区
+  不再被大锁"藏"起来 —— 步骤 5 的 compact 会让它更疼，
+  **步骤 7 的吞吐基准（A3 ≥ 2×）必须把这条算进去**。
 
 - **`unpin` 分两段**（先放内容锁、再减 `pin_count`，中间再取一次池级锁）。
   这是上面那条不变式的直接推论，代价是一次多余的加解锁。
@@ -1174,6 +1233,203 @@ sh tools/check_deps.sh                     # ✓ 依赖方向正确
 sh test/run.sh                             # 46 个测试文件，58 处断言，0 FAIL（新增 test_freelist_domain / test_frame_domain）
 ```
 
-### 步骤 4d – 步骤 7
+### 步骤 4d · 大锁退役 + btree 域（2026-11-03）
+
+**结论：完成。`db_exec` 大锁退役（关系型语句），B+tree 补上自己的域，
+顺带修掉两个被大锁长期掩盖的并发缺陷。**
+
+#### 落地的东西
+
+| 文件 | 作用 |
+|---|---|
+| `src/db_stmt.c` | **退役大锁**：关系型语句不再取全局 latch；模态语句仍取 |
+| `src/index/btree.c` / `btree.h` | **btree 域**：每棵树一把锁，公开入口统一持锁；游标把锁带在身上 |
+| `src/common/latch.h` / `latch.c` | ⚠️ **全序第二次勘误 + 重编号**（catalog→txn→**btree**→frame→wal→freelist） |
+| `src/storage/heap.c` / `heap.h` | 堆插入的 **freelist「find → use」窗口**修掉（重试 + 原子计数 + 提前放页） |
+| `src/spi/heap_am.c` | 修掉一条真实的 **frame → btree 逆序边**（`heap_scan_release_page`） |
+| `test/unit/test_heap_insert_domain.c`（新） | 验收 3 项 |
+| `test/unit/test_btree_domain.c`（新） | 验收 3 项 |
+| `test/unit/test_latch.c` | 按**新全序**更新（6 个域） |
+
+#### 一、大锁怎么退的
+
+`db_exec` 不再无条件 `latch_lock()`。改成**按语句类型判定**：
+
+```c
+bool modality = (st.table[0] != '\0' &&
+                 spi_registry_find(db->inst->reg, st.table) != NULL);
+if (modality) latch_lock();
+rc = exec_stmt(&db->db, &st, &qr, db->errmsg, (int)sizeof(db->errmsg));
+if (modality) latch_unlock();
+```
+
+**为什么模态语句还留着大锁**：blob / graph / vector 的内部
+（blob 的 `BlobId *ids` 是 `realloc` 出来的、graph 是纯内存、
+vector 的 store/index 直接用 pager 的 get/unpin）
+**一个域锁都还没有**。大锁现在是它们的**唯一**保护，
+在给模态补域之前先撤掉等于直接放血。
+
+**为什么撤掉是安全的**：关系型语句的每一条路径
+（catalog → txn → btree → frame → wal → freelist）现在都有域锁，
+**且每条路径都遵守全序** —— 由 `latch.c` 的断言**机器检查**。
+
+#### 二、⚠️ 勘误一：全序里多了一个 btree 域
+
+4c 定下的顺序是 `catalog → txn → frame → wal → freelist`。
+步骤 4d 真正拆大锁之后才发现：**B+tree 原来一把锁都没有**
+（见下面缺陷二），必须补一个域。
+
+**补进来的位置是 frame 之前** —— 因为 B+tree 插入要
+**先改树结构（根分裂 / 页分裂 / 分隔键）、再写页**，页在树结构之内。
+所以新全序：
+
+```
+catalog(1) → txn(2) → btree(3) → frame(4) → wal(5) → freelist(6)
+```
+
+`src/common/latch.h` 的枚举同步重编号，`latch.c` 的域名表补上 `"btree"`，
+**逆序报错信息也改了**：现在会指出**具体是哪个域逆序**
+（原来只说"已持有更高序号的域"），排查时能直接定位。
+
+#### 三、缺陷一：堆的 freelist「find → use」窗口
+
+**现象**：4 线程并发往一张表插 500 行，全部失败。
+
+```
+thread 0: errors=500   thread 1: errors=500
+thread 2: errors=454   错误码 E_NOSPACE
+```
+
+**根因**：`freelist_find` 按**档位**挑页，
+但**档位是在插入之后才更新**的 —— 于是：
+
+1. 线程 A `find` 到页 P（档位看起来够）
+2. 线程 B `find` 到**同一页** P（A 还没插、档位还没更新）
+3. A 插满 P 并更新档位；B 插 P → `page_insert` 报 `E_NOSPACE`
+
+**这不是"槽位丢失"或"页内容损坏"**，是一处**典型的 find→use 竞态**。
+
+**修法**：`heap_insert` 加**有界重试**
+（`HEAP_INSERT_MAX_RETRY 64`）—— `E_NOSPACE` 就 unpin、重新 find。
+
+**为什么能收敛**：填页的那一方是**持着内容锁**更新档位的，
+而 `level < need_level ⟹ free < need ⟹ find` 不会再挑中它。
+所以重试次数很少，实测 `errors=0`。
+
+顺带把堆的 `npages` / `wal_calls` 改成 C11 `_Atomic`
+（`atomic_fetch_add` / `atomic_load`）——它们是被无锁读的统计量。
+
+#### 四、缺陷二：B+tree 原来一把锁都没有
+
+**现象**：4 线程并发往**带索引**的表插 300 行（共 1200 行），
+堆里 1200 行全在，**点查却能漏掉两百多个**：
+
+```
+点查: 缺失=213 / 7 / 178
+```
+
+这是**静默的数据不一致** —— 行在，索引找不到。
+
+**根因**：`btree.c` 里没有任何锁。
+B+tree 的树结构本身就是**共享可变状态**：
+
+- `root` / `height`：根分裂要换根，根降高要换根；
+- `scratch[]`：**compact 用的整页暂存区** —— 两个线程同时用它
+  就是两个人往同一块内存里搬数据；
+- **分裂本身不是原子的**：`insert_rec` 先在孩子页插，再回父亲页插分隔键，
+  这两步之间如果另一个线程也在分裂，父亲页的条目就可能重复或丢失。
+
+**修法**：新增 **btree 域** —— 每棵树一把 `pthread_mutex_t`，
+`bt_lock()` / `bt_unlock()` 走 `latch_order_acquire(LATCH_BTREE)`。
+公开入口统一持锁：
+
+| 入口 | 说明 |
+|---|---|
+| `btree_insert` / `btree_delete` | 写路径 |
+| `btree_search` | 点查 |
+| `btree_scan` | **锁转交游标**，`btree_cursor_close` 才放 |
+| `btree_reset` / `btree_stats` | 统计与重置 |
+| `btree_height` / `btree_npages` / `btree_root` | 读接口（`bt_mut()` 去 const） |
+| `btree_format_ok` | 格式校验 |
+
+`btree_cursor_next` **不取锁** —— 游标已经持有那把锁。
+
+**修完之后**：点查 `缺失=0 多行=0 值错=0`。
+
+#### 五、顺带修掉一条真实的逆序边（断言逮到的）
+
+`heap_am_reindex`（`src/spi/heap_am.c`）跨 `heap_scan_next` 一直
+**捏着堆页不放**，等行拷出来之后才去调 `btree_insert` ——
+于是形成 **frame(4) → btree(3)** 的真实逆序边，
+被 `latch.c` 的顺序断言当场 abort：
+
+```
+latch: 违反获取全序: 获取 btree（序号 3）时已持有更高序号的域 frame（序号 4）
+```
+
+**修法**：行数据已经拷进 `recbuf` 了，插索引前先把页放掉 ——
+新增公开接口 `heap_scan_release_page(HeapScan *s)`，
+在 `heap_am_reindex` 里插索引前调它。
+
+**这条边是断言逮到的，不是人肉看出来的** —— 这是全序断言的价值。
+
+#### 六、验收（两个新单元测试，6 项）
+
+**`test/unit/test_heap_insert_domain.c`**
+
+1. **并发插入不报错**：4 线程 × 500 行 → 失败 0 次（其中 `E_NOSPACE` 0 次）。
+2. **并发插入不丢行、不重行**：扫出 2000 行，缺 0 行、重 0 行，页数账对得上。
+3. **页满之后还能继续插**：单线程插 2000 行 → 成功 2000、失败 0，共 16 页。
+
+**`test/unit/test_btree_domain.c`**（直接调 `btree_*`，完全绕开 SQL 与大锁）
+
+1. **并发插入不丢项、不重复**：1600 个 key，每个都查得到、且只查到一个。
+2. **树结构自洽**：树高、页数、叶子条目数对得上。
+3. **并发删 + 插**：删掉一半后，删掉的查不到、留下的都在，
+   叶子条目数正好是 800。
+
+**RED 证据（把修复去掉，同一个测试必红）**：
+
+| 测试 | 修好后 | 修坏后 |
+|---|---|---|
+| 堆并发插入 | `errors=0` | **500/500 失败**（`E_NOSPACE`） |
+| 索引点查 | `缺失=0` | **缺失 213 / 7 / 178** |
+| `test_concurrent` | 6 项全过（5/5 次） | **失败 14~15 项断言**（5/5 次） |
+
+#### 七、⚠️ 勘误二：步骤 4c 记的"去掉大锁后 58 PASS / 0 FAIL"是错的
+
+**步骤 4c 那节的缩小实验结论不成立**，复核方法与数据见
+**§3 步骤 4c 的"验证性缩小实验（去掉 `db_exec` 大锁）"小节**。
+一句话：**4c 只治好了两个域，堆和 B+tree 里还各有一个洞**，
+大锁当时顺手把它们都罩住了 —— **只有真把大锁拆掉，才会露出这些洞**。
+
+#### 八、如实记录（不注水）
+
+- **模态语句仍走大锁**：blob / graph / vector 还没有自己的域锁，
+  大锁现在是它们唯一的保护。给模态分域是**步骤 5 之后**的事。
+- **`heap_insert` 的重试是"退让"不是"同步"**：它不消除竞态，
+  只是把竞态变成"重试"。根因（档位在插入后才更新）没有改，
+  改的是**发现撞车之后的反应**。真正的修法是让 `freelist` 提供
+  "预留档位"的原子接口 —— 那是步骤 5 之后的事。
+- **btree 域是"每棵树一把粗锁"**：一棵树的并发写被完全串行化。
+  它解决的是**正确性**，不是**并发度**。要做细粒度（crabbing、
+  页级 latch）得等步骤 7 的拆文件。
+- **`btree_stats` 的 `items` 含内部节点的分隔键**，
+  真正的"存着的 key→rid 条目数"是 `leafitems` ——
+  4d 给 `BtStats` 补了 `leafitems` 字段（老代码只看 `items` 会多算）。
+- **`heap_scan_release_page` 是新增的公开接口**：
+  调用方在把行拷走之后**必须**调它，否则页一直被 pin 着，
+  缓冲池会逐步耗尽。
+
+#### 验证方式
+
+```
+mingw32-make clean && mingw32-make all     # -Werror 零警告
+sh tools/check_deps.sh                     # ✓ 依赖方向正确
+sh test/run.sh                             # 48 个测试文件，60 处断言，0 FAIL
+                                            # （新增 test_heap_insert_domain / test_btree_domain）
+```
+
+### 步骤 5 – 步骤 7
 
 （待执行）
