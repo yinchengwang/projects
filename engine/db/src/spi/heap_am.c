@@ -417,6 +417,20 @@ static int heap_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
 
         nrows++;
 
+        /*
+         * 【先把页放开，再灌索引】
+         *
+         * 扫描器会把当前页一直 pin 着（少一次哈希查找），
+         * 于是这时候手里捏着 frame 域的锁。
+         * 而 B+tree 的操作是 "btree → frame"（树的操作要拿页）。
+         * 如果这里直接灌索引，就成了 "frame → btree" —— **逆序**，
+         * 全序断言会当场 abort。
+         *
+         * 行已经拷进 recbuf 了（heap 的规矩：返回值一律拷贝），
+         * 页已经没有用途 → 先放开，锁序就干净了 ✓
+         */
+        heap_scan_release_page(scan);
+
         for (int i = 0; i < c->nidx; i++) {
             const IndexInfo *ix = &c->idxs[i];
             if (index_id != 0 && ix->meta.index_id != index_id)

@@ -18,8 +18,8 @@
 
 #include "common/latch.h"
 
-/* 真正的实现（持锁期间调用） */
-static db_err db_exec_locked(DB *db, const char *sql, Result **out);
+/* 真正的实现 */
+static db_err db_exec_impl(DB *db, const char *sql, Result **out);
 
 /*
  * 事务的开始与结束。
@@ -120,41 +120,55 @@ static int txn_end_abort(DB *db)
 /*
  * db_exec —— 语句执行的公共入口。
  *
- * 【全局 latch 在这里】
+ * ==================== v1.2 步骤 4d：大锁退役 ====================
  *
- * 整个语句的执行过程持锁。这不是"偷懒的粗粒度"，
- * 而是本版刻意选的粒度（PLAN-v0.10.md §1.3）：
+ * v0.10 的答案是"整个语句执行过程持全局 latch"。这一版把它拆掉了 ——
+ * 因为语句期间访问的实例级共享状态，现在**各有各的域锁**：
  *
- *   - 语句内的所有实例级共享状态访问都被保护 —— **不可能漏**
- *   - 语句**之间**不持锁 → 显式事务的多个语句之间可以有别的线程插入，
- *     这正是 MVCC 要处理的情况
- *   - 只有一把锁 → 不可能有锁顺序问题 → 不可能死锁
+ * | 状态 | 保护者 |
+ * |---|---|
+ * | 表/列/索引元数据 | catalog 读写锁（步骤 3） |
+ * | next_xid / clog / 活跃表 | txn 域锁（步骤 4a） |
+ * | 日志缓冲 / LSN 计数 / 日志文件 | wal 域锁（步骤 4b） |
+ * | 页内容 / 缓冲池账本 | frame 域锁（步骤 4c） |
+ * | 空闲页空间索引 | freelist 域锁（步骤 4c） |
  *
- * 【为什么不锁更细】
+ * 这些域锁合起来覆盖了原来一把大锁的**全部保护范围** ——
+ * 步骤 4c 的缩小实验已经证明：**去掉大锁后全套测试 58 PASS / 0 FAIL**。
  *
- * v0.10 的答案是"读接口返回的是**指向共享内存的指针**"：
- * （catalog_table_cols 返回 catalog 内部的列定义数组、
- *  pager_get 返回缓冲池里的页）。
- * 如果锁只覆盖"取指针"这一刻，函数返回后别人就能改它 → 悬空指针。
+ * 【但模态语句还留着大锁】
  *
- * v1.2 步骤 1 已经把 catalog 那几个接口改成 **copy-out**（拷贝出参），
- * 执行器现在持有的是**自己的副本**；页数据靠 pin 保护。
- * 也就是说：细粒度化（步骤 3/4）的前置条件已经就位，
- * 但**锁本身还没拆** —— 拆锁和改接口是两件独立的事，
- * 两个不确定叠加，调试成本会吃掉全部学习收益（D4 的教训）。
+ * blob / graph / vector 三个模态的**内部状态**（blob 的对象目录、
+ * graph 的邻接表、vector 的索引）**还没有自己的域锁** ——
+ * 它们一直靠这把全局 latch 兜着。
+ *
+ * 所以：语句碰到**模态表**时，才把全局 latch 取回来。
+ * 关系模态的语句（占了绝大多数）**完全不再持这把锁**，
+ * 两条语句可以真正并行。
+ *
+ * 模态存储各自配锁是后续工作（那三个存储的内部结构比 catalog 复杂，
+ * 锁序要单独论证）。在此之前，模态路径保持"一把锁串行"这个现状。
+ *
+ * 【为什么用"是不是模态表"来判断，而不是给模态打标签】
+ *
+ * 注册表（SpiRegistry）里装的**就是**模态提供的虚拟表；
+ * 关系模态的表在 catalog 里，不在注册表里。
+ * 所以"语句的表在不在注册表里"就是"这条语句是不是模态语句"的判据，
+ * 不需要另设一个标签位。
+ *
+ * 【锁序】
+ *
+ * 全局 latch 不在按域的全序里（它是"模态域"的粗粒度锁）。
+ * 它的位置是**最外层**：模态语句持它 → 模态存储 → pager（frame 域）→ wal。
+ * 与全序不冲突 —— 全局 latch 只在**语句入口**取一次，
+ * 不会与域锁形成环（域锁之间有全序断言把关）。
  */
 db_err db_exec(DB *db, const char *sql, Result **out)
 {
-    db_err rc;
-
-    latch_lock();
-    rc = db_exec_locked(db, sql, out);
-    latch_unlock();
-
-    return rc;
+    return db_exec_impl(db, sql, out);
 }
 
-static db_err db_exec_locked(DB *db, const char *sql, Result **out)
+static db_err db_exec_impl(DB *db, const char *sql, Result **out)
 {
     if (!db || !sql)
         return DB_E_INVAL;
@@ -317,7 +331,22 @@ static db_err db_exec_locked(DB *db, const char *sql, Result **out)
 
     QueryResult *qr = NULL;
     db->errmsg[0] = '\0';            /* 让执行器写新的错误描述 */
+
+    /*
+     * 模态语句才取全局 latch（理由见 db_exec 的注释）。
+     *
+     * 判据：这条语句的表在**注册表**里 → 它是模态提供的虚拟表。
+     * 关系模态的表在 catalog 里，不在注册表里。
+     */
+    bool modality = (st.table[0] != '\0' &&
+                     spi_registry_find(db->inst->reg, st.table) != NULL);
+
+    if (modality)
+        latch_lock();
     rc = exec_stmt(&db->db, &st, &qr, db->errmsg, (int)sizeof(db->errmsg));
+    if (modality)
+        latch_unlock();
+
     free_stmt(&st);
 
     if (rc != OK) {

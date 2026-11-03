@@ -50,7 +50,7 @@ static _Thread_local int t_depth;
  *
  * 【域编号 = 获取序号】
  *
- * 枚举值就是获取序号（catalog=1 … frame=5），
+ * 枚举值就是获取序号（catalog=1 … freelist=6），
  * 所以"全序检查"就是一句"已持有的域的序号必须都比我小"。
  *
  * 【违规处理函数是共享的 —— 但它不是"当前是谁"】
@@ -69,6 +69,7 @@ const char *latch_domain_name(LatchId id)
     switch (id) {
     case LATCH_CATALOG:  return "catalog";
     case LATCH_TXN:      return "txn";
+    case LATCH_BTREE:    return "btree";
     case LATCH_WAL:      return "wal";
     case LATCH_FREELIST: return "freelist";
     case LATCH_FRAME:    return "frame";
@@ -117,6 +118,19 @@ static bool latch_order_violates(LatchId id)
     return false;
 }
 
+/*
+ * 找出**序号最小**的那个违规域 —— 报它最有价值：
+ * 它就是"本该更外层、却被内层先拿了"的那个域。
+ */
+static LatchId latch_order_first_violating(LatchId id)
+{
+    for (int h = (int)id; h < LATCH_NDOMAIN; h++) {
+        if (t_held[h] > 0)
+            return (LatchId)h;
+    }
+    return id;
+}
+
 int latch_order_acquire(LatchId id)
 {
     if (id <= 0 || id >= LATCH_NDOMAIN)
@@ -129,10 +143,12 @@ int latch_order_acquire(LatchId id)
     }
 
     if (latch_order_violates(id)) {
-        char msg[128];
+        char msg[160];
         snprintf(msg, sizeof(msg),
-                 "获取 %s（序号 %d）时已持有更高序号的域",
-                 latch_domain_name(id), (int)id);
+                 "获取 %s（序号 %d）时已持有更高序号的域 %s（序号 %d）",
+                 latch_domain_name(id), (int)id,
+                 latch_domain_name(latch_order_first_violating(id)),
+                 (int)latch_order_first_violating(id));
         latch_violation(id, msg);
         return E_INVAL;              /* 只有装了处理函数才会走到这 */
     }

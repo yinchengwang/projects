@@ -57,7 +57,7 @@ int latch_depth(void);
  * ==================== v1.2 步骤 2：按域的 latch 框架 ====================
  *
  * 从"一把大锁"走向"编号的一组小锁"的第一步：**先把纪律立起来**，
- * 再一把一把地换（步骤 3 换 catalog，步骤 4 换 txn / wal / freelist / frame）。
+ * 再一把一把地换（步骤 3 换 catalog，步骤 4 换 txn / wal / freelist / frame / btree）。
  *
  * 【本步骤只做两件事】
  *
@@ -69,7 +69,7 @@ int latch_depth(void);
  *
  * 【获取全序（绝不逆序）】
  *
- *     catalog → txn → frame → wal → freelist
+ *     catalog → txn → btree → frame → wal → freelist
  *
  * ⚠️ **v1.2 步骤 4c 勘误：全序与计划里写的不同。**
  *
@@ -90,11 +90,24 @@ int latch_depth(void);
  * 把它当成**锁的获取顺序**就错了 ——
  * 语义顺序靠 WAL 规则保证（WAL 钩子 + page_lsn），不靠锁顺序。
  *
+ * ⚠️ **v1.2 步骤 4d 勘误：全序里多了一个 btree 域。**
+ *
+ * 退役大锁时实测发现：**B+tree 一把锁都没有**（`btree.c` 里没有任何
+ * pthread 调用），它的树结构（`root` / `height` / `scratch` 缓冲）
+ * 全是裸的共享可变状态。大锁在的时候它被顺带护住了，
+ * 大锁一撤，并发写索引就会**丢索引项**（实测：1200 行里点查能漏 200 行）。
+ *
+ * 所以补一个 **btree 域**：每棵树一把锁，护住整棵树的结构。
+ * 它必须在 **frame 之前**取 —— 树的操作要拿页（frame 域），
+ * 所以 btree 比 frame 更外层。
+ *
  * 现在的全序由**真实调用图**反推，每一条边都有代码位置支撑：
  *
- *   catalog → txn   绑定先查 catalog，再开事务
- *   catalog → frame catalog 写元数据页时持 catalog 锁
- *   frame   → wal   heap.c 的 wal_log / pager.c 的 flush_page 钩子
+ *   catalog → txn    绑定先查 catalog，再开事务
+ *   catalog → frame  catalog 写元数据页时持 catalog 锁
+ *   txn     → frame  事务表与页写入不交叉（xid 先取号再写页）
+ *   btree   → frame  B+tree 下降 / 分裂要拿页（btree.c 的 pager_get）
+ *   frame   → wal    heap.c 的 wal_log / pager.c 的 flush_page 钩子
  *   frame   → freelist  heap.c / btree.c 的 freelist_set
  *
  * 反过来没有一条边：wal 锁里不会去碰页，freelist 锁里也不会去碰页
@@ -106,9 +119,10 @@ int latch_depth(void);
  *
  *     L1 catalog → LATCH_CATALOG  = 1
  *     L2 txn     → LATCH_TXN      = 2
- *     L4 frame   → LATCH_FRAME    = 3
- *     L3 wal     → LATCH_WAL      = 4
- *     L5 freelist→ LATCH_FREELIST = 5
+ *     L3 btree   → LATCH_BTREE    = 3
+ *     L4 frame   → LATCH_FRAME    = 4
+ *     L5 wal     → LATCH_WAL      = 5
+ *     L6 freelist→ LATCH_FREELIST = 6
  *
  * 【为什么断言比测试可靠】
  *
@@ -126,10 +140,11 @@ int latch_depth(void);
 typedef enum {
     LATCH_CATALOG  = 1,   /* L1：表/列/索引元数据缓存（读写锁） */
     LATCH_TXN      = 2,   /* L2：next_xid、clog、活跃表（独占，很短） */
-    LATCH_FRAME    = 3,   /* L4：单页数据 + pin_count（每帧一把，极短） */
-    LATCH_WAL      = 4,   /* L3：日志缓冲、LSN 计数、append（独占） */
-    LATCH_FREELIST = 5,   /* L5：空闲页链（独占，很短） */
-    LATCH_NDOMAIN  = 6
+    LATCH_BTREE    = 3,   /* L3：B+tree 树结构（每棵树一把，独占） */
+    LATCH_FRAME    = 4,   /* L4：单页数据 + pin_count（每帧一把，极短） */
+    LATCH_WAL      = 5,   /* L5：日志缓冲、LSN 计数、append（独占） */
+    LATCH_FREELIST = 6,   /* L6：空闲页链（独占，很短） */
+    LATCH_NDOMAIN  = 7
 } LatchId;
 
 /*

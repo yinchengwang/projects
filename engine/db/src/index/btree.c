@@ -13,10 +13,12 @@
 
 #include "index/btree.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "common/crc.h"
+#include "common/latch.h"
 
 /* ---------------- 页格式 ---------------- */
 
@@ -58,7 +60,61 @@ struct BTree {
     u32       height;
     u32       npages;
     u8        scratch[PAGE_SIZE];   /* compact 用，避免原地搬 */
+
+    /*
+     * ==================== v1.2 步骤 4d：btree 域的锁 ====================
+     *
+     * 【为什么 B+tree 必须有自己的锁】
+     *
+     * 树结构本身就是**共享可变状态**，而且缺一不可：
+     *
+     *   - `root` / `height`：根分裂要换根，根降高要换根
+     *   - `scratch[]`：**compact 用的整页暂存区** —— 两个线程同时用它
+     *     就是两个人往同一块内存里搬数据 → 页内容直接乱掉
+     *   - **分裂本身不是原子的**：`insert_rec` 先在孩子页插，
+     *     再回父亲页插分隔键 —— 这两步之间如果另一个线程也在分裂，
+     *     父亲页的条目就可能重复或丢失
+     *
+     * 大锁在的时候，这些全被顺带护住了。
+     * 大锁一撤（步骤 4d），实测**并发写索引会丢索引项**：
+     * 1200 行并发插入，堆里 1200 行全在，点查却能漏掉 200 多行 ——
+     * **静默的数据不一致**（行在，索引找不到）。
+     *
+     * 【为什么是"每棵树一把"】
+     *
+     * 锁的粒度 = 索引的粒度。不同索引互不阻塞，
+     * 同一索引上的写才排队 —— 这正是索引该有的并发度。
+     *
+     * 【锁的全序】
+     *
+     * btree 在全序里排第 3（catalog → txn → btree → frame → wal → freelist）。
+     * 因为树的操作要拿页（`pager_get` → frame 域），
+     * 所以 btree 比 frame 更外层 ✓
+     *
+     * 反过来没有边：**没有任何路径是"持有页锁再去取树锁"的** ——
+     * 堆的写路径是 `heap_insert`（页锁在里面取好又放掉）
+     * 然后才 `index_insert_row`（树锁），两步是**先后**不是嵌套 ✓
+     */
+    pthread_mutex_t mu;
 };
+
+/*
+ * 取域锁 + 向 latch 框架记账。
+ *
+ * 记账让"catalog → txn → btree → frame → wal → freelist"这条全序
+ * 从步骤 2 起就是**机器检查**的。
+ */
+static void bt_lock(BTree *bt)
+{
+    pthread_mutex_lock(&bt->mu);
+    latch_order_acquire(LATCH_BTREE);
+}
+
+static void bt_unlock(BTree *bt)
+{
+    latch_order_release(LATCH_BTREE);
+    pthread_mutex_unlock(&bt->mu);
+}
 
 /* ---------------- header / slot 访问 ---------------- */
 
@@ -331,15 +387,21 @@ int btree_search(BTree *bt, const void *key, u16 klen, Rid *out, int max, int *n
     if (!bt || !key || !out || !n || klen == 0 || klen > BT_MAX_KEY)
         return E_INVAL;
 
+    bt_lock(bt);
+
     u32 leaf;
     int rc = descend(bt, (const u8 *)key, klen, &leaf);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     PageFrame *f;
     rc = pager_get(bt->pager, leaf, &f);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     u16 pos = lower_bound(f->data, (const u8 *)key, klen);
     int cnt = 0;
@@ -357,6 +419,7 @@ int btree_search(BTree *bt, const void *key, u16 klen, Rid *out, int max, int *n
     pager_unpin(bt->pager, leaf, false);
 
     *n = cnt;
+    bt_unlock(bt);
     return cnt > 0 ? OK : E_NOTFOUND;
 }
 
@@ -585,30 +648,41 @@ int btree_insert(BTree *bt, const void *key, u16 klen, Rid rid)
     if (!bt || !key || klen == 0 || klen > BT_MAX_KEY)
         return E_INVAL;
 
+    bt_lock(bt);
+
     Split sp;
     memset(&sp, 0, sizeof(sp));
 
     int rc = insert_rec(bt, bt->root, (const u8 *)key, klen, rid_to_u64(rid), &sp);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
-    if (!sp.split)
+    }
+    if (!sp.split) {
+        bt_unlock(bt);
         return OK;
+    }
 
     /* 根分裂：新建根 */
     u32 new_root;
     PageFrame *f;
     rc = bt_alloc_page(bt, BT_INNER, bt->height + 1, &new_root, &f);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     set_leftmost(f->data, bt->root);
     rc = insert_at(bt, f->data, 0, sp.sep, sp.sep_len, (u64)sp.right);
     pager_unpin(bt->pager, new_root, true);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     bt->root = new_root;
     bt->height++;
+    bt_unlock(bt);
     return OK;
 }
 
@@ -694,17 +768,23 @@ int btree_delete(BTree *bt, const void *key, u16 klen, Rid rid)
     if (!bt || !key || klen == 0 || klen > BT_MAX_KEY)
         return E_INVAL;
 
+    bt_lock(bt);
+
     bool empty = false;
     int rc = delete_rec(bt, bt->root, (const u8 *)key, klen, rid_to_u64(rid), &empty);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     /* 根降高：根是内部节点且只剩 leftmost 时，把唯一的孩子提上来 */
     for (;;) {
         PageFrame *f;
         rc = pager_get(bt->pager, bt->root, &f);
-        if (rc != OK)
+        if (rc != OK) {
+            bt_unlock(bt);
             return rc;
+        }
         bool inner = (bt_type(f->data) == BT_INNER);
         u16 nit = bt_nitems(f->data);
         u32 lm = bt_leftmost(f->data);
@@ -722,6 +802,7 @@ int btree_delete(BTree *bt, const void *key, u16 klen, Rid rid)
             break;
     }
 
+    bt_unlock(bt);
     return OK;
 }
 
@@ -769,6 +850,24 @@ int btree_scan(BTree *bt, const void *lo, u16 lolen,
         return E_IO;
     c->bt = bt;
 
+    /*
+     * 【树锁在这里取，并且交给游标一直持有】
+     *
+     * 游标要跨多次 `btree_cursor_next` 才能扫完。
+     * 中途放锁的话，并发写可能把叶子劈开：
+     * 游标记住的"下一个叶子"是劈开**之前**的右兄弟 ——
+     * 劈开后多出来的那半个叶子就被**跳过**了 → **静默少行**。
+     *
+     * 所以锁要一直持有到 `btree_cursor_close`。
+     * 代价：同一棵索引上的写要等这次扫描扫完 ——
+     * 这正是大锁时代的行为，只是粒度从"整个库"缩到了"这一棵索引"。
+     *
+     * 【契约：必须 close】
+     * 不 close 就等于把这棵树的锁永久占着（后面的写全堵住）。
+     * 执行器与 SPI 适配层都在 `scan_end` 里 close ✓
+     */
+    bt_lock(bt);
+
     if (hi) {
         memcpy(c->hi, hi, hilen);
         c->hilen = hilen;
@@ -785,12 +884,14 @@ int btree_scan(BTree *bt, const void *lo, u16 lolen,
         rc = descend(bt, (const u8 *)lo, lolen, &leaf);
         if (rc != OK) {
             free(c);
+            bt_unlock(bt);
             return rc;
         }
         c->leaf = leaf;
         rc = cursor_seek(c);
         if (rc != OK) {
             free(c);
+            bt_unlock(bt);
             return rc;
         }
         /* 跳到第一个 >= lo */
@@ -798,6 +899,7 @@ int btree_scan(BTree *bt, const void *lo, u16 lolen,
         rc = pager_get(bt->pager, c->leaf, &f);
         if (rc != OK) {
             free(c);
+            bt_unlock(bt);
             return rc;
         }
         c->pos = lower_bound(f->data, (const u8 *)lo, lolen);
@@ -821,6 +923,7 @@ int btree_scan(BTree *bt, const void *lo, u16 lolen,
             rc = pager_get(bt->pager, pid, &f);
             if (rc != OK) {
                 free(c);
+                bt_unlock(bt);
                 return rc;
             }
             if (bt_type(f->data) == BT_LEAF) {
@@ -835,12 +938,13 @@ int btree_scan(BTree *bt, const void *lo, u16 lolen,
         rc = cursor_seek(c);
         if (rc != OK) {
             free(c);
+            bt_unlock(bt);
             return rc;
         }
     }
 
     *out = c;
-    return OK;
+    return OK;              /* 树锁由游标持有，close 时才放 */
 }
 
 int btree_cursor_next(BtCursor *c, Rid *rid)
@@ -848,6 +952,13 @@ int btree_cursor_next(BtCursor *c, Rid *rid)
     if (!c || !rid)
         return E_INVAL;
 
+    /*
+     * 这里**不取树锁** —— 锁由 `btree_scan` 取、由 `btree_cursor_close` 放，
+     * 中间一直由这个游标持有（理由见 btree_scan 的注释）。
+     *
+     * 推论：游标只能在**创建它的那个线程**里用。
+     * 换线程用就等于在别人的锁上解锁 —— 未定义行为。
+     */
     for (;;) {
         PageFrame *f;
         int rc = pager_get(c->bt->pager, c->leaf, &f);
@@ -894,6 +1005,10 @@ int btree_cursor_next(BtCursor *c, Rid *rid)
 
 void btree_cursor_close(BtCursor *c)
 {
+    if (!c)
+        return;
+    /* 树锁是在 btree_scan 里取的，放在这里 —— 必须成对 */
+    bt_unlock(c->bt);
     free(c);
 }
 
@@ -935,6 +1050,10 @@ int btree_open(Pager *pg, FreeList *fl, u32 root, BTree **out)
     BTree *bt = calloc(1, sizeof(*bt));
     if (!bt)
         return E_IO;
+    if (pthread_mutex_init(&bt->mu, NULL) != 0) {
+        free(bt);
+        return E_IO;
+    }
     bt->pager = pg;
     bt->fl = fl;
     bt->root = root;
@@ -943,6 +1062,7 @@ int btree_open(Pager *pg, FreeList *fl, u32 root, BTree **out)
     PageFrame *f;
     int rc = pager_get(pg, root, &f);
     if (rc != OK) {
+        pthread_mutex_destroy(&bt->mu);
         free(bt);
         return rc;
     }
@@ -955,6 +1075,9 @@ int btree_open(Pager *pg, FreeList *fl, u32 root, BTree **out)
 
 void btree_destroy(BTree *bt)
 {
+    if (!bt)
+        return;
+    pthread_mutex_destroy(&bt->mu);
     free(bt);
 }
 
@@ -993,15 +1116,62 @@ int btree_reset(BTree *bt)
 {
     if (!bt)
         return E_INVAL;
+    bt_lock(bt);
     reset_walk(bt, bt->root, true);
     bt->height = 0;
     bt->npages = 1;
+    bt_unlock(bt);
     return OK;
 }
 
-u32 btree_height(const BTree *bt) { return bt ? bt->height : 0; }
-u32 btree_npages(const BTree *bt) { return bt ? bt->npages : 0; }
-u32 btree_root(const BTree *bt)   { return bt ? bt->root : PAGE_ID_NIL; }
+/*
+ * 【观察接口为什么要取锁】
+ *
+ * `root` / `height` / `npages` 是树结构的可变状态，
+ * 写线程会改它们（根分裂、根降高）。不加锁读就是数据竞争。
+ *
+ * `const BTree *` 的意思是"调用方不许改这棵树"，
+ * 不是"这个对象里的每个字节都不可变"——
+ * 锁的状态当然要变。所以取锁时显式去掉 const
+ * （与 freelist.c 的同类说明一致）。
+ */
+static BTree *bt_mut(const BTree *bt)
+{
+    return (BTree *)bt;
+}
+
+u32 btree_height(const BTree *bt)
+{
+    if (!bt)
+        return 0;
+    BTree *m = bt_mut(bt);
+    bt_lock(m);
+    u32 h = m->height;
+    bt_unlock(m);
+    return h;
+}
+
+u32 btree_npages(const BTree *bt)
+{
+    if (!bt)
+        return 0;
+    BTree *m = bt_mut(bt);
+    bt_lock(m);
+    u32 n = m->npages;
+    bt_unlock(m);
+    return n;
+}
+
+u32 btree_root(const BTree *bt)
+{
+    if (!bt)
+        return PAGE_ID_NIL;
+    BTree *m = bt_mut(bt);
+    bt_lock(m);
+    u32 r = m->root;
+    bt_unlock(m);
+    return r;
+}
 
 /*
  * 索引 key 的格式版本是不是当前代码认的那个？
@@ -1013,16 +1183,27 @@ u32 btree_root(const BTree *bt)   { return bt ? bt->root : PAGE_ID_NIL; }
  */
 int btree_format_ok(const BTree *bt)
 {
-    if (!bt || bt->root == PAGE_ID_NIL)
+    if (!bt)
         return 0;
+
+    BTree *m = bt_mut(bt);
+    bt_lock(m);
+    if (m->root == PAGE_ID_NIL) {
+        bt_unlock(m);
+        return 0;
+    }
+    u32 root = m->root;
 
     PageFrame *f;
-    if (pager_get(bt->pager, bt->root, &f) != OK)
+    if (pager_get(m->pager, root, &f) != OK) {
+        bt_unlock(m);
         return 0;
+    }
 
     u8 ver = f->data[BT_FLAGS];
-    pager_unpin(bt->pager, bt->root, false);
+    pager_unpin(m->pager, root, false);
 
+    bt_unlock(m);
     return ver == BT_FMTVER;
 }
 
@@ -1033,6 +1214,7 @@ typedef struct {
     u32 nleaves;
     u32 ninner;
     u32 items;
+    u32 leafitems;   /* 只数叶子页里的条目（真正存着 key→rid 的那些） */
     u64 used;
     u64 cap;
 } StatsAcc;
@@ -1056,6 +1238,7 @@ static int stats_walk(BTree *bt, u32 pid, StatsAcc *acc)
 
     if (bt_type(f->data) == BT_LEAF) {
         acc->nleaves++;
+        acc->leafitems += nit;
         pager_unpin(bt->pager, pid, false);
         return OK;
     }
@@ -1089,17 +1272,23 @@ int btree_stats(BTree *bt, BtStats *out)
     if (!bt || !out)
         return E_INVAL;
 
+    bt_lock(bt);
+
     StatsAcc acc;
     memset(&acc, 0, sizeof(acc));
 
     int rc = stats_walk(bt, bt->root, &acc);
-    if (rc != OK)
+    if (rc != OK) {
+        bt_unlock(bt);
         return rc;
+    }
 
     out->npages = acc.npages;
     out->nleaves = acc.nleaves;
     out->ninner = acc.ninner;
     out->items = acc.items;
+    out->leafitems = acc.leafitems;
     out->fill_pct = acc.cap ? (u32)(acc.used * 100u / acc.cap) : 0;
+    bt_unlock(bt);
     return OK;
 }

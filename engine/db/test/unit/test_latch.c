@@ -69,11 +69,16 @@ static void reset_order(void)
  *
  * 但真实代码不是这样嵌套的（详见 common/latch.h 的说明）：
  * WAL 钩子和 freelist_set 都是在**页还捏在手里**的时候调的，
- * 所以页比它们更外层。真实全序是：
+ * 所以页比它们更外层。
  *
- *     catalog(1) → txn(2) → frame(3) → wal(4) → freelist(5)
+ * ⚠️ **v1.2 步骤 4d 再勘误：多了一个 btree 域。**
  *
- * 这一项按**新全序**取域。
+ * 退役大锁时实测发现 B+tree 一把锁都没有（树结构是裸的共享状态）。
+ * 补上之后，树的操作要拿页 → 所以 btree 比 frame 更外层：
+ *
+ *     catalog(1) → txn(2) → btree(3) → frame(4) → wal(5) → freelist(6)
+ *
+ * 这一项按**当前全序**取域。
  */
 static void t1_in_order(void)
 {
@@ -81,16 +86,18 @@ static void t1_in_order(void)
 
     CHECK(latch_order_depth() == 0);
 
-    /* 全序：catalog → txn → frame → wal → freelist */
+    /* 全序：catalog → txn → btree → frame → wal → freelist */
     CHECK(latch_order_acquire(LATCH_CATALOG) == OK);
     CHECK(latch_order_acquire(LATCH_TXN) == OK);
+    CHECK(latch_order_acquire(LATCH_BTREE) == OK);
     CHECK(latch_order_acquire(LATCH_FRAME) == OK);
     CHECK(latch_order_acquire(LATCH_WAL) == OK);
     CHECK(latch_order_acquire(LATCH_FREELIST) == OK);
 
-    CHECK(latch_order_depth() == 5);
+    CHECK(latch_order_depth() == 6);
     CHECK(latch_order_held(LATCH_CATALOG));
     CHECK(latch_order_held(LATCH_TXN));
+    CHECK(latch_order_held(LATCH_BTREE));
     CHECK(latch_order_held(LATCH_FRAME));
     CHECK(latch_order_held(LATCH_WAL));
     CHECK(latch_order_held(LATCH_FREELIST));
@@ -100,6 +107,7 @@ static void t1_in_order(void)
     CHECK(latch_order_release(LATCH_FREELIST) == OK);
     CHECK(latch_order_release(LATCH_WAL) == OK);
     CHECK(latch_order_release(LATCH_FRAME) == OK);
+    CHECK(latch_order_release(LATCH_BTREE) == OK);
     CHECK(latch_order_release(LATCH_TXN) == OK);
     CHECK(latch_order_release(LATCH_CATALOG) == OK);
     CHECK(latch_order_depth() == 0);
@@ -112,11 +120,11 @@ static void t2_reverse_order_rejected(void)
     reset_order();
     latch_set_violation_handler(on_violation);
 
-    /* 先拿最高序号的 freelist（步骤 4c 之后全序最高位是 freelist = 5） */
+    /* 先拿最高序号的 freelist（当前全序最高位是 freelist = 6） */
     CHECK(latch_order_acquire(LATCH_FREELIST) == OK);
     CHECK(latch_order_depth() == 1);
 
-    /* 再拿 txn（序号 2 < 5）→ 逆序 */
+    /* 再拿 txn（序号 2 < 6）→ 逆序 */
     CHECK(latch_order_acquire(LATCH_TXN) != OK);
     CHECK(g_violations == 1);
     CHECK(g_last_violation_id == LATCH_TXN);

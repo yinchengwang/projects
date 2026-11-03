@@ -10,6 +10,8 @@
 
 #include "storage/heap.h"
 
+#include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,11 +21,26 @@ struct Heap {
     Pager    *pager;
     FreeList *fl;
     u32       root;
-    u32       npages;
+
+    /*
+     * 本表的页数。
+     *
+     * 【为什么是原子量】
+     *
+     * Heap 是**实例级共享**的（catalog 里每张表一个，所有连接共用）。
+     * 追加新页时 `npages++` 会被多个线程同时做 ——
+     * 不加保护就是数据竞争（UB），加普通锁又太重。
+     *
+     * 这个计数只用于观察（heap_npages），所以用 C11 原子量最省事 ✓
+     */
+    _Atomic u32 npages;
+
     u16       tid;
     HeapWalFn wal;
     void     *wal_ctx;
-    u64       wal_calls;
+
+    /* WAL 调用次数（同上：实例级共享的计数器） */
+    _Atomic u64 wal_calls;
 };
 
 struct HeapScan {
@@ -67,7 +84,7 @@ static int wal_log(Heap *h, u32 xid, u8 logtype, u32 page_id, u16 slot,
     *lsn_out = 0;
     if (!h->wal)
         return OK;
-    h->wal_calls++;
+    atomic_fetch_add(&h->wal_calls, 1);
     return h->wal(h->wal_ctx, xid, logtype, page_id, slot, slot_off,
                   before, blen, after, alen, lsn_out);
 }
@@ -178,7 +195,7 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
         bool mine = (f->data[H_TYPE] == PT_HEAP && page_table_id(f->data) == table_id);
         if (mine) {
             freelist_set(fl, p, page_free_bytes(f->data));
-            h->npages++;
+            atomic_fetch_add(&h->npages, 1);
         }
         pager_unpin(pg, p, false);
     }
@@ -225,7 +242,7 @@ static int append_page(Heap *h, u32 *pid_out, PageFrame **frame_out)
         return rc;
     }
     freelist_set(h->fl, pid, FL_USABLE);
-    h->npages++;
+    atomic_fetch_add(&h->npages, 1);
 
     *pid_out = pid;
     *frame_out = nf;
@@ -234,6 +251,43 @@ static int append_page(Heap *h, u32 *pid_out, PageFrame **frame_out)
 
 /* ---------------- 写路径 ---------------- */
 
+/*
+ * 一次插入最多重试多少次。
+ *
+ * 每次重试都意味着"我们挑的那页被别人抢先填满了"。
+ * 同一时刻能抢的线程数 = 写同一张表的并发连接数，
+ * 所以重试次数只要**大于并发写者数**就够收敛。
+ * 取 64 是为了给"多表多线程"的极端情况留余量。
+ */
+#define HEAP_INSERT_MAX_RETRY 64
+
+/*
+ * ==================== 为什么插入要重试 ====================
+ *
+ * freelist 是按**档位**挑页的，而档位是**插入之后**才更新的。
+ * 于是"找 → 用"之间有一个窗口：
+ *
+ *     线程 A：find → 页 P（档位 3，放得下）
+ *             → 拿 P 的内容锁 → 插进去 → 更新 P 的档位
+ *     线程 B：find → 页 P（档位**还是** 3 —— A 还没更新）
+ *             → 等 P 的内容锁 → 拿到时 P 已被 A 填满
+ *             → page_insert 报 E_NOSPACE
+ *
+ * 这不是"页不够用"，是**档位过期**。
+ * 真实数据库也有这个窗口（PG 的 FSM 本来就是近似的），
+ * 标准的处理办法就是**重试**：换一页再试。
+ *
+ * ==================== 为什么重试一定收敛 ====================
+ *
+ * 填满 P 的那个线程是在**持有 P 的内容锁**的时候更新档位的，
+ * 而我们是**拿到内容锁之后**才失败的 ——
+ * 所以失败时 P 的档位已经是新的（free < need ⟹ 档位 < need_level）。
+ *
+ * 而 freelist_find 只挑"档位 >= need_level"的页 ⟹ 不会再挑到 P ✓
+ *
+ * 换句话说：**每次失败都会把候选页从候选集里划掉**，
+ * 所以重试次数有上限，不会死循环。
+ */
 int heap_insert(Heap *h, u32 xid, const u8 *rec, u16 len, Rid *rid_out)
 {
     if (!h || !rec || !rid_out || len == 0)
@@ -243,45 +297,58 @@ int heap_insert(Heap *h, u32 xid, const u8 *rec, u16 len, Rid *rid_out)
     if (need > PAGE_SIZE - HDR_SIZE)
         return E_NOSPACE;
 
-    u32 pid = freelist_find(h->fl, (u16)need);
-    PageFrame *f = NULL;
-    int rc;
+    for (int attempt = 0; attempt < HEAP_INSERT_MAX_RETRY; attempt++) {
+        u32 pid = freelist_find(h->fl, (u16)need);
+        PageFrame *f = NULL;
+        int rc;
 
-    if (pid == PAGE_ID_NIL) {
-        rc = append_page(h, &pid, &f);
-        if (rc != OK)
-            return rc;
-    } else {
-        rc = pager_get(h->pager, pid, &f);
-        if (rc != OK)
-            return rc;
-    }
+        if (pid == PAGE_ID_NIL) {
+            /* 没有放得下的页了 → 开新页（新页一定是空的） */
+            rc = append_page(h, &pid, &f);
+            if (rc != OK)
+                return rc;
+        } else {
+            rc = pager_get(h->pager, pid, &f);
+            if (rc != OK)
+                return rc;
+        }
 
-    u16 slot;
-    rc = page_insert(f->data, rec, len, &slot);
-    if (rc != OK) {
-        pager_unpin(h->pager, pid, false);
-        return rc;
+        u16 slot;
+        rc = page_insert(f->data, rec, len, &slot);
+        if (rc != OK) {
+            pager_unpin(h->pager, pid, false);
+            if (rc != E_NOSPACE)
+                return rc;
+            /* 档位过期（别人抢先把这页填满了）→ 换一页重试 */
+            continue;
+        }
+
+        /*
+         * 顺序很重要：先写日志，再把 LSN 写进页头。
+         * 反过来的话，页上会带着一个"日志里还没有"的 LSN，
+         * 崩溃后重放会因为 page_lsn >= lsn 而跳过这条记录 —— 内容就丢了。
+         */
+        u16 slot_off = page_slot_offset(f->data, slot);
+        u32 lsn = 0;
+        rc = wal_log(h, xid, LOG_INSERT, pid, slot, slot_off, NULL, 0, rec, len, &lsn);
+        if (rc != OK) {
+            pager_unpin(h->pager, pid, false);
+            return rc;
+        }
+        if (lsn)
+            page_set_lsn(f->data, lsn);
+
+        freelist_set(h->fl, pid, page_free_bytes(f->data));
+        *rid_out = rid_make(pid, slot);
+        return pager_unpin(h->pager, pid, true);
     }
 
     /*
-     * 顺序很重要：先写日志，再把 LSN 写进页头。
-     * 反过来的话，页上会带着一个"日志里还没有"的 LSN，
-     * 崩溃后重放会因为 page_lsn >= lsn 而跳过这条记录 —— 内容就丢了。
+     * 重试到上限还没插进去 —— 说明页确实全满了（记录比页还大，
+     * 但那在前面就被 need > PAGE_SIZE - HDR_SIZE 拦住了）。
+     * 走到这里只能是"页被反复抢走"的极端情况，报错不静默丢数据。
      */
-    u16 slot_off = page_slot_offset(f->data, slot);
-    u32 lsn = 0;
-    rc = wal_log(h, xid, LOG_INSERT, pid, slot, slot_off, NULL, 0, rec, len, &lsn);
-    if (rc != OK) {
-        pager_unpin(h->pager, pid, false);
-        return rc;
-    }
-    if (lsn)
-        page_set_lsn(f->data, lsn);
-
-    freelist_set(h->fl, pid, page_free_bytes(f->data));
-    *rid_out = rid_make(pid, slot);
-    return pager_unpin(h->pager, pid, true);
+    return E_NOSPACE;
 }
 
 /*
@@ -515,6 +582,19 @@ static void heap_scan_release(HeapScan *s)
     }
 }
 
+/*
+ * 公开版：放开当前 pin 着的页。
+ *
+ * 为什么要给调用方用 —— 见 heap.h 里的说明：
+ * 扫描器会一直 pin 着当前页，调用方拿着扫描器的时候手里就有 frame 域的锁，
+ * 这时候去取 B+tree 的锁（btree 域）就变成了 "frame → btree" 的逆序。
+ */
+void heap_scan_release_page(HeapScan *s)
+{
+    if (s)
+        heap_scan_release(s);
+}
+
 int heap_scan_next(HeapScan *s, Rid *rid, u8 *buf, u16 bufsize, u16 *len_out)
 {
     if (!s || !rid || !buf || !len_out)
@@ -690,10 +770,10 @@ int heap_scan_page_batch(HeapScan *s, AmRowRef *out, int max, int *n_out)
 
 u32 heap_npages(const Heap *h)
 {
-    return h ? h->npages : 0;
+    return h ? (u32)atomic_load(&h->npages) : 0;
 }
 
 u64 heap_wal_calls(const Heap *h)
 {
-    return h ? h->wal_calls : 0;
+    return h ? (u64)atomic_load(&h->wal_calls) : 0;
 }

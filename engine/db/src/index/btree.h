@@ -58,6 +58,17 @@ int  btree_scan(BTree *bt, const void *lo, u16 lolen,
 int  btree_cursor_next(BtCursor *c, Rid *rid);
 void btree_cursor_close(BtCursor *c);
 
+/*
+ * ==================== 游标的契约（v1.2 步骤 4d） ====================
+ *
+ * 1. **必须 close**：btree_scan 取的树锁一直持有到 btree_cursor_close。
+ *    不 close 就等于把这棵索引的锁永久占着 —— 后面的写全堵住。
+ * 2. **同一线程用**：锁是创建游标的那个线程持有的，
+ *    换线程调用就是在别人的锁上解锁（未定义行为）。
+ * 3. 游标活着的时候，同一棵索引上的写会等它扫完 ——
+ *    这是"宁可慢，不可少行"的取舍（见 btree.c 里 btree_scan 的注释）。
+ */
+
 /* 把整棵树重置成空树，所有页还给 freelist。索引重建用。 */
 int  btree_reset(BTree *bt);
 
@@ -76,7 +87,8 @@ typedef struct {
     u32 npages;
     u32 nleaves;
     u32 ninner;
-    u32 items;       /* 所有页的条目总数 */
+    u32 items;       /* 所有页的条目总数（含内部节点的分隔键） */
+    u32 leafitems;   /* 只算叶子页里的条目 —— 真正存着的 key→rid 条目数 */
     u32 fill_pct;    /* 平均填充率：(容量 - 空闲) / 容量 */
 } BtStats;
 
