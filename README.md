@@ -76,8 +76,8 @@
 
 | 项 | 值 | 核实方式 |
 |---|-----|----------|
-| C 源码规模 | **169 个 `.c`/`.h`，39,694 行** | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db` |
-| 测试 | **38 个测试文件**（unit 25 + integration 13），**50 处断言全绿 / 0 FAIL** | `sh test/run.sh` |
+| C 源码规模 | **195 个 `.c`/`.h`，58,437 行**（`src/` + `bench/` + `test/`，不含 `build/`） | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
+| 测试 | **55 个测试文件**（unit 35 + integration 20），**73 处断言全绿 / 0 FAIL** | `sh test/run.sh` |
 | 依赖方向门禁 | `sh tools/check_deps.sh` → `✓ 依赖方向正确` | 该脚本 |
 | 计划文档 | `engine/db/docs/` 下 **21 篇**（`PLAN-v0.1` ~ `PLAN-v1.6` + `DESIGN.md` + `MODALITIES.md`） | `Get-ChildItem engine/db/docs` |
 
@@ -92,7 +92,9 @@ L4 modalities/   模态之间禁互相 include（graph/ 与 vector/ 各自独立
 ```
 
 **模态进度**：关系（v0.x）+ Blob（v0.9）+ 图（v0.11）+ 向量（v1.0）已落地；
-v1.1（向量化执行 + 规则 CBO）已完成；**下一个版本是 v1.2（内核收尾：copy-out → 细粒度 latch → 页内 compact → checkpoint）**；
+v1.1（向量化执行 + 规则 CBO）已完成；**v1.2（内核收尾：copy-out → 细粒度 latch → 页内 compact → checkpoint）七个步骤全部完成**；
+⚠️ **v1.2 唯一的未达标项是 A3（吞吐）**：细粒度 latch vs 大锁基线实测 **0.78× – 1.01×**（判据 ≥ 2×），
+瓶颈已定位为缓冲池的池级互斥量 `pg->mu` —— 详见 `engine/db/docs/PLAN-v1.2.md` §3 步骤 7；
 v1.3 ~ v1.6 依次为全文检索、地理空间、时序、文档/JSON 四模态（计划已生成，未执行）。
 
 **构建与测试**（独立于 CMake 工程轨，需 MinGW 工具链 + Git Bash）：
@@ -101,7 +103,7 @@ v1.3 ~ v1.6 依次为全文检索、地理空间、时序、文档/JSON 四模�
 export PATH="/c/mingw64/bin:$PATH"       # Windows 下 Makefile 强制用 sh（find/rm）
 cd engine/db
 mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror 零警告
-sh test/run.sh                           # 38 个测试文件全绿
+sh test/run.sh                           # 55 个测试文件全绿
 sh tools/check_deps.sh                   # 依赖方向门禁
 mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
 ```
@@ -209,7 +211,7 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 | 工程轨测试源文件 | **367** | `git ls-files 'engine/test/**'` 下的 `.c` / `.cpp`（db 289、sdk 36、algo 13、smoke 13、index 8、kbase 7、self_made_cpp 1） |
 | 工程轨 ctest 用例 | **835** | 已配置构建目录 `engine/build/base` 下 `ctest -N` 报告的用例总数（gtest 用例逐条展开） |
 | RAG 相关测试源文件 | **4** | `engine/test/db/rag`（1）+ `engine/test/sdk/rag`（3） |
-| 独立内核测试文件 | **38** | `engine/db/test/`（unit 25 + integration 13），由 `sh test/run.sh` 驱动，50 处断言全绿 |
+| 独立内核测试文件 | **55** | `engine/db/test/`（unit 35 + integration 20），由 `sh test/run.sh` 驱动，73 处断言全绿 |
 
 > 学习轨的测试与题解**已随学习轨迁出**，统计在 `../learning/` 仓，本仓不再重复计数。
 > `engine/build/` 是本地构建产物目录（未纳入版本控制），上面的 835 来自该目录中最近一次配置；
@@ -337,8 +339,8 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 | 4 个小程序 | `Get-ChildItem apps -Directory` |
 | 38 个 skill | `skills-lock.json` 的 `skills` 键计数 |
 | 95 个第三方 submodule（reference 仓） | `Select-String reference/.gitmodules '^\[submodule '` |
-| 独立内核 169 个 `.c`/`.h`、39,694 行 | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db` |
-| 独立内核 38 个测试文件 / 50 处断言 | `Get-ChildItem -Recurse -File engine/db/test -Filter '*.c'`；`sh test/run.sh` |
+| 独立内核 195 个 `.c`/`.h`、58,437 行 | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
+| 独立内核 55 个测试文件 / 73 处断言 | `Get-ChildItem -Recurse -File engine/db/test -Filter '*.c'`；`sh test/run.sh` |
 | 独立内核 21 篇计划与设计文档 | `Get-ChildItem engine/db/docs -Filter '*.md'` |
 
 ---

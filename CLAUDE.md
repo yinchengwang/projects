@@ -376,7 +376,7 @@ log_level = 'info'
 export PATH="/c/mingw64/bin:$PATH"   # Windows 下 Makefile 强制 SHELL := sh（依赖 find/rm）
 cd engine/db
 mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror，零警告
-sh test/run.sh                           # 38 个测试文件，50 处断言，期望 0 FAIL
+sh test/run.sh                           # 55 个测试文件，73 处断言，期望 0 FAIL
 sh tools/check_deps.sh                   # 依赖方向门禁，期望 ✓ 依赖方向正确
 mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
 ```
@@ -394,7 +394,7 @@ L4 modalities/                  模态之间禁互相 include
 **专属纪律：**
 
 - 编译门禁是 `-Werror`（比工程轨更严），**零警告**是硬要求
-- 新文件不超过 800 行；例外 `index/btree.c` 与 `catalog/catalog.c` 已记在 v1.2 计划里
+- 新文件不超过 800 行；`index/btree.c` 与 `catalog/catalog.c` 的例外**已在 v1.2 步骤 7 消除**（两者均已拆分）；既有超限文件 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 记在 v1.3 账上
 - 公开 API 前缀 `db_<模态>_<动作>`；内部错误码 `E_*`，公开层映射为 `DB_E_*`
 - 新入口必须成对 `latch_lock()` / `latch_unlock()`；xid 必须显式传参，不得藏进共享对象
 - 注释用中文，坑用 `M<层>-<序号>` 编号（汇总在 `engine/db/docs/MODALITIES.md`）
