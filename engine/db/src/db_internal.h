@@ -15,6 +15,8 @@
 #include "db.h"
 
 #include "catalog/catalog.h"
+#include "modalities/ft/ft_am.h"
+#include "modalities/ft/ft_index.h"
 #include "modalities/graph/graph.h"
 #include "modalities/graph/graph_am.h"
 #include "modalities/vector/hnsw_am.h"
@@ -91,6 +93,21 @@ typedef struct DbInstance {
     IndexAM      vec_index_am;      /* HNSW 的 Index AM（knn 的真实现） */
     HnswAmCtx    vec_index_ctx;
 
+    /*
+     * 全文检索模态（v1.3）。
+     *
+     * 同样是**实例级共享**：所有连接看同一批文档。
+     *
+     * ⚠️ **本版的索引只在内存里**：段的内容在磁盘上，
+     * 但段的清单与 tombstone 集合不落盘（步骤 5 才做）。
+     * 所以重开库得到的是一个**空索引** —— 打开时建一个空的，
+     * 不假装能从磁盘上恢复（见 db_ft_open 的注释）。
+     */
+    FtIndex     *ft;
+    bool         ft_ready;
+    StorageAM    ft_am;
+    FtAmCtx      ft_ctx;
+
     char     *walpath;
     char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
     int       nconns;       /* 引用计数 */
@@ -132,6 +149,30 @@ int  db_vec_open(DbInstance *inst);
 
 /* 关库：落盘索引 + 释放（必须在 pager_close 之前调） */
 void db_vec_close(DbInstance *inst);
+
+/*
+ * ---------------- 全文检索模态（v1.3，db_ft.c 实现） ----------------
+ */
+
+/*
+ * 把 ft_docs 虚拟表接进注册表（仿 db_vec_register）。
+ *
+ * 注册表只知道"名字 → 一个 StorageAM"，
+ * 所以加第 4 个模态不需要改注册表，更不需要改执行器。
+ */
+int db_ft_register(DbInstance *inst);
+
+/*
+ * 开库时建索引 + 注册虚拟表。
+ *
+ * ⚠️ **本版建的是空索引**：段的清单与 tombstone 集合只在内存里，
+ * 磁盘上没有"段目录页"（那是步骤 5 的事）。所以重开库**恢复不了**
+ * 上次灌进去的文档 —— 如实建一个空的，不假装能恢复。
+ */
+int db_ft_open(DbInstance *inst);
+
+/* 关库：释放索引（必须在 pager_close 之前调） */
+void db_ft_close(DbInstance *inst);
 
 /*
  * WAL 钩子（db.c 实现，db_graph.c 复用）。

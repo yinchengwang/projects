@@ -55,6 +55,18 @@ static void instance_close(DbInstance *inst)
     db_vec_close(inst);
 
     /*
+     * 全文索引：释放内存里的段清单与 tombstone 集合。
+     *
+     * 必须在 pager_close **之前** —— 段持有 pager 的引用，
+     * 先关 pager 再释放段就是访问已释放的东西。
+     *
+     * 本版的索引**不落盘**（段目录页是步骤 5 的事），
+     * 所以这里没有"flush"这一步 —— 段的内容在数据文件里，
+     * 丢的只是"清单"。
+     */
+    db_ft_close(inst);
+
+    /*
      * 关闭顺序很重要：**先刷页，再写 CHECKPOINT**。
      *
      * 反过来的话：CHECKPOINT 先落盘，然后刷页时崩溃了 ——
@@ -164,6 +176,12 @@ void db_abandon(DB *db)
             free(st);
             inst->vstate = NULL;
         }
+        /*
+         * 全文索引：断电时同样**不**落盘清单（本来就是内存里的）。
+         * 段的内容在数据文件里（脏页丢了就丢了），
+         * 清单更是一开始就没落盘 —— 所以这里只是释放内存。
+         */
+        db_ft_close(inst);
         spi_registry_destroy(inst->reg);
         pager_abandon(inst->pager);     /* 脏页全丢 —— 这就是"断电" */
         wal_close(inst->wal);            /* 日志已经 fsync 过了，关掉即可 */

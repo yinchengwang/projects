@@ -453,4 +453,102 @@ db_err db_vec_flush(DB *db);
  */
 db_err db_vec_reindex(DB *db);
 
+/* ---------------- 全文检索模态（v1.3） ---------------- */
+
+/*
+ * 全文检索 = 模态 4（倒排索引 + BM25）。
+ *
+ * 【两条路径，各管各的】
+ *
+ *   db_ft_search()   专用 API：按 BM25 相关性排序返回 (doc_id, score)
+ *   ft_docs 虚拟表   元数据路径：SELECT doc_id, doc_len, nterms, sealed FROM ft_docs
+ *
+ * 为什么相关性排序**不进 SQL 谓词**（PLAN-v1.3 §1.2 的判决）：
+ * idf / avgdl 是**全局统计量**，随语料和段合并而变，
+ * 执行器拿不到、也没法独立重求值 ——
+ * "下推给超集、执行器重判"这条契约在相关性排序上**不成立**。
+ * 与向量模态的"距离排序不进 SQL"是同一个判断。
+ *
+ * 【本版的索引只在内存里】
+ *
+ * 段的内容在磁盘上，但**段的清单与 tombstone 集合只在内存**
+ * （落盘是步骤 5 的事）。所以：
+ *   - 重开库**不会**恢复索引 —— 打开时得到的是一个**空索引**；
+ *   - 关库前灌进去的文档，重开后就查不到了。
+ * 这不是 bug，是本版的边界，如实写在这里。
+ */
+
+/* 一个检索命中 */
+typedef struct {
+    uint32_t doc_id;   /* 文档标识（调用方给的） */
+    double   score;    /* BM25 分数 */
+} db_ft_hit;
+
+/*
+ * 灌一篇文档进索引。
+ *
+ * text / len —— 原文（内部用分词器切词）。
+ * doc_id —— 调用方给的文档标识，**必须互不相同**
+ *   （同一个 id 灌两次会得到两个段里的同一篇文档；
+ *    ft_docs 以"段号大者胜"取后者，检索时两篇都会命中）。
+ *
+ * 写入是**追加**语义：每次调用建一个新段（写只追加，不改老段）。
+ * 段数超过阈值（8）时该触发合并，但本版**不自动合并** ——
+ * 合并由 db_ft_merge 显式触发。
+ */
+db_err db_ft_add(DB *db, uint32_t doc_id, const char *text, uint32_t len);
+
+/*
+ * 检索（主路径）。
+ *
+ * query —— 查询串，内部用分词器切词（与线性扫描同一个分词器）。
+ * top_k —— 要返回多少条。
+ * max_out —— out 的容量。**top_k > max_out 直接报 DB_E_NOSPACE**，
+ *   不做静默截断（截断出来的结果"看起来对其实错"）。
+ *
+ * 排序：分数降序、分数相同按 doc_id 升序。
+ * 被删除（tombstone）的文档不进结果。
+ *
+ * *n_out —— 实际返回几条（可能少于 top_k：命中不足时）。
+ */
+db_err db_ft_search(DB *db, const char *query, uint32_t top_k,
+                    db_ft_hit *out, uint32_t max_out, uint32_t *n_out);
+
+/*
+ * 删一篇文档（打 tombstone）。
+ *
+ * 立刻生效：之后的检索不再返回它，ft_docs 里它的 sealed = 1。
+ * 删一个不存在的文档是**合法的空操作**（不报错）。
+ */
+db_err db_ft_delete(DB *db, uint32_t doc_id);
+
+/*
+ * 触发一次 Tiered 合并。
+ *
+ * 段数 ≤ 8 时什么都不做（*merged_out = 0）。
+ * 否则挑相邻窗口里"文档数之和最小"的几个段合成一个新段，
+ * 合并时**物理丢弃**被 tombstone 的文档。
+ *
+ * *merged_out —— 被合并掉的段数（0 = 没合并）。
+ */
+db_err db_ft_merge(DB *db, uint32_t *merged_out);
+
+/* 这个库有没有全文索引（打开库就会建一个空的，所以恒为真） */
+int db_ft_exists(DB *db);
+
+/* 索引里的文档数（各段 doc_count 之和，**含**已删除的） */
+uint32_t db_ft_ndocs(DB *db);
+
+/* 段数 / 删除标记数（诊断用） */
+uint32_t db_ft_nsegs(DB *db);
+uint32_t db_ft_ntombstones(DB *db);
+
+/*
+ * 诊断：索引累计读了多少页。
+ *
+ * 与 db_vec_page_reads / db_blob_page_reads 同一个思路：
+ * **用可观测量证明"少读了"**（A5 的度量）。
+ */
+uint64_t db_ft_page_reads(DB *db);
+
 #endif /* DB_DB_H */

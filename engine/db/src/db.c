@@ -594,6 +594,26 @@ db_err db_open(const char *path, DB **out)
         rc = vrc;
     }
 
+    /*
+     * 全文检索模态（v1.3）。
+     *
+     * 和 blob / graph / vector 一样是**实例级共享**：所有连接看同一批文档。
+     *
+     * 【打开时得到的是一个空索引】
+     *
+     * 段的**内容**在磁盘上，但段的清单与 tombstone 集合**不落盘**
+     * （段目录页是步骤 5 的事）。所以这里建的是一个空索引 ——
+     * **不假装能从磁盘上恢复**上次的文档。
+     *
+     * 为什么不像 graph 那样"没有就不注册"：ft 的磁盘上**根本没有**
+     * "有没有索引"这个标记 —— 打开就建一个空的，ft_docs 是一张空表。
+     * 这与 graph 的"没有图 → 查它得到表不存在"是两种不同的状态，
+     * 如实区分开（见 db_ft_open 的注释）。
+     */
+    if (rc == OK) {
+        rc = db_ft_open(inst);
+    }
+
     if (rc != OK) {
         graph_destroy(inst->graph);
         spi_registry_destroy(inst->reg);

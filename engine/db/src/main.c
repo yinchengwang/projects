@@ -41,6 +41,7 @@
 #include <string.h>
 
 #include "db.h"
+#include "repl_ft.h"
 #include "repl_vec.h"
 
 static void print_result(Result *r)
@@ -583,6 +584,12 @@ int main(int argc, char **argv)
             }
             if (strncmp(p, "VEC", 3) == 0) {
                 handle_vec(db, line);
+                len = 0;
+                sql[0] = '\0';
+                continue;
+            }
+            if (strncmp(p, "FT", 2) == 0) {
+                handle_ft(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
