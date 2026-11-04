@@ -20,7 +20,10 @@
 # 这些在 cmd.exe 下要么没有、要么语法不同。
 ifeq ($(OS),Windows_NT)
   ifeq ($(wildcard C:/Program Files/Git/usr/bin/sh.exe),)
-    GIT_SH := $(shell where sh 2>NUL | head -1)
+    # ⚠️ 不要用 `2>NUL`：那是 cmd.exe 的语法，在 Git Bash 下会**在仓库目录里
+    # 创建一个名为 NUL 的空文件**（每次构建都会长出来，污染 git status）。
+    # `2>/dev/null` 两边都对（cmd.exe 也认 /dev/null，只是当成一个普通文件名）。
+    GIT_SH := $(shell where sh 2>/dev/null | head -1)
   else
     GIT_SH := C:/Program Files/Git/usr/bin/sh.exe
   endif
@@ -75,7 +78,7 @@ OBJ_DIR ?= build
 #       （文本搜索工具，不是 findutils）⇒ SRCS 为空 ⇒ 目标为空 ⇒ 什么都不编。
 # 修法：改用 make 内建的 $(wildcard ...)（不经过 shell，没有引号问题）。
 # 验证：改一个源文件 → 对象文件时间戳必须跟着变（否则就是又踩了这个坑）。
-#SRCS    := $(wildcard $(SRC_DIR)/*/*.c $(SRC_DIR)/*/*/*.c $(SRC_DIR)/*.c)
+SRCS    := $(wildcard $(SRC_DIR)/*/*.c $(SRC_DIR)/*/*/*.c $(SRC_DIR)/*.c)
 OBJS    := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS    := $(OBJS:.o=.d)
 
@@ -108,6 +111,7 @@ LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench.exe
 LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock.exe
 FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench.exe
 GEO_BENCH_EXE   := $(OBJ_DIR)/geo_bench.exe
+TS_BENCH_EXE    := $(OBJ_DIR)/ts_bench.exe
 else
 VEC_BENCH_EXE   := $(OBJ_DIR)/vec_bench
 GRAPH_BENCH_EXE := $(OBJ_DIR)/graph_bench
@@ -117,6 +121,7 @@ LATCH_BENCH_EXE := $(OBJ_DIR)/latch_bench
 LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock
 FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench
 GEO_BENCH_EXE   := $(OBJ_DIR)/geo_bench
+TS_BENCH_EXE    := $(OBJ_DIR)/ts_bench
 endif
 
 # ==================== A3：latch 吞吐基准（细粒度 vs 大锁基线） ====================
@@ -169,6 +174,9 @@ FT_BENCH_OBJS := $(OBJ_DIR)/bench/ft_bench.o $(OBJ_DIR)/bench/ft_bench_a4.o \
 # v1.4 步骤 4：地理空间的基准（A5 · Z-order 与 R-tree 的窗口 IO 对照）。
 GEO_BENCH_OBJS := $(OBJ_DIR)/bench/geo_bench.o
 
+# v1.5 步骤 6：时序模态的压缩比基准（A3 · 三种数据形态 × 三种列编码）。
+TS_BENCH_OBJS := $(OBJ_DIR)/bench/ts_bench.o
+
 # 基准要连主库的全部对象（但不能连 main.o —— 它自己带 main）
 LIB_OBJS   := $(filter-out $(OBJ_DIR)/main.o,$(OBJS))
 
@@ -209,7 +217,10 @@ $(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
-bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE) $(GEO_BENCH_EXE)
+bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE) $(GEO_BENCH_EXE) $(TS_BENCH_EXE)
+
+$(TS_BENCH_EXE): $(TS_BENCH_OBJS) $(LIB_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(TS_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
 
 $(GEO_BENCH_EXE): $(GEO_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(GEO_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
