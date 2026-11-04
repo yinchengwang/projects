@@ -123,6 +123,28 @@ struct Pager {
     u32   epoch;            /* 当前窗口号（从 1 开始；0 保留作"没读过"） */
     u64   unique_window;    /* 本窗口内读盘过的不重复页数 */
     u64   unique_total;     /* 全程读盘过的不重复页数（数据足迹） */
+
+    /*
+     * ---------------- 全局空闲页栈（v1.5 步骤 4 · 计划判决 4） ----------------
+     *
+     * pager_alloc 的**对侧**：pager_free 把一页还回来，pager_alloc 优先从这里取。
+     *
+     * 【为什么放在 pager 而不是某张表的 freelist】
+     *
+     * 判决 4 说的是"**全局页分配器的空闲回收**"：
+     * 回收的页号空间是共享的，任何结构都可能拿到它 ——
+     * 这与"表的 freelist"（每表独立、语义是"哪一页能放下 N 字节的行"）
+     * 是两回事。所以这个栈挂在 pager 上，**不属于任何表**。
+     *
+     * 【并发】
+     *
+     * 只被池级**写锁**保护（与帧哈希表、Clock 手同一把锁）。
+     * 取页/还页都是低频操作，不必为它单开一把锁 ——
+     * 单开反而要多占一个锁域，锁序表又要改。
+     */
+    u32  *free_ids;         /* 空闲页号栈（后进先出） */
+    u32   free_count;
+    u32   free_cap;
 };
 
 /* ---------------- 池级锁（pager.c 实现，两边共用） ---------------- */
@@ -191,5 +213,12 @@ int pager_flush_page(Pager *pg, u32 page_id, const u8 *buf);
  * 一直到 pager_unpin 才释放。
  */
 int pager_fetch_frame(Pager *pg, u32 page_id, PageFrame **out);
+
+/*
+ * ---------------- 全局空闲页栈（pager_free.c 实现，pager.c 用） ----------------
+ *
+ * pager_free_pop —— 取一个空闲页号（栈空则返回 false，调用方去文件尾追加）。
+ */
+bool pager_free_pop(Pager *pg, u32 *page_id);
 
 #endif /* DB_STORAGE_PAGER_INTERNAL_H */

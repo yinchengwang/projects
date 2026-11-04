@@ -479,21 +479,39 @@ int pager_get(Pager *pg, u32 page_id, PageFrame **out)
 
 int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
 {
+    u32 id;
+    bool reused = false;
+
     if (!pg || !page_id || !out)
         return E_INVAL;
 
     /*
-     * 先占号再取帧。
+     * 先问**全局空闲栈**（v1.5 步骤 4 · 判决 4）。
      *
-     * 占号必须在取帧**之前** —— 否则两个线程会拿到同一个页号。
-     * 用原子 fetch_add 一次搞定"读号 + 加一"，不用碰锁 ✓
+     * 有空闲页就复用 —— 页号空间是共享的，回收的页该给谁就给谁。
+     * 没有才在文件尾追加（原来的行为）。
      */
-    u32 id = (u32)atomic_fetch_add(&pg->npages, 1);
+    if (pager_free_pop(pg, &id)) {
+        reused = true;
+    } else {
+        /*
+         * 先占号再取帧。
+         *
+         * 占号必须在取帧**之前** —— 否则两个线程会拿到同一个页号。
+         * 用原子 fetch_add 一次搞定"读号 + 加一"，不用碰锁 ✓
+         */
+        id = (u32)atomic_fetch_add(&pg->npages, 1);
+    }
 
     int rc = pager_fetch_frame(pg, id, out);
     if (rc != OK) {
-        /* 取帧失败：把号退回去（否则文件里会留下一个空洞） */
-        atomic_fetch_sub(&pg->npages, 1);
+        if (!reused) {
+            /* 取帧失败：把号退回去（否则文件里会留下一个空洞） */
+            atomic_fetch_sub(&pg->npages, 1);
+        } else {
+            /* 复用的页取不到帧 ⇒ 放回空闲栈，别把它弄丢了 */
+            (void)pager_free(pg, id);
+        }
         return rc;
     }
     /* 分配也是一次"取页" —— 逻辑页读要算它（v1.3 欠账 6） */
@@ -505,6 +523,8 @@ int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
     *page_id = id;
     return OK;
 }
+
+/* 空闲栈（pager_free / pager_free_count）在 pager_free.c 里实现 */
 
 int pager_unpin(Pager *pg, u32 page_id, bool dirty)
 {
@@ -654,6 +674,7 @@ void pager_abandon(Pager *pg)
     free(pg->hash_keys);
     free(pg->hash_vals);
     free(pg->phys_epoch);
+    free(pg->free_ids);
     db_rwlock_destroy(&pg->mu);
     free(pg);
 }
