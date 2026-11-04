@@ -167,6 +167,17 @@ int ts_ttl_expire(Pager *pg, TsDir *d, i64 now_ms, u64 ttl_sec,
 int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
                           u32 page_count, u32 *freed_out);
 
+/*
+ * 同上，但**带写日志上下文**（v1.5 步骤 6 · T10）。
+ *
+ * 回收要清零每一页 ⇒ 那也是一次改页 ⇒ 也要进 WAL
+ * （否则"这页已经空了"这件事没有记录）。
+ *
+ * w —— 写日志上下文（NULL = 不写日志，等价于 ts_ttl_release_pages）。
+ */
+int ts_ttl_release_pages_wal(Pager *pg, TsPartState state, u32 first_page,
+                             u32 page_count, const TsWal *w, u32 *freed_out);
+
 #ifdef __cplusplus
 }
 #endif

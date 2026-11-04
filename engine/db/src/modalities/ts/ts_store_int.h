@@ -3,6 +3,7 @@
 
 #include "common/types.h"
 #include "modalities/ts/ts_dir.h"
+#include "modalities/ts/ts_wal.h"
 #include "modalities/ts/tsstore.h"
 #include "storage/pager.h"
 
@@ -30,7 +31,6 @@ extern "C" {
  * ⚠️ 这个头文件**不是对外契约**：只有 tsstore.c 与 ts_seal.c 包含它。
  *    对外的接口一律走 tsstore.h / ts_seal.h。
  */
-
 /*
  * 一个分区的**运行时**状态（按目录的磁盘序下标）。
  *
@@ -64,8 +64,33 @@ struct TsStore {
 
     u64 total_rows;   /* 活着的读数总数 */
     u64 page_reads;   /* 累计逻辑页读（口径同 db_geo_page_reads） */
-    u32 seal_seq;     /* 封窗序号（单调递增；没有 WAL ⇒ 没有 LSN，见坑 M6-41） */
+    u32 seal_seq;     /* 封窗序号（单调递增；见下面 seal_seq 的说明） */
+
+    /*
+     * 写日志上下文（v1.5 步骤 6 · T10）。
+     *
+     * fn == NULL = 本库不写日志（单元测试直接用模态时）。
+     * 目录对象里也有一份（ts_dir_set_wal 挂的）——
+     * 目录页与 meta 页由 ts_dir 层写，那一层拿不到存储的这份上下文，
+     * 所以两边各存一份（内容相同：fn + ctx）。
+     */
+    TsWal wal;
 };
+
+/*
+ * 带写日志上下文的建库 / 开库（内部实现）。
+ *
+ * 之所以拆出这两个"带上下文"的版本：
+ *   - 目录的 meta 页是**建库时**写的 ⇒ 上下文必须在建目录**之前**挂上，
+ *     否则那张 meta 页不进日志（崩在"建完库还没写第一条读数"时，
+ *     重开库会找不到时序存储 —— 看起来像"没建过"）；
+ *   - 对外的 ts_store_create / ts_store_open 不带上下文（契约不变），
+ *     它们只是这两个函数的"不写日志"版本。
+ *
+ * 实现在 tsstore.c；声明放在这里是因为要用到 struct TsStore。
+ */
+int ts_store_create_impl(Pager *pg, u32 span_sec, const TsWal *w, TsStore **out);
+int ts_store_open_impl(Pager *pg, const TsWal *w, TsStore **out);
 
 #ifdef __cplusplus
 }

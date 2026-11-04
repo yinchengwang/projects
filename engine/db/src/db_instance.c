@@ -213,8 +213,8 @@ void db_abandon(DB *db)
         db_geo_close(inst);
         /*
          * 时序模态（v1.5）：断电时读数页**不**落盘 ——
-         * 本模态不写 WAL（坑 M6-41：WAL 是步骤 6 的账），
-         * 所以断电时这批读数就是没了。这里只是释放内存。
+         * 没关系：分区页 / 列式页 / 目录页都进 WAL（v1.5 步骤 6 · T10），
+         * 重开库时由 WAL 重放整页镜像补回来。这里只是释放内存。
          */
         db_ts_close(inst);
         spi_registry_destroy(inst->reg);

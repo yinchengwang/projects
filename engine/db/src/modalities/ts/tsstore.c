@@ -223,6 +223,9 @@ static int ts_walk_part(TsStore *st, u32 first_page, u32 *rows_out,
  *
  * 页没满 ⇒ 直接追加；页满了 ⇒ spill：开一张新页，先把行写进新页，
  * 再把旧页的 next 指过去（坑 M6-29：顺序不能反）。
+ *
+ * 步骤 6：每次改页都走 ts_pg_commit（先写日志、再写 LSN、最后归还页）。
+ * 写日志失败 ⇒ 页恢复原样 ⇒ 这次追加作废（半截行绝不能落盘）。
  */
 static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
 {
@@ -231,6 +234,8 @@ static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
     u32 pid = rt->last_page;
     u32 n;
     u8 *row;
+    u8 before[PAGE_SIZE];      /* 要改的那一页的前像 */
+    u8 newbefore[PAGE_SIZE];   /* spill 时新页的前像 */
     bool spilled = false;
     int rc;
 
@@ -255,14 +260,20 @@ static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
             (void)pager_unpin(st->pg, pid, false);
             return rc;
         }
+        ts_wal_snap(nf->data, newbefore);   /* 新页的前像（此刻还是全零） */
         page_init(nf->data, (u8)PT_TS_PART);
         put_u32(nf->data + TSSP_NROWS, 0);
         put_u32(nf->data + TSSP_NEXT, PAGE_ID_NIL);
 
         /* 旧页接上新页（先写新页的内容，再接链 —— 见坑 M6-29） */
+        ts_wal_snap(fr->data, before);
         put_u32(fr->data + TSSP_NEXT, npid);
         page_set_checksum(fr->data);
-        (void)pager_unpin(st->pg, pid, true);
+        rc = ts_pg_commit(st->pg, pid, fr, &st->wal, before);
+        if (rc != OK) {
+            (void)pager_unpin(st->pg, npid, false);
+            return rc;
+        }
 
         rt->page_count++;
         rt->last_page = npid;
@@ -272,6 +283,9 @@ static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
         spilled = true;
     }
 
+    if (!spilled) {
+        ts_wal_snap(fr->data, before);
+    }
     row = fr->data + TSSP_DATA + (size_t)n * TS_ROW_SIZE;
     put_u64(row + 0, (u64)r->time);
     put_u64(row + 8, (u64)r->tag);
@@ -279,7 +293,7 @@ static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
     put_u32(fr->data + TSSP_NROWS, n + 1);
     page_set_checksum(fr->data);
 
-    rc = pager_unpin(st->pg, pid, true);
+    rc = ts_pg_commit(st->pg, pid, fr, &st->wal, spilled ? newbefore : before);
     if (rc != OK)
         return rc;
 
@@ -308,7 +322,16 @@ static int ts_append_row(TsStore *st, u32 idx, const TsReading *r)
 
 /* ---------------- 新建 ---------------- */
 
-int ts_store_create(Pager *pg, u32 span_sec, TsStore **out)
+/*
+ * 新建一个时序存储（内部实现，带写日志上下文）。
+ *
+ * w —— 写日志上下文（NULL = 不写日志）。
+ *
+ * ⚠️ 上下文要在**建目录之前**挂上：目录的 meta 页是建库时写的，
+ *    它不进日志 ⇒ 崩在"建完库还没写第一条读数"时，重开库会找不到
+ *    时序存储（看起来像"没建过"）。见 ts_wal.h。
+ */
+int ts_store_create_impl(Pager *pg, u32 span_sec, const TsWal *w, TsStore **out)
 {
     TsStore *st = NULL;
     TsDir *dir = NULL;
@@ -336,7 +359,7 @@ int ts_store_create(Pager *pg, u32 span_sec, TsStore **out)
     if (rc != E_NOTFOUND)
         return rc;
 
-    rc = ts_dir_create(pg, span_sec, &dir);
+    rc = ts_dir_create_wal(pg, span_sec, w, &dir);
     if (rc != OK)
         return rc;
 
@@ -348,13 +371,30 @@ int ts_store_create(Pager *pg, u32 span_sec, TsStore **out)
     st->pg = pg;
     st->dir = dir;
     st->span_sec = span_sec;
+    if (w)
+        st->wal = *w;
     *out = st;
     return OK;
 }
 
+int ts_store_create(Pager *pg, u32 span_sec, TsStore **out)
+{
+    return ts_store_create_impl(pg, span_sec, NULL, out);
+}
+
+int ts_store_create_wal(Pager *pg, u32 span_sec, const TsWal *w, TsStore **out)
+{
+    return ts_store_create_impl(pg, span_sec, w, out);
+}
+
 /* ---------------- 打开 ---------------- */
 
-int ts_store_open(Pager *pg, TsStore **out)
+/*
+ * 打开磁盘上已有的时序存储（内部实现，带写日志上下文）。
+ *
+ * w —— 写日志上下文（NULL = 不写日志）。
+ */
+int ts_store_open_impl(Pager *pg, const TsWal *w, TsStore **out)
 {
     TsStore *st = NULL;
     TsDir *dir = NULL;
@@ -378,6 +418,15 @@ int ts_store_open(Pager *pg, TsStore **out)
     st->pg = pg;
     st->dir = dir;
     st->span_sec = ts_dir_span_sec(dir);
+    if (w) {
+        st->wal = *w;
+        /*
+         * 目录也要挂上同一份上下文 —— 目录页与 meta 页由 ts_dir 层写，
+         * 那层拿不到存储的这份。必须**在下面的水位线校正之前**挂上：
+         * 校正会写目录页（那是改页的写点）。
+         */
+        ts_dir_set_wal(dir, &st->wal);
+    }
 
     n = ts_dir_count(dir);
     rc = ts_rt_reserve(st, n);
@@ -465,6 +514,16 @@ int ts_store_open(Pager *pg, TsStore **out)
     return OK;
 }
 
+int ts_store_open(Pager *pg, TsStore **out)
+{
+    return ts_store_open_impl(pg, NULL, out);
+}
+
+int ts_store_open_wal(Pager *pg, const TsWal *w, TsStore **out)
+{
+    return ts_store_open_impl(pg, w, out);
+}
+
 /* ---------------- 释放 ---------------- */
 
 void ts_store_destroy(TsStore *st)
@@ -516,6 +575,7 @@ int ts_store_insert(TsStore *st, const TsReading *r)
     PageFrame *fr = NULL;
     u32 pid = 0;
     u8 *row;
+    u8 before[PAGE_SIZE];
     int rc;
 
     if (!st || !r)
@@ -564,6 +624,7 @@ int ts_store_insert(TsStore *st, const TsReading *r)
     if (rc != OK)
         return rc;
 
+    ts_wal_snap(fr->data, before);   /* 新页的前像（此刻还是全零） */
     page_init(fr->data, (u8)PT_TS_PART);
     put_u32(fr->data + TSSP_NROWS, 0);
     put_u32(fr->data + TSSP_NEXT, PAGE_ID_NIL);
@@ -575,7 +636,7 @@ int ts_store_insert(TsStore *st, const TsReading *r)
     put_u32(fr->data + TSSP_NROWS, 1);
     page_set_checksum(fr->data);
 
-    rc = pager_unpin(st->pg, pid, true);
+    rc = ts_pg_commit(st->pg, pid, fr, &st->wal, before);
     if (rc != OK)
         return rc;
 

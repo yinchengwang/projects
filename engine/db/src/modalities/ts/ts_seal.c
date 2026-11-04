@@ -43,8 +43,9 @@
 #include "modalities/ts/ts_column.h"
 #include "modalities/ts/ts_store_int.h"
 
-int ts_seal_write(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
-                  u32 *head_out, u32 *pages_out, u32 *n_rows_out)
+int ts_seal_write_wal(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
+                      const TsWal *w, u32 *head_out, u32 *pages_out,
+                      u32 *n_rows_out)
 {
     u32 rows = 0;
     u32 raw_pages = 0;
@@ -87,8 +88,8 @@ int ts_seal_write(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
     }
 
     /* 编码成列式页（旧裸写页的位置记进头部页，仅供将来回收） */
-    rc = ts_column_write(pg, ts, tag, val, rows, first_page, raw_pages, seal_seq,
-                         &head, &pages);
+    rc = ts_column_write_wal(pg, ts, tag, val, rows, first_page, raw_pages,
+                              seal_seq, w, &head, &pages);
     if (rc != OK)
         goto out;
 
@@ -102,6 +103,14 @@ out:
     free(tag);
     free(val);
     return rc;
+}
+
+/* 不写日志的版本（单元测试直接用模态时走这条路）。 */
+int ts_seal_write(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
+                  u32 *head_out, u32 *pages_out, u32 *n_rows_out)
+{
+    return ts_seal_write_wal(pg, first_page, seal_seq, reads, NULL,
+                             head_out, pages_out, n_rows_out);
 }
 
 /* ---------------- 第二步：翻目录 ---------------- */
@@ -174,8 +183,9 @@ int ts_store_seal(TsStore *st, u32 idx)
         return E_NOTSUP;
 
     /* 第一步：写列式页（**不改目录** —— 崩在这里分区仍然是完整的旧分区） */
-    rc = ts_seal_write(st->pg, info.first_page, st->seal_seq + 1u, &st->page_reads,
-                       &head, &pages, &rows);
+    rc = ts_seal_write_wal(st->pg, info.first_page, st->seal_seq + 1u,
+                           &st->page_reads, &st->wal,
+                           &head, &pages, &rows);
     if (rc != OK)
         return rc;
 

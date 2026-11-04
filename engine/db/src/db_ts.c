@@ -18,8 +18,21 @@
  *
  * geo 的写**没有事务边界**（xid 固定 0），时序也一样：
  * 读数写进去就一直在，唯一的删除路径是 TTL 的整分区回收。
- * 两者都不写 WAL —— 时序模态的 WAL 是**步骤 6 的账**（坑 M6-41）：
- * 现在崩了 ⇒ 这批读数没了（页是脏页，WAL 没有镜像）。
+ *
+ * 【WAL：v1.5 步骤 6（T10）已接入】
+ *
+ * 分区页 / 列式页 / 目录页 / meta 页现在都进日志（整页镜像，见 ts_wal.h）：
+ * 本层把 db_wal_hook 注入模态，模态每个改页的写点都"先写日志再改页"，
+ * 崩溃后由 WAL 重放把页补回来。
+ *
+ * ⚠️ 但时序的写**没有事务边界**：日志只用于 redo，**不用于 undo**
+ * （xid 固定 0 = 系统事务，恢复时永不回滚）。
+ * 将来要把时序的写纳入用户事务，必须同时补真正的 undo。
+ *
+ * ⭐ 时序比地理多一条好处：**读数不可变**（计划 §1.1）⇒ undo 永远用不上。
+ *
+ * ⚠️ 坑 M5-16 的同款事实：时序的读数**只存在分区页里**（没有第二份行存），
+ * 所以 WAL 是**唯一**的恢复路径 —— 没有 WAL ⇒ 崩了就是这批读数没了。
  *
  * ==================== TTL 的接口依赖 ====================
  *
@@ -50,12 +63,28 @@
 #include "modalities/ts/ts_am_ext.h"
 #include "modalities/ts/ts_dir.h"       /* TsDir 的类型（TTL 的接口要用） */
 #include "modalities/ts/ts_ttl.h"
+#include "modalities/ts/ts_wal.h"
 #include "modalities/ts/tsstore.h"
 
 /* 分区窗口的默认值：1 天（与 tsstore.h 的说法一致） */
 #define TS_DEFAULT_SPAN_SEC 86400u
 
 /* ---------------- 小工具 ---------------- */
+
+/*
+ * 时序模态的写日志上下文（v1.5 步骤 6 · T10）。
+ *
+ * 模态只认 L0 的 LogHookFn，不碰 wal/（分层：模态不能依赖 L1）。
+ * 钩子的实现是 db_wal_hook（src/db.c），它把记录翻译成 WAL 记录。
+ *
+ * ctx 传 DbInstance *（与 geo / blob / catalog 同一个口径）：
+ * WAL 是实例级共享的，日志钩子的生命周期必须跟实例一致。
+ */
+static void dt_wal(TsWal *w, DbInstance *inst)
+{
+    w->fn = db_wal_hook;
+    w->ctx = inst;
+}
 
 static void dt_err(DB *db, const char *msg)
 {
@@ -128,13 +157,17 @@ int db_ts_register(DbInstance *inst)
 int db_ts_open(DbInstance *inst)
 {
     TsStore *st = NULL;
+    TsWal w;
     int rc;
 
     if (!inst) {
         return E_INVAL;
     }
 
-    rc = ts_store_open(inst->pager, &st);
+    /* 注入写日志钩子（v1.5 步骤 6 · T10）—— 理由见 dt_wal 的说明 */
+    dt_wal(&w, inst);
+
+    rc = ts_store_open_wal(inst->pager, &w, &st);
     if (rc != OK) {
         inst->ts = NULL;
         inst->ts_ready = false;
@@ -184,6 +217,7 @@ db_err db_ts_create(DB *db)
 {
     DbInstance *inst;
     TsStore *st = NULL;
+    TsWal w;
     int rc;
 
     if (!db) {
@@ -199,7 +233,11 @@ db_err db_ts_create(DB *db)
         return DB_E_INVAL;
     }
 
-    rc = ts_store_create(inst->pager, TS_DEFAULT_SPAN_SEC, &st);
+    /* 注入写日志钩子（v1.5 步骤 6 · T10）——
+     * 目录的 meta 页是建库时写的 ⇒ 上下文必须在建库之前挂上。 */
+    dt_wal(&w, inst);
+
+    rc = ts_store_create_wal(inst->pager, TS_DEFAULT_SPAN_SEC, &w, &st);
     if (rc == OK) {
         inst->ts = st;
         inst->ts_ready = true;
@@ -275,6 +313,15 @@ db_err db_ts_insert(DB *db, const db_ts_reading *r)
 
     latch_lock();
     rc = ts_store_insert(inst->ts, &tr);
+    /*
+     * 日志落盘（WAL 规则：日志先落盘，脏页才能落盘）。
+     *
+     * 时序的写**不在用户事务里**（没有事务边界），所以每次写完
+     * 就把日志刷到盘上 —— 与地理模态 db_geo_insert 同一个口径。
+     * 不这么做的话，断电时日志还在缓冲区里（页也没落盘）⇒ 这批读数没了。
+     */
+    if (rc == OK)
+        rc = wal_fsync(inst->wal);
     latch_unlock();   /* 成对释放（硬规则 8，坑 M6-60：忘了 unlock 就把整个库卡死） */
 
     if (rc != OK) {
@@ -321,6 +368,15 @@ db_err db_ts_retention(DB *db, uint32_t retention_sec)
     latch_lock();
     rc = ts_ttl_expire(inst->pager, (TsDir *)ts_store_dir(inst->ts), now_ms,
                        (u64)retention_sec, &stats);
+    /*
+     * 日志落盘（理由同 db_ts_insert）。
+     *
+     * TTL 的第一步（目录项改成 DROPPED）已经进了 WAL，
+     * 这里把日志刷到盘上 ⇒ "这个分区已过期"这件事落盘了，
+     * 才轮到页被回收（坑 M6-49）。
+     */
+    if (rc == OK)
+        rc = wal_fsync(inst->wal);
     latch_unlock();
 
     if (rc != OK) {

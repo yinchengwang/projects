@@ -328,9 +328,12 @@ static int col_read_header(Pager *pg, u32 head_page, ColHdr *h, u64 *reads)
  * 把一列的编码字节写成一串数据页。
  *
  * 坑 M6-41：链要等页号都拿到了才串得上 ⇒ 写两遍（先写内容，再接链）。
+ *
+ * 步骤 6：两遍都进 WAL —— 第一遍是新页（整页镜像），
+ * 第二遍是就地改写（把 H_NEXT 指到下一页）。
  */
 static int col_write_chain(Pager *pg, u32 col, const u8 *buf, u32 len,
-                           u32 *first_out, u32 *pages_out)
+                           const TsWal *w, u32 *first_out, u32 *pages_out)
 {
     u32 npages = 0;
     u32 *ids = NULL;
@@ -356,6 +359,7 @@ static int col_write_chain(Pager *pg, u32 col, const u8 *buf, u32 len,
         u32 pid = 0;
         u32 off = i * TSC_CAP;
         u32 chunk = len - off;
+        u8 before[PAGE_SIZE];
 
         if (chunk > TSC_CAP)
             chunk = TSC_CAP;
@@ -364,6 +368,7 @@ static int col_write_chain(Pager *pg, u32 col, const u8 *buf, u32 len,
         if (rc != OK)
             goto out;
 
+        ts_wal_snap(fr->data, before);   /* 新页的前像（此刻还是全零） */
         page_init(fr->data, (u8)PT_TS_COL);
         put_u32(fr->data + TSC_VER, TS_COL_VER);
         put_u32(fr->data + TSC_FLAGS, TS_COL_FLAG_DATA);
@@ -373,7 +378,7 @@ static int col_write_chain(Pager *pg, u32 col, const u8 *buf, u32 len,
         memcpy(fr->data + TSC_DATA, buf + off, chunk);
         page_set_checksum(fr->data);
 
-        rc = pager_unpin(pg, pid, true);
+        rc = ts_pg_commit(pg, pid, fr, w, before);
         if (rc != OK)
             goto out;
 
@@ -384,15 +389,17 @@ static int col_write_chain(Pager *pg, u32 col, const u8 *buf, u32 len,
     for (i = 0; i < npages; i++) {
         PageFrame *fr = NULL;
         u32 next = (i + 1u < npages) ? ids[i + 1u] : PAGE_ID_NIL;
+        u8 before[PAGE_SIZE];
 
         rc = pager_get(pg, ids[i], &fr);
         if (rc != OK)
             goto out;
 
+        ts_wal_snap(fr->data, before);
         put_u32(fr->data + H_NEXT, next);
         page_set_checksum(fr->data);
 
-        rc = pager_unpin(pg, ids[i], true);
+        rc = ts_pg_commit(pg, ids[i], fr, w, before);
         if (rc != OK)
             goto out;
     }
@@ -459,9 +466,9 @@ static int col_load_chain(Pager *pg, u32 col, const ColHdr *h, u8 *buf, u64 *rea
 
 /* ---------------- 列式页：写 ---------------- */
 
-int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
-                    u32 n, u32 old_first, u32 old_pages, u32 seal_seq,
-                    u32 *head_out, u32 *pages_out)
+int ts_column_write_wal(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
+                         u32 n, u32 old_first, u32 old_pages, u32 seal_seq,
+                         const TsWal *w, u32 *head_out, u32 *pages_out)
 {
     u8 *bt = NULL;
     u8 *bg = NULL;
@@ -477,6 +484,7 @@ int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
     u32 vp = 0;
     u32 head = 0;
     PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
     int rc;
 
     if (!pg || !head_out || !pages_out)
@@ -517,13 +525,13 @@ int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
 
     /* ---- 写数据页 ---- */
 
-    rc = col_write_chain(pg, TSCOL_TIME, bt, lt, &tf, &tp);
+    rc = col_write_chain(pg, TSCOL_TIME, bt, lt, w, &tf, &tp);
     if (rc != OK)
         goto out;
-    rc = col_write_chain(pg, TSCOL_TAG, bg, lg, &gf, &gp);
+    rc = col_write_chain(pg, TSCOL_TAG, bg, lg, w, &gf, &gp);
     if (rc != OK)
         goto out;
-    rc = col_write_chain(pg, TSCOL_VALUE, bv, lv, &vf, &vp);
+    rc = col_write_chain(pg, TSCOL_VALUE, bv, lv, w, &vf, &vp);
     if (rc != OK)
         goto out;
 
@@ -533,6 +541,7 @@ int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
     if (rc != OK)
         goto out;
 
+    ts_wal_snap(fr->data, before);   /* 新页的前像（此刻还是全零） */
     page_init(fr->data, (u8)PT_TS_COL);
     put_u32(fr->data + TSC_VER, TS_COL_VER);
     put_u32(fr->data + TSC_FLAGS, TS_COL_FLAG_HEADER);
@@ -555,7 +564,7 @@ int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
     put_u32(fr->data + TSC_VCOUNT, n);
     page_set_checksum(fr->data);
 
-    rc = pager_unpin(pg, head, true);
+    rc = ts_pg_commit(pg, head, fr, w, before);
     if (rc != OK)
         goto out;
 
@@ -567,6 +576,15 @@ out:
     free(bg);
     free(bv);
     return rc;
+}
+
+/* 不写日志的版本（单元测试直接用模态时走这条路）。 */
+int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
+                    u32 n, u32 old_first, u32 old_pages, u32 seal_seq,
+                    u32 *head_out, u32 *pages_out)
+{
+    return ts_column_write_wal(pg, ts, tag, val, n, old_first, old_pages,
+                                seal_seq, NULL, head_out, pages_out);
 }
 
 /* ---------------- 列式页：读 ---------------- */

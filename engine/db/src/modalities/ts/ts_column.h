@@ -3,6 +3,7 @@
 
 #include "common/error.h"
 #include "common/types.h"
+#include "modalities/ts/ts_wal.h"
 #include "modalities/ts/tsstore.h"
 #include "storage/pager.h"
 
@@ -192,6 +193,20 @@ int ts_part_read_rows(Pager *pg, u32 first_page, u32 max_rows,
 int ts_column_write(Pager *pg, const i64 *ts, const i64 *tag, const double *val,
                      u32 n, u32 old_first, u32 old_pages, u32 seal_seq,
                      u32 *head_out, u32 *pages_out);
+
+/*
+ * 同上，但**带写日志上下文**（v1.5 步骤 6 · T10）。
+ *
+ * 列式页是封窗时写的 ⇒ 崩在封窗中间 ⇒ 列式页只写了一半。
+ * 它们必须进 WAL，否则重放后目录项说"这个分区是列式的"，
+ * 而列式页是半截的 ⇒ 读出来是**半截数据**（还不报错）。
+ *
+ * w —— 写日志上下文（NULL = 不写日志，等价于 ts_column_write）。
+ */
+int ts_column_write_wal(Pager *pg, const i64 *ts, const i64 *tag,
+                         const double *val,
+                         u32 n, u32 old_first, u32 old_pages, u32 seal_seq,
+                         const TsWal *w, u32 *head_out, u32 *pages_out);
 
 /*
  * 读一个列式分区：解码回三列（调用方给好缓冲，各 n 个）。

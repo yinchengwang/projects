@@ -3,6 +3,7 @@
 
 #include "common/error.h"
 #include "common/types.h"
+#include "modalities/ts/ts_wal.h"
 #include "modalities/ts/tsstore.h"
 #include "storage/pager.h"
 
@@ -101,6 +102,25 @@ extern "C" {
  */
 int ts_seal_write(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
                   u32 *head_out, u32 *pages_out, u32 *n_rows_out);
+
+/*
+ * 同上，但**带写日志上下文**（v1.5 步骤 6 · T10）。
+ *
+ * 封窗写的列式页必须进 WAL：崩在封窗中间 ⇒ 列式页只写了一半。
+ * 没有 WAL 时它们是"孤儿页"（目录项还没翻 ⇒ 读不到 ⇒ 只是浪费空间），
+ * 有了 WAL 之后它们会被重放补齐 ⇒ 半截的列式页也能变成完整的。
+ *
+ * ⚠️ 但封窗的原子性**仍然只靠"目录项是唯一的权威"**（坑 M6-40、M6-63）：
+ * WAL 保证"改了就有日志、能重放补齐"，**不**保证"多页操作是原子的"。
+ * 真正保证"要么完整旧分区、要么完整新分区"的是
+ * "先写列式页、最后才翻目录项"这个顺序。
+ * 翻目录那一步写日志失败 ⇒ 目录项没翻 ⇒ 仍然是完整的旧分区 ✓。
+ *
+ * w —— 写日志上下文（NULL = 不写日志，等价于 ts_seal_write）。
+ */
+int ts_seal_write_wal(Pager *pg, u32 first_page, u32 seal_seq, u64 *reads,
+                      const TsWal *w, u32 *head_out, u32 *pages_out,
+                      u32 *n_rows_out);
 
 /*
  * 第二步：把目录项翻成 SEALED。

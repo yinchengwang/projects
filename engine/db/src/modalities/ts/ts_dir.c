@@ -13,6 +13,26 @@
  * 扩页：尾页满了 ⇒ 新分配一张目录页接在链尾（新页 TSD_PREV = 老尾页号，
  * 老尾页 TSD_NEXT = 新页号 —— **老页被改了一次**）。⚠️ 老页被改 ⇒ 断电
  * 可能把它写坏 ⇒ E_CORRUPT。这是"没有 WAL"的代价（M6-23）。
+ *
+ * ==================== 步骤 6：这些页现在都进 WAL（v1.5 步骤 6 · T10） ====================
+ *
+ * 目录页与 meta 页原来**不进 WAL** ⇒ 断电可能停在"尾目录页写了一半"
+ * ⇒ 该页校验和不过 ⇒ 开库报 E_CORRUPT（坑 M6-23）。
+ *
+ * 现在每个改页的写点都走 ts_pg_commit（见 ts_wal.h）：
+ *   拍前像 → 写日志 → 写 LSN → 归还页。
+ * 日志写失败 ⇒ 页恢复原样（半改的页绝不能落盘）。
+ *
+ * 写顺序仍然是"先数据后水位线"（先写尾目录页，再写 meta 页）——
+ * 这条不变式与 WAL 正交：WAL 保证"改了就有日志"，
+ * 而"先数据后水位线"保证的是"链上的条数 ≥ meta 记的"（坑 M6-24）。
+ *
+ * 【读的那半在 ts_dir_query.c】（坑 M6-68）
+ *
+ * 本文件原来 799 行（上限 800），步骤 6 还要往里加 WAL 的写点 ⇒
+ * 把只读的查询部分（取目录项 / 按时间找分区 / 计数与诊断）
+ * 挪到 ts_dir_query.c，私有结构挪到 ts_dir_int.h。
+ * 对外的契约（ts_dir.h）一个字都没改。
  */
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +41,8 @@
 #include "common/error.h"
 #include "common/types.h"
 #include "modalities/ts/ts_dir.h"
+#include "modalities/ts/ts_dir_int.h"
+#include "modalities/ts/ts_wal.h"
 #include "storage/page.h"
 #include "storage/pager.h"
 
@@ -32,26 +54,6 @@
 
 /* 内存数组的初始容量 */
 #define TS_DIR_INIT_CAP 64u
-
-struct TsDir {
-    Pager *pg;
-
-    u32 meta_page;   /* meta 页页号 */
-    u32 dir_head;    /* 目录链首页 */
-    u32 dir_tail;    /* 目录链尾页 */
-    u32 span_sec;    /* 分区窗口（秒） */
-
-    u32 n_parts;      /* 目录项个数 */
-    u32 n_dir_pages;  /* 目录页数 */
-    u32 meta_nparts;  /* meta 页里的水位线 */
-
-    TsPartInfo *items;   /* 目录项（磁盘序） */
-    u32 *item_page;      /* 每项所在目录页 */
-    u16 *item_slot;      /* 每项在页内的槽位号 */
-    u32 *sorted;         /* 按 start_ms 升序的下标 */
-    u32 cap;             /* 上面四个数组的容量 */
-    u64 page_reads;      /* 累计逻辑页读 */
-};
 
 /*
  * 位模式互转（memcpy，避开有符号↔无符号转换的实现定义行为）。
@@ -165,10 +167,14 @@ static void sorted_insert(TsDir *d, u32 idx, u32 n_existing)
 
 /*
  * 把 meta 页写回磁盘（校验和要重算：不重算这页以后就被当成坏页）。
+ *
+ * 步骤 6：改页之前先拍前像，改完走 ts_pg_commit —— 先写日志、
+ * 再写 LSN、最后归还页（见 ts_wal.h）。
  */
 static int meta_store(TsDir *d)
 {
     PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
     int rc;
 
     rc = pager_get(d->pg, d->meta_page, &fr);
@@ -176,6 +182,7 @@ static int meta_store(TsDir *d)
         return rc;
     }
     d->page_reads++;
+    ts_wal_snap(fr->data, before);
 
     put_u32(fr->data + TSM_VER, TS_DIR_META_VER);
     put_u32(fr->data + TSM_SPAN, d->span_sec);
@@ -184,7 +191,7 @@ static int meta_store(TsDir *d)
     put_u32(fr->data + TSM_NPARTS, d->n_parts);
     page_set_checksum(fr->data);
 
-    rc = pager_unpin(d->pg, d->meta_page, true);
+    rc = ts_pg_commit(d->pg, d->meta_page, fr, &d->wal, before);
     if (rc != OK) {
         return rc;
     }
@@ -232,6 +239,7 @@ static int dir_new_page(TsDir *d, u32 prev, u32 *pid_out)
 {
     PageFrame *fr = NULL;
     u32 pid = 0;
+    u8 before[PAGE_SIZE];
     int rc;
 
     rc = alloc_page(d->pg, &pid, &fr);
@@ -239,6 +247,7 @@ static int dir_new_page(TsDir *d, u32 prev, u32 *pid_out)
         return rc;
     }
     d->page_reads++;
+    ts_wal_snap(fr->data, before);   /* 新页的前像（此刻还是全零） */
 
     page_init(fr->data, (u8)PT_TS_DIR);
     put_u32(fr->data + TSD_VER, TS_DIR_PAGE_VER);
@@ -247,7 +256,7 @@ static int dir_new_page(TsDir *d, u32 prev, u32 *pid_out)
     put_u32(fr->data + TSD_PREV, prev);
     page_set_checksum(fr->data);
 
-    rc = pager_unpin(d->pg, pid, true);
+    rc = ts_pg_commit(d->pg, pid, fr, &d->wal, before);
     if (rc != OK) {
         return rc;
     }
@@ -260,6 +269,7 @@ static int dir_link_new_page(TsDir *d, u32 *new_pid)
 {
     PageFrame *fr = NULL;
     u32 pid = 0;
+    u8 before[PAGE_SIZE];
     int rc;
 
     rc = dir_new_page(d, d->dir_tail, &pid);
@@ -273,9 +283,10 @@ static int dir_link_new_page(TsDir *d, u32 *new_pid)
         return rc;
     }
     d->page_reads++;
+    ts_wal_snap(fr->data, before);
     put_u32(fr->data + TSD_NEXT, pid);
     page_set_checksum(fr->data);
-    rc = pager_unpin(d->pg, d->dir_tail, true);
+    rc = ts_pg_commit(d->pg, d->dir_tail, fr, &d->wal, before);
     if (rc != OK) {
         return rc;
     }
@@ -288,11 +299,22 @@ static int dir_link_new_page(TsDir *d, u32 *new_pid)
 
 /* ---------------- 建 / 开 ---------------- */
 
-int ts_dir_create(Pager *pg, u32 span_sec, TsDir **out)
+/*
+ * 新建一个分区目录（内部实现）。
+ *
+ * w —— 写日志上下文（NULL = 不写日志）。
+ *
+ * ⚠️ 上下文必须在**写 meta 页之前**挂上（v1.5 步骤 6 · T10）：
+ * 那张 meta 页是"这个库建过时序存储"的唯一证据，
+ * 它不进日志 ⇒ 崩在"建完库还没写第一条读数"时，
+ * 重开库会找不到时序存储（看起来像"没建过"）。
+ */
+static int dir_create(Pager *pg, u32 span_sec, const TsWal *w, TsDir **out)
 {
     TsDir *d;
     PageFrame *fr = NULL;
     u32 pid = 0;
+    u8 before[PAGE_SIZE];
     int rc;
 
     if (!pg || !out) {
@@ -303,11 +325,22 @@ int ts_dir_create(Pager *pg, u32 span_sec, TsDir **out)
         return E_INVAL;   /* 窗口为 0 ⇒ 路由无从谈起 */
     }
 
+    d = (TsDir *)calloc(1, sizeof(TsDir));
+    if (d == NULL) {
+        return E_NOSPACE;
+    }
+    d->pg = pg;
+    if (w) {
+        d->wal = *w;      /* 上下文先挂上：下面就要写 meta 页了 */
+    }
+
     rc = alloc_page(pg, &pid, &fr);
     if (rc != OK) {
+        free(d);
         return rc;
     }
 
+    ts_wal_snap(fr->data, before);   /* 新页的前像（此刻还是全零） */
     page_init(fr->data, (u8)PT_TS_META);
     put_u32(fr->data + TSM_VER, TS_DIR_META_VER);
     put_u32(fr->data + TSM_SPAN, span_sec);
@@ -315,16 +348,12 @@ int ts_dir_create(Pager *pg, u32 span_sec, TsDir **out)
     put_u32(fr->data + TSM_TAIL, PAGE_ID_NIL);
     put_u32(fr->data + TSM_NPARTS, 0);
     page_set_checksum(fr->data);
-    rc = pager_unpin(pg, pid, true);
+    rc = ts_pg_commit(pg, pid, fr, &d->wal, before);
     if (rc != OK) {
+        free(d);
         return rc;
     }
 
-    d = (TsDir *)calloc(1, sizeof(TsDir));
-    if (d == NULL) {
-        return E_NOSPACE;
-    }
-    d->pg = pg;
     d->meta_page = pid;
     d->dir_head = PAGE_ID_NIL;
     d->dir_tail = PAGE_ID_NIL;
@@ -333,6 +362,35 @@ int ts_dir_create(Pager *pg, u32 span_sec, TsDir **out)
 
     *out = d;
     return OK;
+}
+
+int ts_dir_create(Pager *pg, u32 span_sec, TsDir **out)
+{
+    return dir_create(pg, span_sec, NULL, out);
+}
+
+int ts_dir_create_wal(Pager *pg, u32 span_sec, const TsWal *w, TsDir **out)
+{
+    return dir_create(pg, span_sec, w, out);
+}
+
+/* 换掉目录的写日志上下文（开库后补挂用；w == NULL = 不写日志）。 */
+void ts_dir_set_wal(TsDir *d, const TsWal *w)
+{
+    if (!d) {
+        return;
+    }
+    if (w) {
+        d->wal = *w;
+    } else {
+        memset(&d->wal, 0, sizeof(d->wal));
+    }
+}
+
+/* 取目录的写日志上下文（TTL 这类"只有目录没有存储"的层要用）。 */
+const TsWal *ts_dir_wal(const TsDir *d)
+{
+    return d ? &d->wal : NULL;
 }
 
 /*
@@ -549,6 +607,7 @@ int ts_dir_append(TsDir *d, const TsPartInfo *info)
     PageFrame *fr = NULL;
     u32 cur;
     u32 nent;
+    u8 before[PAGE_SIZE];
     int rc;
 
     if (!d || !info) {
@@ -597,16 +656,17 @@ int ts_dir_append(TsDir *d, const TsPartInfo *info)
         nent = 0;
     }
 
-    /* 写条目 */
+    /* 写条目（步骤 6：先写日志再改页 —— 见 ts_wal.h） */
     rc = pager_get(d->pg, cur, &fr);
     if (rc != OK) {
         return rc;
     }
     d->page_reads++;
+    ts_wal_snap(fr->data, before);
     ent_encode(fr->data + TSD_DATA + nent * TS_DIR_ENT_SIZE, info);
     put_u32(fr->data + TSD_NENT, nent + 1u);
     page_set_checksum(fr->data);
-    rc = pager_unpin(d->pg, cur, true);
+    rc = ts_pg_commit(d->pg, cur, fr, &d->wal, before);
     if (rc != OK) {
         return rc;
     }
@@ -626,6 +686,7 @@ int ts_dir_update(TsDir *d, u32 idx, const TsPartInfo *info)
     PageFrame *fr = NULL;
     u32 pid;
     u16 slot;
+    u8 before[PAGE_SIZE];
     int rc;
 
     if (!d || !info) {
@@ -646,9 +707,10 @@ int ts_dir_update(TsDir *d, u32 idx, const TsPartInfo *info)
         return rc;
     }
     d->page_reads++;
+    ts_wal_snap(fr->data, before);
     ent_encode(fr->data + TSD_DATA + (u32)slot * TS_DIR_ENT_SIZE, info);
     page_set_checksum(fr->data);
-    rc = pager_unpin(d->pg, pid, true);
+    rc = ts_pg_commit(d->pg, pid, fr, &d->wal, before);
     if (rc != OK) {
         return rc;
     }
@@ -681,100 +743,13 @@ int ts_dir_update(TsDir *d, u32 idx, const TsPartInfo *info)
 
 /* ---------------- 查询 ---------------- */
 
-int ts_dir_get(const TsDir *d, u32 idx, TsPartInfo *out)
-{
-    if (!d || !out) {
-        return E_INVAL;
-    }
-    if (idx >= d->n_parts) {
-        return E_INVAL;
-    }
-    *out = d->items[idx];
-    return OK;
-}
-
-int ts_dir_get_by_time(const TsDir *d, u32 i, TsPartInfo *out)
-{
-    if (!d || !out) {
-        return E_INVAL;
-    }
-    if (i >= d->n_parts) {
-        return E_INVAL;
-    }
-    *out = d->items[d->sorted[i]];
-    return OK;
-}
-
-int ts_dir_find(const TsDir *d, i64 t_ms, u32 *idx_out, TsPartInfo *out)
-{
-    u32 lo;
-    u32 hi;
-    u32 cand;
-
-    if (!d) {
-        return E_INVAL;
-    }
-    if (d->n_parts == 0u) {
-        return E_NOTFOUND;
-    }
-
-    /* 二分找"起始时间 ≤ t_ms 的最后一项"；没有候选项 ⇒ t_ms 早于所有分区 */
-    lo = 0;
-    hi = d->n_parts;
-    cand = PAGE_ID_NIL;
-    while (lo < hi) {
-        u32 mid = lo + (hi - lo) / 2u;
-        u32 idx = d->sorted[mid];
-
-        if (d->items[idx].start_ms <= t_ms) {
-            cand = idx;
-            lo = mid + 1u;
-        } else {
-            hi = mid;
-        }
-    }
-    if (cand == PAGE_ID_NIL) {
-        return E_NOTFOUND;
-    }
-    if (t_ms >= d->items[cand].end_ms) {
-        return E_NOTFOUND;   /* 落在两个分区之间的空档 */
-    }
-    if (d->items[cand].state == TS_PART_DROPPED) {
-        /* 已回收的分区不该再被查到 */
-        return E_NOTFOUND;
-    }
-    if (idx_out) {
-        *idx_out = cand;
-    }
-    if (out) {
-        *out = d->items[cand];
-    }
-    return OK;
-}
-
-u32 ts_dir_count(const TsDir *d)
-{
-    return d ? d->n_parts : 0u;
-}
-
-u64 ts_dir_total_rows(const TsDir *d)
-{
-    u64 total = 0;
-    u32 i;
-
-    if (!d) {
-        return 0;
-    }
-    for (i = 0; i < d->n_parts; i++) {
-        total += d->items[i].n_rows;
-    }
-    return total;
-}
-
-u32 ts_dir_span_sec(const TsDir *d)
-{
-    return d ? d->span_sec : 0u;
-}
+/*
+ * 只读的那一半在 ts_dir_query.c（取目录项 / 按时间找分区 / 计数与诊断）。
+ *
+ * 拆出去的原因见 ts_dir_int.h 的说明：本文件原来就已经顶在 800 行的
+ * 上限上，步骤 6 还要往里加 WAL 的写点。
+ * 对外的契约（ts_dir.h）一个字都没改。
+ */
 
 int ts_dir_set_span_sec(TsDir *d, u32 span_sec)
 {
@@ -786,14 +761,4 @@ int ts_dir_set_span_sec(TsDir *d, u32 span_sec)
     }
     d->span_sec = span_sec;
     return meta_store(d);
-}
-
-u32 ts_dir_page_count(const TsDir *d)
-{
-    return d ? d->n_dir_pages : 0u;
-}
-
-u64 ts_dir_page_reads(const TsDir *d)
-{
-    return d ? d->page_reads : 0;
 }

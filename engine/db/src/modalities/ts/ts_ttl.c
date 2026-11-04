@@ -66,18 +66,28 @@ static i64 ttl_threshold(i64 now_ms, u64 ttl_sec)
  * 而不是上一个主人的残留。
  * 万一有谁还拿着旧引用，读到的是"空页"（页类型不对 ⇒ 报错），
  * 而不是**别人的数据**（静默错）。
+ *
+ * 步骤 6：清零也是一次**改页** ⇒ 同样进 WAL（整页镜像）。
+ * 这样"这页已经空了"这件事也有据可查：重放时把它再清一次，
+ * 得到的页与当初清零后的页**逐字节相同**。
+ *
+ * ⚠️ 清零**不能**代替"目录项改成 DROPPED"：
+ *    页空了但目录项还说这个分区在 ⇒ 读路径会读到空页（E_CORRUPT），
+ *    而不是"分区已过期"。权威永远是目录项（坑 M6-49、M6-63）。
  */
-static int retire_page(Pager *pg, u32 pid, u32 *freed)
+static int retire_page(Pager *pg, u32 pid, const TsWal *w, u32 *freed)
 {
     PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
     int rc;
 
     rc = pager_get(pg, pid, &fr);
     if (rc != OK)
         return rc;
 
+    ts_wal_snap(fr->data, before);
     memset(fr->data, 0, PAGE_SIZE);
-    rc = pager_unpin(pg, pid, true);
+    rc = ts_pg_commit(pg, pid, fr, w, before);
     if (rc != OK)
         return rc;
 
@@ -94,7 +104,8 @@ static int retire_page(Pager *pg, u32 pid, u32 *freed)
  *
  * expect —— 目录里记的页数；链长必须与它**正好相等**。
  */
-static int release_raw_chain(Pager *pg, u32 first, u32 expect, u32 *freed)
+static int release_raw_chain(Pager *pg, u32 first, u32 expect, const TsWal *w,
+                             u32 *freed)
 {
     u32 page = first;
     u32 seen = 0;
@@ -124,7 +135,7 @@ static int release_raw_chain(Pager *pg, u32 first, u32 expect, u32 *freed)
 
         seen++;
 
-        rc = retire_page(pg, page, freed);
+        rc = retire_page(pg, page, w, freed);
         if (rc != OK)
             return rc;
 
@@ -141,7 +152,8 @@ static int release_raw_chain(Pager *pg, u32 first, u32 expect, u32 *freed)
  *
  * expect —— 目录里记的页数（含头部页）；必须与实际回收数相等。
  */
-static int release_column_part(Pager *pg, u32 head, u32 expect, u32 *freed)
+static int release_column_part(Pager *pg, u32 head, u32 expect, const TsWal *w,
+                               u32 *freed)
 {
     u32 first[3];
     u32 pages[3];
@@ -215,7 +227,7 @@ static int release_column_part(Pager *pg, u32 head, u32 expect, u32 *freed)
             n++;
             seen++;
 
-            r2 = retire_page(pg, page, freed);
+            r2 = retire_page(pg, page, w, freed);
             if (r2 != OK)
                 return r2;
 
@@ -227,7 +239,7 @@ static int release_column_part(Pager *pg, u32 head, u32 expect, u32 *freed)
     }
 
     /* 最后回收头部页（它记着三列的首页） */
-    rc = retire_page(pg, head, freed);
+    rc = retire_page(pg, head, w, freed);
     if (rc != OK)
         return rc;
     seen++;
@@ -237,8 +249,8 @@ static int release_column_part(Pager *pg, u32 head, u32 expect, u32 *freed)
     return OK;
 }
 
-int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
-                          u32 page_count, u32 *freed_out)
+int ts_ttl_release_pages_wal(Pager *pg, TsPartState state, u32 first_page,
+                             u32 page_count, const TsWal *w, u32 *freed_out)
 {
     u32 freed = 0;
     int rc;
@@ -254,9 +266,9 @@ int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
         return E_CORRUPT;      /* 有首页却没页数：不变量破了 */
 
     if (state == TS_PART_SEALED) {
-        rc = release_column_part(pg, first_page, page_count, &freed);
+        rc = release_column_part(pg, first_page, page_count, w, &freed);
     } else {
-        rc = release_raw_chain(pg, first_page, page_count, &freed);
+        rc = release_raw_chain(pg, first_page, page_count, w, &freed);
     }
     if (rc != OK)
         return rc;
@@ -264,6 +276,14 @@ int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
     if (freed_out)
         *freed_out = freed;
     return OK;
+}
+
+/* 不写日志的版本（单元测试直接用模态时走这条路）。 */
+int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
+                          u32 page_count, u32 *freed_out)
+{
+    return ts_ttl_release_pages_wal(pg, state, first_page, page_count, NULL,
+                                    freed_out);
 }
 
 /* ---------------- TTL 主流程 ---------------- */
@@ -275,12 +295,21 @@ int ts_ttl_expire(Pager *pg, TsDir *d, i64 now_ms, u64 ttl_sec,
     i64 thr;
     u32 n;
     u32 i;
+    const TsWal *w;
     int rc;
 
     if (!pg || !d)
         return E_INVAL;
 
     memset(&st, 0, sizeof(st));
+
+    /*
+     * 写日志上下文从**目录**那里拿（步骤 6）。
+     *
+     * 目录对象自己存着一份（建目录时挂上的）——
+     * TTL 这一层没有"存储"对象，只有目录。
+     */
+    w = ts_dir_wal(d);
 
     thr = ttl_threshold(now_ms, ttl_sec);
 
@@ -328,6 +357,11 @@ int ts_ttl_expire(Pager *pg, TsDir *d, i64 now_ms, u64 ttl_sec,
          * 不能只是"标脏等以后刷" ——
          * 否则崩在刷盘之前，磁盘上的目录项还是"这个分区还在"，
          * 而页已经被回收了 ⇒ 读到别人的数据（坑 M6-49）。
+         *
+         * 步骤 6：目录项的改动**也进了 WAL**（ts_dir_update 里写日志），
+         * 而 pager_flush_all 刷目录页之前会先问 WAL 钩子
+         * "这条记录落盘了吗" ⇒ 没落盘就先落盘（WAL 规则）。
+         * 所以"目录说已过期"这件事在盘上永远是**先于**"页被回收"的 ✓。
          */
         rc = pager_flush_all(pg);
         if (rc != OK)
@@ -340,8 +374,8 @@ int ts_ttl_expire(Pager *pg, TsDir *d, i64 now_ms, u64 ttl_sec,
          * 那是步骤 3 的封窗流程该收的（它知道那批页已经被换掉了）。
          * 本层只收"这个分区现在正在用的页"。
          */
-        rc = ts_ttl_release_pages(pg, info.state, info.first_page,
-                                  info.page_count, &freed);
+        rc = ts_ttl_release_pages_wal(pg, info.state, info.first_page,
+                                      info.page_count, w, &freed);
         if (rc != OK)
             return rc;
 
