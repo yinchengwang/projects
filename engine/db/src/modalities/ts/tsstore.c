@@ -1,52 +1,29 @@
 /*
- * tsstore.c —— 时序模态的分区存储（v1.5 步骤 2）
+ * tsstore.c —— 时序模态的分区存储（v1.5 步骤 2 + 步骤 3 的封窗与读路径）
  *
- * 契约见 tsstore.h；目录的存与取交给 ts_dir 层（ts_dir.h 写明了分工：
- * "这一层只管目录的存与取；路由、写入分区、封窗由 tsstore.c 管"）。
- * 本文件**不自己实现目录** —— 自己再实现一遍，等于同一张磁盘上出现
- * **两种目录格式**，重开库时谁都读不懂谁的。
+ * 契约见 tsstore.h；目录的存与取交给 ts_dir 层；页格式与列式页交给 ts_column 层；
+ * 封窗的两步协议见 ts_seal.h。
  *
- * 【这一层做什么】
- *   写入：时间戳 → 路由到分区 → 追加到该分区的页链尾
- *   读取：遍历所有分区的页链 → 逐行回调
- *
- * 【磁盘结构】分区数据页（PT_TS_PART，1..N 张，链式）
- *   定长行 24 字节（time i64 + tag i64 + value f64）**追加**；
- *   定长 ⇒ 第 i 行的页内偏移是**纯算术**（28 + i×24），不需要 slot 表。
- *   页内布局（自己的字段从偏移 20 起，与 ts_dir 同风格）：
- *     20 TSSP_NROWS u32 本页行数 / 24 TSSP_NEXT u32 下一张数据页 / 28 行数组
+ * 【磁盘结构】
+ *   分区数据页（PT_TS_PART，1..N 张，链式）：定长行 24 字节（time i64 + tag i64
+ *     + value f64）**追加**；定长 ⇒ 第 i 行的页内偏移是**纯算术**（28 + i×24），
+ *     不需要 slot 表。
+ *   列式页（PT_TS_COL）：封窗后的分区 —— 三列各自编码 + 一张头部页。
  *   meta 页与目录页由 ts_dir 管（PT_TS_META / PT_TS_DIR）。
  *
  * 【重要取舍：分区 = 一条页链 = 多个页】
- *   计划措辞是"分区写满了就新开一个分区（spill）"；本实现取的是
- *   **页写满了就续开一张页（spill），分区数不变**。理由（不变式，不是偷懒）：
- *     - 契约里 TsPartInfo 有 page_count 字段 —— 一个分区恒等于一页时它永远是 1；
+ *   页写满了就续开一张页（spill），**分区数不变**。理由是不变式，不是偷懒：
  *     - "一个时间窗 ↔ 一个分区"是路由不变式（R3）的基础；一页满就新开分区 ⇒
  *       同一时间窗出现多个分区 ⇒ 目录查询不知道该回哪一个 ⇒ 静默漏数据；
- *     - 封窗（转成列式压缩页）是步骤 3 的事，步骤 2 不封窗 ⇒ 分区只能靠多页长大。
+ *     - 契约里 TsPartInfo 有 page_count 字段 —— 一个分区恒等于一页时它永远是 1。
  *
- * 【坑】
- *   M6-26 路由的除法必须**向下取整**：C 的整数除法向零截断，-1/86400000 = 0，
- *         而 0 号窗口是 [0, +∞) ⇒ -1ms 落进错误的分区 ⇒ 按分区裁剪时漏数据。
- *   M6-27 页类型号是**全局**的：PT_RTREE=0x15 / PT_GEO_META=0x16 /
- *         PT_TS_META=0x17 / PT_TS_DIR=0x18 已占用 ⇒ 分区数据页取 0x19。
- *   M6-28 pin/unpin 必须配对：多还一次 ⇒ E_INVAL；少还一次 ⇒ 帧被永久钉死 ⇒
- *         帧池耗尽（pager_get 返 E_NOSPACE）⇒ 后面的 latch 顺序断言 abort。
- *   M6-29 spill 的顺序**先写新页再接链**：反过来崩在中间 ⇒ 链指向空页 ⇒
- *         静默丢行；先写新页 ⇒ 崩了只留孤儿页（浪费空间，不丢数据）。
- *   M6-30 目录里的 n_rows 是**水位线**：只在分区 spill 时落盘，其余以内存计数为准，
- *         开库时以页链实际数出来的为准并回写目录。理由：每写一行就改一次目录 =
- *         一行一次 4KB 页写，写放大离谱。代价：崩在两次 spill 之间 ⇒ 目录行数偏小，
- *         但开库会数回来 ⇒ 不会漏数据，只是多读一遍页链。
- *   M6-31 本模态**没有 WAL**：契约里没有 WAL 钩子参数 ⇒ 崩在写入中间会丢行，
- *         或目录与数据页不一致（开库报 E_CORRUPT）。补 WAL 要改契约头文件（本步不改）。
- *   M6-32 开库成本随数据量线性增长：扫页空间找 meta 页（ts_dir 的坑 M6-22）+
- *         走一遍分区页链数行（坑 M6-30 的回填代价），与 geo 的坑 M5-9 同量级。
- *   M6-33 i64 ↔ 位模式一律走 memcpy：超过 INT64_MAX 的 u64 转 i64 在 C99 是
- *         **实现定义**的，不能直接强转。
- *   M6-34 改分区窗口后新老窗口**可能重叠**：契约说改窗口只影响之后的写入 ⇒
- *         库里会同时存在"1 天窗口的老分区"与"7 天窗口的新分区"。当前规则是
- *         **起点靠后的分区优先**（与 ts_dir_find 的二分口径一致），不是"最窄优先"。
+ * 【坑】（完整的说明在 docs/MODALITIES.md）
+ *   M6-26~M6-34 步骤 2：路由除法向下取整、页类型号全局、pin/unpin 配对、
+ *     spill 先写新页再接链、行数水位线、本模态没有 WAL、开库成本线性增长、
+ *     i64 ↔ 位模式一律 memcpy、改分区窗口后新老窗口可能重叠。
+ *   M6-39~M6-45 步骤 3：段头必须记条数、封窗的原子性靠目录项做权威、
+ *     旧页只标记不回收、迟到写入必须明确拒绝、封窗后不再 spill、
+ *     "时间窗滑过"检测不到（未做）、目录页数与文件实际占用不再相等。
  */
 
 #include "modalities/ts/tsstore.h"
@@ -56,61 +33,17 @@
 #include <string.h>
 
 #include "modalities/ts/ts_dir.h"
+#include "modalities/ts/ts_column.h"
+#include "modalities/ts/ts_seal.h"
+#include "modalities/ts/ts_store_int.h"
 #include "storage/page.h"
-
-/* ---------------- 页类型（模态私有，见坑 M6-27） ---------------- */
-
-#define PT_TS_PART 0x19u
-
-/* 分区数据页的页内布局 */
-enum {
-    TSSP_NROWS = 20,   /* u32 本页行数 */
-    TSSP_NEXT  = 24,   /* u32 下一张数据页 */
-    TSSP_DATA  = 28    /* 行数组起点 */
-};
-
-/* 行 */
-#define TS_ROW_SIZE      24u
-#define TS_ROWS_PER_PAGE ((PAGE_SIZE - TSSP_DATA) / TS_ROW_SIZE)  /* 169 */
 
 /* 分区窗口上限：100 年。再大就没意义了（还容易把 i64 撑爆）。 */
 #define TS_MAX_SPAN_SEC 3153600000u
 
 /* ---------------- 内部结构 ---------------- */
 
-/*
- * 一个分区的**运行时**状态（按目录的磁盘序下标）。
- *
- * 目录项里存的是"水位线"（坑 M6-30），真正的行数与页链尾放在这里。
- */
-typedef struct {
-    u32 last_page;    /* 页链尾（PAGE_ID_NIL = 空分区） */
-    u32 n_rows;       /* 真实行数 */
-    u32 page_count;   /* 真实页数 */
-} TsPartRt;
-
-struct TsStore {
-    Pager  *pg;
-    TsDir  *dir;      /* 目录（存与取交给 ts_dir） */
-    u32     span_sec;
-
-    TsPartRt *rt;     /* 运行时状态，按目录磁盘序 */
-    u32       rt_count;   /* 已用个数（= 目录里的分区数） */
-    u32       rt_cap;     /* 容量 */
-
-    /*
-     * 时间序下标 → 磁盘序下标。
-     *
-     * ts_dir 内部有一份排序数组，但不暴露"时间序第 i 个是磁盘序第几个"。
-     * 而 ts_store_part_info 承诺的是"按起始时间升序" ⇒ 这里自己维护一份。
-     */
-    u32      *by_time;
-    u32       by_time_count;
-    u32       by_time_cap;
-
-    u64 total_rows;   /* 活着的读数总数 */
-    u64 page_reads;   /* 累计逻辑页读（口径同 db_geo_page_reads） */
-};
+/* TsStore 与 TsPartRt 的私有定义见 ts_store_int.h（封窗那一步也要用）。 */
 
 /* ---------------- 小工具 ---------------- */
 
@@ -129,14 +62,6 @@ static u64 ts_double_bits(double d)
 
     memcpy(&bits, &d, sizeof(bits));
     return bits;
-}
-
-static double ts_bits_double(u64 bits)
-{
-    double d;
-
-    memcpy(&d, &bits, sizeof(d));
-    return d;
 }
 
 /* ---------------- 时间路由（纯函数） ---------------- */
@@ -284,54 +209,13 @@ static void ts_by_time_insert(TsStore *st, u32 idx)
  * 走一遍分区的页链：数行数、数页数、找链尾。
  *
  * 开库时用（把目录里的水位线校正成真值，坑 M6-30）。
+ * 裸写页的格式与读都在 ts_column 层（页格式常量只有一份，见那个头文件）。
  */
 static int ts_walk_part(TsStore *st, u32 first_page, u32 *rows_out,
                         u32 *pages_out, u32 *last_out)
 {
-    u32 page = first_page;
-    u32 rows = 0;
-    u32 pages = 0;
-    u32 last = PAGE_ID_NIL;
-
-    while (page != PAGE_ID_NIL) {
-        PageFrame *fr = NULL;
-        u32 n;
-        u32 next;
-        int rc;
-
-        rc = pager_get(st->pg, page, &fr);
-        if (rc != OK)
-            return rc;
-        st->page_reads++;
-
-        if (fr->data[H_TYPE] != (u8)PT_TS_PART) {
-            (void)pager_unpin(st->pg, page, false);
-            return E_CORRUPT;
-        }
-        if (!page_verify_checksum(fr->data)) {
-            (void)pager_unpin(st->pg, page, false);
-            return E_CORRUPT;
-        }
-        n = get_u32(fr->data + TSSP_NROWS);
-        if (n > TS_ROWS_PER_PAGE) {
-            (void)pager_unpin(st->pg, page, false);
-            return E_CORRUPT;
-        }
-
-        rows += n;
-        pages++;
-        last = page;
-        next = get_u32(fr->data + TSSP_NEXT);
-        rc = pager_unpin(st->pg, page, false);
-        if (rc != OK)
-            return rc;
-        page = next;
-    }
-
-    *rows_out = rows;
-    *pages_out = pages;
-    *last_out = last;
-    return OK;
+    return ts_part_walk(st->pg, first_page, rows_out, pages_out, last_out,
+                        &st->page_reads);
 }
 
 /*
@@ -540,10 +424,24 @@ int ts_store_open(Pager *pg, TsStore **out)
             return rc;
         }
 
-        rc = ts_walk_part(st, info.first_page, &rows, &pages, &last);
-        if (rc != OK) {
-            ts_store_destroy(st);
-            return rc;
+        if (info.state == TS_PART_SEALED) {
+            /*
+             * 封窗分区：页是**列式页**（PT_TS_COL），不是裸写页 ⇒
+             * 只能读头部页拿行数/页数（坑 M6-40：目录项是唯一的权威）。
+             */
+            rc = ts_column_info(st->pg, info.first_page, &rows, &pages);
+            if (rc != OK) {
+                ts_store_destroy(st);
+                return rc;
+            }
+            st->page_reads++;   /* 只读了头部页那一张 */
+            last = PAGE_ID_NIL;   /* 封窗后只读，不再有"页链尾" */
+        } else {
+            rc = ts_walk_part(st, info.first_page, &rows, &pages, &last);
+            if (rc != OK) {
+                ts_store_destroy(st);
+                return rc;
+            }
         }
 
         st->rt[i].n_rows = rows;
@@ -633,12 +531,30 @@ int ts_store_insert(TsStore *st, const TsReading *r)
     if (rc == OK) {
         if (info.state != TS_PART_ACTIVE) {
             /*
-             * 步骤 2 不会产生非活跃分区（封窗是步骤 3）。
-             * 这里只是防御：真出现了就明确报错，而不是往只读分区里写。
+             * 封窗不可逆：迟到写入（时间戳落在已封窗的窗口里）必须**明确拒绝**，
+             * 不能悄悄开一个新分区 ——
+             * 那会破坏"一个时间窗 = 一个分区"的不变式（R3），
+             * 按分区裁剪的查询就会**静默漏数据**（查到新分区，漏掉封窗分区）。
+             * 坑 M6-43。
              */
             return E_NOTSUP;
         }
-        return ts_append_row(st, idx, r);
+        rc = ts_append_row(st, idx, r);
+        if (rc != OK)
+            return rc;
+
+        /*
+         * 行数达到阈值 ⇒ 封窗（本轮唯一的封窗触发条件）。
+         *
+         * 封窗失败**不影响这次写入**：目录没翻 ⇒ 分区仍是活跃的 ⇒
+         * 数据一条不少，下一次写入还会再试一次封窗。
+         * （封窗失败的唯一后果是"这个分区没封上"，不是"数据丢了"。）
+         * 坑 M6-46。
+         */
+        if (st->rt[idx].n_rows >= TS_SEAL_ROW_THRESHOLD)
+            (void)ts_store_seal(st, idx);
+
+        return OK;
     }
     if (rc != E_NOTFOUND)
         return rc;
@@ -719,60 +635,28 @@ int ts_store_scan(TsStore *st, TsReadFn fn, void *ctx)
      */
     for (k = 0; k < np; k++) {
         TsPartInfo info;
-        u32 page;
         int rc;
 
         rc = ts_dir_get(st->dir, k, &info);
         if (rc != OK)
             return rc;
 
-        page = info.first_page;
-        while (page != PAGE_ID_NIL) {
-            PageFrame *fr = NULL;
-            u32 n;
-            u32 next;
-
-            rc = pager_get(st->pg, page, &fr);
+        if (info.state == TS_PART_SEALED) {
+            /*
+             * 封窗分区：读**列式页**（解码后逐行回调）。
+             * 行数取运行时的真值（封窗时定的，重开后从头部页读回来）。
+             */
+            rc = ts_column_scan(st->pg, info.first_page, st->rt[k].n_rows,
+                                fn, ctx, &st->page_reads);
             if (rc != OK)
                 return rc;
-            st->page_reads++;
-
-            if (fr->data[H_TYPE] != (u8)PT_TS_PART) {
-                (void)pager_unpin(st->pg, page, false);
-                return E_CORRUPT;
-            }
-
-            n = get_u32(fr->data + TSSP_NROWS);
-            if (n > TS_ROWS_PER_PAGE) {
-                (void)pager_unpin(st->pg, page, false);
-                return E_CORRUPT;
-            }
-
-            {
-                u32 j;
-
-                for (j = 0; j < n; j++) {
-                    TsReading rr;
-                    const u8 *row = fr->data + TSSP_DATA + (size_t)j * TS_ROW_SIZE;
-
-                    rr.time = ts_i64_of(get_u64(row + 0));
-                    rr.tag = ts_i64_of(get_u64(row + 8));
-                    rr.value = ts_bits_double(get_u64(row + 16));
-
-                    rc = fn(&rr, ctx);
-                    if (rc != OK) {
-                        (void)pager_unpin(st->pg, page, false);
-                        return rc;  /* 回调要求停止：原样返回它的值 */
-                    }
-                }
-            }
-
-            next = get_u32(fr->data + TSSP_NEXT);
-            rc = pager_unpin(st->pg, page, false);
-            if (rc != OK)
-                return rc;
-            page = next;
+            continue;
         }
+
+        /* 活跃分区：读裸写页链 */
+        rc = ts_part_scan(st->pg, info.first_page, fn, ctx, &st->page_reads);
+        if (rc != OK)
+            return rc;
     }
     return OK;
 }
@@ -791,6 +675,24 @@ u32 ts_store_part_count(const TsStore *st)
     if (!st)
         return 0;
     return ts_dir_count(st->dir);
+}
+
+/*
+ * 取出存储内部持有的分区目录（对外契约里的唯一"越权"出口）。
+ *
+ * 存在的理由：TTL 要操作**存储自己那份**目录
+ * （`ts_ttl_expire()` 的接口要 TsDir*）。
+ * 另开一份副本去跑 TTL ⇒ TTL 改的是副本、存储内存里的目录还是老的
+ * ⇒ 查询会去读已被回收的页 ⇒ 读到别人的数据且不报错（坑 M6-57）。
+ *
+ * ⚠️ 调用方**只能读**；改目录要走 ts_dir_update()，
+ * 那由 ts_ttl / ts_seal 这些模态内部的层去做。
+ */
+const struct TsDir *ts_store_dir(const TsStore *st)
+{
+    if (!st)
+        return NULL;
+    return st->dir;
 }
 
 int ts_store_part_info(TsStore *st, u32 i, TsPartInfo *out)

@@ -170,6 +170,27 @@ int ts_store_part_info(TsStore *st, u32 i, TsPartInfo *out);
  */
 int ts_store_find_part(TsStore *st, i64 t_ms, TsPartInfo *out);
 
+/*
+ * 取出存储内部持有的分区目录（**只读用途**）。
+ *
+ * 【为什么需要这个出口】
+ *
+ * TTL 要操作目录（把过期分区标记成 DROPPED、回收它的页），
+ * 而 `ts_ttl_expire()` 的接口是 `(Pager*, TsDir*, ...)` ——
+ * 需要拿到**存储自己那份**目录。
+ *
+ * ⚠️ **必须是存储自己那份，不能另开一个副本**：
+ * TTL 改的是副本的话，存储内存里的目录还是老的 ⇒
+ * 查询会去读**已被回收的页** ⇒ 读到别人的数据而且不报错（坑 M6-57）。
+ *
+ * ⚠️ **越权用法**：调用方拿到这个指针**只能读**（查分区、遍历目录）。
+ * 改目录要走 `ts_dir_update()`，那由 ts_ttl / ts_seal 这些**模态内部**的层去做。
+ * 对外暴露这个出口是为了让 db 层能把 TTL 接到存储上，
+ * 而不是让 db 层去理解目录的内部结构。
+ */
+struct TsDir;
+const struct TsDir *ts_store_dir(const TsStore *st);
+
 /* ---------------- 诊断 ---------------- */
 
 /* 累计逻辑页读（与 db_geo_page_reads / db_ft_page_reads 同一口径） */
