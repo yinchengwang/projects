@@ -38,8 +38,31 @@ typedef enum {
     T_INT8 = 2,
     T_BOOL = 3,
     T_TEXT = 4,
-    T_REAL = 5    /* v1.1：浮点。AVG / 地理坐标 / 时序数值 / JSON 数字 */
+    T_REAL = 5,   /* v1.1：浮点。AVG / 地理坐标 / 时序数值 / JSON 数字 */
+    /*
+     * v1.6：JSON 文档（JSONB 二进制）。
+     *
+     * 与 T_TEXT 一样是**变长**类型 —— 值区放的是 **JSONB 字节**，
+     * 不是 JSON 文本。这样查路径时不必重新解析。
+     *
+     * ⚠️ **T_JSON 与 T_TEXT 共用变长区**，但**类型不同** ——
+     * 解码时靠 cols[i].type 区分，不靠字节内容猜。
+     * （"靠内容猜类型"是万恶之源：JSONB 的第一个字节恰好是 tag，
+     *  但文本的第一个字节也可能碰巧是 6。）
+     */
+    T_JSON = 6
 } ColType;
+
+/*
+ * 这个类型是不是变长类型（值区放字节流）。
+ *
+ * ⚠️ **编码与解码两侧都必须用这个函数** ——
+ * 两边各写一遍"哪些类型是变长的"，早晚会不一致（v1.5 坑 M6-63 同款纪律）。
+ */
+static inline bool col_is_var(u8 type)
+{
+    return type == T_TEXT || type == T_JSON;
+}
 
 #define COL_NAME_MAX 32
 

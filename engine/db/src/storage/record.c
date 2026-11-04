@@ -17,6 +17,7 @@ u16 rec_type_width(u8 type)
     case T_BOOL: return 1;
     case T_REAL: return 8;
     case T_TEXT: return 0;   /* 变长：不占定长区 */
+    case T_JSON: return 0;   /* 变长：不占定长区（JSONB 字节） */
     default:     return 0;
     }
 }
@@ -36,9 +37,9 @@ int rec_layout(const ColDesc *cols, int ncols, RecLayout *L)
     for (int i = 0; i < ncols; i++) {
         u8 t = cols[i].type;
         if (t != T_INT4 && t != T_INT8 && t != T_BOOL && t != T_TEXT &&
-            t != T_REAL)
+            t != T_REAL && t != T_JSON)
             return E_INVAL;
-        if (t == T_TEXT)
+        if (col_is_var(t))
             L->nvar++;
         else
             L->fixed_len = (u16)(L->fixed_len + rec_type_width(t));
@@ -54,7 +55,7 @@ int rec_layout(const ColDesc *cols, int ncols, RecLayout *L)
     u16 off = L->fixed_off;
     u16 k = 0;
     for (int i = 0; i < ncols; i++) {
-        if (cols[i].type == T_TEXT) {
+        if (col_is_var(cols[i].type)) {
             L->fixed_col_off[i] = 0xFFFFu;
             L->var_col_idx[i] = k++;
         } else {
@@ -106,12 +107,17 @@ int rec_encode(const ColDesc *cols, int ncols, const Value *vals,
         if (isnull)
             buf[REC_HDR_SIZE + i / 8] |= (u8)(1u << (i % 8));
 
-        if (cols[i].type == T_TEXT) {
+        if (col_is_var(cols[i].type)) {
             /* 偏移数组对 NULL 列也要写（写当前游标），
              * 这样每列的结束位置总能由"下一个偏移"得到，解码不用特判 */
             u16 k = L.var_col_idx[i];
             put_u16(buf + L.varoff_off + 2u * k, cur);
             if (!isnull) {
+                /*
+                 * T_TEXT 与 T_JSON 共用同一段字节区（都是变长）。
+                 * 值载荷的形状也一样（指针 + 长度），所以取值用同一个成员。
+                 * ⚠️ 类型区别靠 cols[i].type，**不靠字节内容**。
+                 */
                 u16 n = vals[i].u.text.n;
                 if ((u32)cur + n > bufsize)
                     return E_NOSPACE;
@@ -171,7 +177,7 @@ int rec_decode_layout(const RecLayout *L, const ColDesc *cols,
         if (isnull)
             continue;
 
-        if (cols[i].type == T_TEXT) {
+        if (col_is_var(cols[i].type)) {
             u16 k = L->var_col_idx[i];
             u16 s = get_u16(buf + L->varoff_off + 2u * k);
             u16 e = (k + 1u < L->nvar)
@@ -237,7 +243,7 @@ int rec_get_col(const ColDesc *cols, int ncols, const u8 *buf, u16 len,
     if (isnull)
         return OK;
 
-    if (cols[col].type == T_TEXT) {
+    if (col_is_var(cols[col].type)) {
         u16 k = L.var_col_idx[col];
         u16 s = get_u16(buf + L.varoff_off + 2u * k);
         u16 e = (k + 1u < L.nvar)
