@@ -57,6 +57,7 @@ static int failures = 0;
 #define PATH_MAIN "test/tmp/ts_api.db"
 #define PATH_SEAL "test/tmp/ts_seal.db"
 #define PATH_REPL "test/tmp/ts_repl_out.txt"
+#define PATH_SUPER "test/tmp/ts_superset.db"
 
 /* 一天（毫秒）—— 分区窗口的默认跨度 */
 #define DAY_MS 86400000LL
@@ -173,6 +174,113 @@ static int rows_equal(Row *a, int na, Row *b, int nb)
 }
 
 /* ---------------- 各项检查 ---------------- */
+
+/*
+ * 第 10 项：**超集铁律在 SPI 层的验收**（跨多个分区）。
+ *
+ * 【为什么单独做这一项】
+ *
+ * 第 3 项只写了**一个**分区（今天）—— 一个分区的数据，
+ * 无论裁剪逻辑写成什么样都读得全 ⇒ **抓不住分区级的裁剪缺陷**。
+ *
+ * 反向验证（步骤 6 的注入 1）真的抓到过这个形态：
+ * SPI 读路径自己写了一套裁剪（不调 ts_prune），
+ * 在那一层注入"不可解析 ⇒ 只读第一个分区"，
+ * 步骤 4 的单测**全绿**，而 SPI 层静默丢掉了 2/3 的行。
+ * ⇒ 这条断言就是为了把那个洞补上。
+ *
+ * 【判据】
+ *
+ * 跨**三个**分区写数据，然后：
+ *   - 无 WHERE 的 SELECT ⇒ 读到的行数必须 == 写进去的行数（**超集铁律**）；
+ *   - 带时间范围且范围覆盖全部 ⇒ 同样必须全等；
+ *   - 带一个**只覆盖一个分区**的范围 ⇒ 读到的行必须是**那个分区的行**
+ *     （且条数 == 那一分区写的条数）。
+ *
+ * ⚠️ 第三条是"裁剪真的少读了"的证据；前两条是"裁剪没有少给"的证据。
+ * **两条都要有** —— 只测前者会漏掉"裁剪过头"，只测后者会漏掉"裁剪没生效"。
+ */
+static void check_superset(DB *db)
+{
+    db_ts_reading r;
+    Row got[64];
+    Row want[64];
+    int n = 0;
+    int nwant = 0;
+    uint64_t total = 0;
+    uint32_t np = 0;
+    int64_t base = today_base();
+    /* 三个分区：今天、昨天、前天（分区窗口默认 1 天） */
+    int64_t day_ms = 24LL * 3600LL * 1000LL;
+    int k;
+
+    printf("  10. 超集铁律（SPI 层 · 跨多个分区）\n");
+
+    /* 往三个不同的时间窗各写 2 条 */
+    for (k = 0; k < 3; k++) {
+        for (int j = 0; j < 2; j++) {
+            r.time = base - (int64_t)k * day_ms + (int64_t)j * 1000;
+            r.tag = (int64_t)(k * 10 + j);
+            r.value = 1.0 + (double)k + 0.25 * (double)j;
+            CHECK(db_ts_insert(db, &r) == DB_OK);
+            want[nwant].time = r.time;
+            want[nwant].tag = r.tag;
+            want[nwant].value = r.value;
+            nwant++;
+        }
+    }
+
+    /* 活着的总行数与分区数 */
+    CHECK(db_ts_count(db, &total) == DB_OK);
+    CHECK(db_ts_part_count(db, &np) == DB_OK);
+    CHECK(np >= 3u);
+    CHECK(total >= (uint64_t)nwant);
+
+    /* ① 无 WHERE ⇒ 读到的必须 >= 写进去的（超集），
+     *    且**一条都不能少**（少给就是静默漏数据）。 */
+    CHECK(fetch_readings(db, "SELECT time, tag, value FROM ts_readings",
+                         got, 64, &n) == 0);
+    CHECK(n >= nwant);
+    if (n < nwant) {
+        printf("    FAIL 无 WHERE 的 SELECT 只读到 %d 条，写进去的有 %d 条"
+               "（少给 ⇒ 静默漏数据）\n", n, nwant);
+        failures++;
+    } else {
+        /* 写进去的那几条必须**都在**里面 */
+        for (int i = 0; i < nwant; i++) {
+            int found = 0;
+            for (int j = 0; j < n; j++) {
+                if (got[j].time == want[i].time && got[j].tag == want[i].tag) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                printf("    FAIL 写进去的读数在读回时不见了：time=%lld tag=%lld\n",
+                       (long long)want[i].time, (long long)want[i].tag);
+                failures++;
+            }
+        }
+    }
+
+    /* ② 带一个只覆盖"今天"这个分区的时间范围 ⇒
+     *    读到的条数必须**恰好**是今天那 2 条（裁剪真的少读了）。 */
+    {
+        char sql[256];
+        Row one[64];
+        int n1 = 0;
+
+        snprintf(sql, sizeof(sql),
+                 "SELECT time, tag, value FROM ts_readings "
+                 "WHERE time >= %lld AND time < %lld",
+                 (long long)base, (long long)(base + day_ms));
+        CHECK(fetch_readings(db, sql, one, 64, &n1) == 0);
+        CHECK(n1 == 2);
+        if (n1 != 2) {
+            printf("    FAIL 范围裁剪后读到 %d 条（应为今天那 2 条）\n", n1);
+        }
+    }
+}
 
 /* 第 1 项：建之前的行为 */
 static void check_no_store(DB *db)
@@ -585,6 +693,20 @@ int main(void)
 
     /* 第 9 项：A5 · 执行器零改动（机械检查，不碰库） */
     check_exec_untouched();
+
+    /* 第 10 项：超集铁律（单独一个库文件 —— 它要跨多个分区写数据） */
+    {
+        DB *db2 = NULL;
+
+        remove(PATH_SUPER);
+        CHECK(db_open(PATH_SUPER, &db2) == DB_OK);
+        if (db2) {
+            CHECK(db_ts_create(db2) == DB_OK);
+            check_superset(db2);
+            db_close(db2);
+        }
+        remove(PATH_SUPER);
+    }
 
     printf(failures == 0 ? "全部通过\n" : "有失败项\n");
     return failures == 0 ? 0 : 1;
