@@ -149,6 +149,16 @@ int ts_prune_windows_of_store(TsStore *st, TsPruneWindow **out, u32 *n_out);
 /* 是不是"没有裁剪"（范围不可解析） */
 bool ts_prune_all(const TsPruneSet *s);
 
+/*
+ * 取集合里第 i 个窗口（**磁盘序**，与 ts_prune_select 填进去的顺序一致）。
+ *
+ * state_out 可为 NULL（不要状态时传 NULL）。
+ *
+ * i 越界 → 返回 false（**不**是错误 —— 调用方只是想知道"有没有第 i 个"）。
+ */
+bool ts_prune_window_at(const TsPruneSet *s, u32 i, i64 *start_ms, i64 *end_ms,
+                        u32 *state_out);
+
 /* 集合里有几个分区 */
 u32  ts_prune_count(const TsPruneSet *s);
 

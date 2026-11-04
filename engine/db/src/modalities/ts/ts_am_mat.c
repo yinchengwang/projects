@@ -35,6 +35,7 @@
 #include "common/error.h"
 #include "common/types.h"
 #include "modalities/ts/ts_am_mat.h"
+#include "modalities/ts/ts_prune.h"
 #include "modalities/ts/tsstore.h"
 
 /* ---------------- 生命周期 ---------------- */
@@ -166,37 +167,87 @@ static bool ts_am_in_parts(const TsAmMat *m, i64 t)
 /*
  * 选出与 [lo, hi] 相交的分区。
  *
- * 分区是左闭右开 ⇒ 相交条件是 start <= hi 且 end > lo。
+ * ⚠️ **这里必须调 ts_prune，不能自己再写一遍判定**（坑 M6-63）。
+ *
+ * 之前这一层自己写了一份"分区是左闭右开 ⇒ start <= hi && end > lo"的判定，
+ * 而步骤 4 的 `ts_prune` 里也有一份 —— **两套并行的裁剪实现**。
+ * 后果不是"重复代码难看"，而是：
+ *   - 步骤 4 的 `ts_prune` **根本没接到任何真实读路径上**（等于做完了但没上线）；
+ *   - "超集铁律"这条安全判据散落在两处，改一处忘另一处 ⇒ 少给 ⇒ 静默漏数据。
+ *     （反向验证已经抓到过这个形态：在这一层注入"不可解析 ⇒ 只给第一个分区"，
+ *      步骤 4 的单测全绿，而 SPI 层静默丢掉了 2/3 的行。）
+ *
+ * 现在：判定只有 `ts_prune_window_hits()` 一处，两条读路径都走它。
  */
 static int ts_am_select_parts(TsStore *st, bool has_range, i64 lo, i64 hi, TsAmMat *m)
 {
-    u32 np;
-    u32 i;
+    TsPruneWindow *wins = NULL;
+    u32 nwins = 0;
+    TsPruneSet set;
+    int rc;
 
+    /*
+     * 没有可解析的时间谓词 ⇒ **不裁剪**（全部分区都要）。
+     *
+     * ⚠️ 这里的"不裁剪"必须表达成"集合里什么都没有"，
+     * 由 `ts_am_in_parts()` 把"空集合"解释成"全要"
+     * —— 而不是"选第一个分区"或"选前 N 个分区"（那就是子集 ⇒ 少给）。
+     */
     if (!has_range) {
         return OK;
     }
 
-    np = ts_store_part_count(st);
-    for (i = 0u; i < np; i++) {
-        TsPartInfo info;
-        int rc = ts_store_part_info(st, i, &info);
+    rc = ts_prune_windows_of_store(st, &wins, &nwins);
+    if (rc != OK) {
+        return rc;
+    }
 
-        if (rc != OK) {
-            return rc;
-        }
-        if (info.state == TS_PART_DROPPED) {
-            continue;
-        }
-        /* 区间相交？（分区是左闭右开） */
-        if (info.start_ms > hi || info.end_ms <= lo) {
-            continue;
-        }
-        rc = ts_am_mat_add_part(m, info.start_ms, info.end_ms);
-        if (rc != OK) {
-            return rc;
+    rc = ts_prune_set_init(&set);
+    if (rc != OK) {
+        free(wins);
+        return rc;
+    }
+
+    rc = ts_prune_select(&set, wins, nwins, lo, hi, has_range);
+    free(wins);
+    if (rc != OK) {
+        ts_prune_set_destroy(&set);
+        return rc;
+    }
+
+    /*
+     * 范围反了（t_lo > t_hi）⇒ ts_prune_select 会给出"全部分区"（all = true）。
+     * 那时**不往 m 里加任何分区** ⇒ 集合为空 ⇒ ts_am_in_parts 解释成"全要"。
+     */
+    if (!ts_prune_all(&set)) {
+        u32 nsel = ts_prune_count(&set);
+
+        for (u32 i = 0; i < nsel; i++) {
+            i64 s_ms;
+            i64 e_ms;
+            u32 state;
+
+            if (!ts_prune_window_at(&set, i, &s_ms, &e_ms, &state)) {
+                continue;
+            }
+            /*
+             * ⚠️ **DROPPED 的分区不选**（本层的老规矩，保留）：
+             * 它已经被 TTL 回收了 —— 页都还回去了，选它等于去读**别人的页**。
+             * `ts_prune_windows_of_store()` 把**所有**分区都列出来
+             * （状态带在窗口里），跳过 DROPPED 是调用方的事。
+             */
+            if (state == (u32)TS_PART_DROPPED) {
+                continue;
+            }
+            rc = ts_am_mat_add_part(m, s_ms, e_ms);
+            if (rc != OK) {
+                ts_prune_set_destroy(&set);
+                return rc;
+            }
         }
     }
+
+    ts_prune_set_destroy(&set);
     return OK;
 }
 

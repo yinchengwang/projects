@@ -214,6 +214,29 @@ bool ts_prune_all(const TsPruneSet *s)
     return s ? s->all : true;
 }
 
+/*
+ * 取集合里第 i 个窗口（磁盘序）。
+ *
+ * 越界 → false（**不**是错误：调用方只是想知道"有没有第 i 个"）。
+ */
+bool ts_prune_window_at(const TsPruneSet *s, u32 i, i64 *start_ms, i64 *end_ms,
+                        u32 *state_out)
+{
+    if (!s || i >= s->count || !s->wins) {
+        return false;
+    }
+    if (start_ms) {
+        *start_ms = s->wins[i].start_ms;
+    }
+    if (end_ms) {
+        *end_ms = s->wins[i].end_ms;
+    }
+    if (state_out) {
+        *state_out = s->wins[i].state;
+    }
+    return true;
+}
+
 u32 ts_prune_count(const TsPruneSet *s)
 {
     return s ? s->count : 0u;

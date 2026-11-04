@@ -101,7 +101,17 @@ static int get_part(const TsDir *d, u32 i, TsPartInfo *out)
     return ts_dir_get(d, i, out);
 }
 
-/* 这一页是不是已经被清零了（回收前先清零） */
+/*
+ * 这一页的**内容区**是不是已经被清零了（回收前先清零）。
+ *
+ * ⚠️ **只查内容区（偏移 20 起），不查整页**：
+ * 步骤 6 接入 WAL 之后，页被提交时会写 LSN 与校验和进页头
+ * （`page_set_lsn` → H_LSN(12) / H_CKSUM(16)）⇒ 整页**不可能**全零。
+ *
+ * 但这条断言的**本意**是"下一个主人拿到的是一张空页，不是**别人的残留**" ——
+ * 残留指的是**数据**，不在页头里。
+ * ⇒ 查内容区（`HDR_SIZE = 20` 起）才是这条断言要表达的东西。
+ */
 static int page_is_zero(Pager *pg, u32 pid)
 {
     PageFrame *fr = NULL;
@@ -110,7 +120,7 @@ static int page_is_zero(Pager *pg, u32 pid)
 
     if (pager_get(pg, pid, &fr) != OK)
         return 0;
-    for (i = 0; i < PAGE_SIZE; i++) {
+    for (i = HDR_SIZE; i < PAGE_SIZE; i++) {
         if (fr->data[i] != 0u) {
             zero = 0;
             break;
