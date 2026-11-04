@@ -490,6 +490,64 @@ static void check_repl(void)
     db_close(db);
 }
 
+/* ---------------- 9. A5 · 执行器零改动（机械检查） ---------------- */
+
+/*
+ * 这件事没法用行为断言表达 —— 行为对了不代表执行器没被改。
+ * 所以只能查源码（照 test_vec_it.c 的 A8、test_graph_it.c 的 A3 同一个做法）。
+ *
+ * 查不到源文件就跳过（不硬失败）：测试可能被从别的目录跑。
+ */
+static void check_exec_untouched(void)
+{
+    printf("  9. A5 · 执行器零改动（机械检查）\n");
+
+    static const char *files[] = {
+        "src/query/exec.c", "src/query/exec_scan.c", "src/query/exec_write.c",
+        "src/query/parser.c", "src/query/lexer.c", "src/query/exec.h",
+        "src/query/exec_internal.h"
+    };
+
+    /*
+     * ⚠️ 匹配的是"时序模态的字样"，而且要避开**子串误伤**：
+     * `am_supports_batch` 里含 "ts_"、`targets_supported` 里也含 "ts_" ——
+     * 用裸 `strstr(line, "ts_")` 会误报。
+     * 所以只匹配有明确前缀的完整标识符：`ts_xxx` / `tsreadings` 之类。
+     */
+    static const char *marks[] = { "ts_readings", "ts_partitions",
+                                   "ts_store", "ts_am", "ts_dir",
+                                   "ts_prune", "ts_ttl", "timeseries" };
+
+    int checked = 0;
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        FILE *f = fopen(files[i], "r");
+        if (!f)
+            continue;
+        checked++;
+
+        char line[512];
+        while (fgets(line, sizeof(line), f)) {
+            for (size_t m = 0; m < sizeof(marks) / sizeof(marks[0]); m++) {
+                if (strstr(line, marks[m])) {
+                    printf("    FAIL 执行器里出现了时序相关的字样（%s）：%s: %s",
+                           marks[m], files[i], line);
+                    failures++;
+                    break;
+                }
+            }
+        }
+        fclose(f);
+    }
+
+    if (checked == 0) {
+        printf("    （没找到 src/query/ 下的源文件，跳过机械检查）\n");
+        return;
+    }
+
+    printf("    （检查了 %d 个执行器源文件，零命中）\n", checked);
+    CHECK(checked > 0);
+}
+
 /* ---------------- 入口 ---------------- */
 
 int main(void)
@@ -524,6 +582,9 @@ int main(void)
 
     /* 第 8 项：REPL（单独一个库文件） */
     check_repl();
+
+    /* 第 9 项：A5 · 执行器零改动（机械检查，不碰库） */
+    check_exec_untouched();
 
     printf(failures == 0 ? "全部通过\n" : "有失败项\n");
     return failures == 0 ? 0 : 1;
