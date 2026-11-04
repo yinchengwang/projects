@@ -1,8 +1,33 @@
 # 编译配置
 # 关键：-fno-strict-aliasing 别省，页缓冲里大量类型双关，开优化后容易出诡异的错
 
-# Windows 下 make 默认用 cmd.exe，$(shell find) 会失败，强制用 sh
-SHELL   := sh
+# 【SHELL 必须给绝对路径 —— 这不是讲究，是修一个会静默吞掉构建的坑】
+#
+# Windows 下 make 的 $(shell ...) 与 recipe 默认都走 cmd.exe，
+# 而 cmd.exe 里**单引号不是引用符**：'*.c' 会被原样传下去，
+# 于是 $(shell find src -name '*.c') 落到 **Windows 自带的 find.exe**
+# （文本搜索工具，不是 findutils）⇒ 报 "paths must precede expression"，
+# SRCS 变成空 ⇒ **make all 什么都不编**，而且**不报错**。
+#
+# 后果非常阴险：源码改了、编译"成功"了，跑的却是**上一次的对象文件** ——
+# 测出来的结论全是假的（v1.5 步骤 1 踩到过：改了 gorilla.c，make 没重编，
+# 测试跑的是旧二进制，报出来的失败信息自相矛盾）。
+#
+# 修法：SHELL 给 Git 自带的 sh 的**绝对路径**（make 只认绝对路径），
+# 这样 $(shell ...) 与 recipe 都用 sh ⇒ find 是 findutils 的 find。
+#
+# 为什么要 sh 而不是 cmd.exe：Makefile 里大量用 find / rm / mkdir -p，
+# 这些在 cmd.exe 下要么没有、要么语法不同。
+ifeq ($(OS),Windows_NT)
+  ifeq ($(wildcard C:/Program Files/Git/usr/bin/sh.exe),)
+    GIT_SH := $(shell where sh 2>NUL | head -1)
+  else
+    GIT_SH := C:/Program Files/Git/usr/bin/sh.exe
+  endif
+  SHELL := $(GIT_SH)
+else
+  SHELL := sh
+endif
 
 # make 内建的 CC=cc 会盖住 ?=，所以按 origin 判断
 ifeq ($(origin CC),default)
@@ -32,7 +57,25 @@ SRC_DIR := src
 # OBJ_DIR 可用命令行覆盖（make OBJ_DIR=build_xxx）——
 # 多个构建同时跑时各写各的目录，免得 gcc 写坏同一个 .o。
 OBJ_DIR ?= build
-SRCS    := $(shell find $(SRC_DIR) -name '*.c')
+# 【为什么用 wildcard 而不是 $(shell find ...)】
+#
+# Windows 上 make 的 $(shell ...) 走 cmd.exe：单引号不是引用符（'*.c' 被原样传下去），
+# 而 cmd.exe 里 find 命中的是 **Windows 自带的 find.exe**（文本搜索工具），
+# 它把 "paths must precede expression" 报出来 ⇒ SRCS 变成空
+# ⇒ **make all 什么都不编，而且不报错**（源码改了，跑的还是旧对象文件）。
+#
+# $(wildcard ...) 是 make 的**内建函数**，不经过 shell ⇒ 没有引号问题、没有 find 版本问题。
+# 【坑 M6-20 · Windows 上 make 的 $(shell find) 会静默返回空 ⇒ 什么都不编】
+#
+# 症状：改了源码，`mingw32-make all` 报 "BUILD OK"，
+#       但 `build/*.o` 的时间戳**没变** ⇒ 跑的是旧二进制。
+#       测试结论因此全是假的（"改了还是红"、"改了还是绿"这种自相矛盾的现象）。
+# 原因：make 的 $(shell ...) 在 Windows 上走 cmd.exe，
+#       cmd.exe 里单引号不是引用符 ⇒ find 落到 Windows 自带的 find.exe
+#       （文本搜索工具，不是 findutils）⇒ SRCS 为空 ⇒ 目标为空 ⇒ 什么都不编。
+# 修法：改用 make 内建的 $(wildcard ...)（不经过 shell，没有引号问题）。
+# 验证：改一个源文件 → 对象文件时间戳必须跟着变（否则就是又踩了这个坑）。
+#SRCS    := $(wildcard $(SRC_DIR)/*/*.c $(SRC_DIR)/*/*/*.c $(SRC_DIR)/*.c)
 OBJS    := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS    := $(OBJS:.o=.d)
 
