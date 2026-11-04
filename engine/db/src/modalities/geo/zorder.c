@@ -252,28 +252,42 @@ GeoZIndex *geo_zorder_build(const u32 *qx, const u32 *qy, const u32 *row_ids,
     /*
      * 分桶：同格子的条目在数组里是连续的；
      * 一个格子点数超过容量就拆成多个桶（桶仍然是同格子 ⇒ 查询时整桶看）。
+     *
+     * ⚠️ **坑 M5-8（2026-11-04 修）**：装桶计数**必须**用局部变量 `fill` 记，
+     * 不能读 `ix->buckets[b].count`。
+     *
+     * 第一版是这么写的：
+     *     if (... || ix->buckets[b].count >= GEO_Z_BUCKET_CAP) { ... ix->buckets[b].count = 0; }
+     * 而 `count` **只在开下一个桶时才被结算**（`count = i - first`），
+     * 也就是说在判据那一刻它永远是 0 ⇒ "装满了就拆桶"这条判据**从来没生效过**：
+     * 一个格子塞 11111 个点也只开一个桶，"一桶 ≈ 一页"这个模型直接作废
+     * （实测桶数 == 非空格数，一桶装了 33 倍于容量的点）。
+     *
+     * 这类 bug 之所以能溜过去，是因为它**不产生任何错误结果**：
+     * 命中集照样对（超集还是超集），只是 IO 口径被低估了 33 倍。
+     * —— "结果对"不等于"度量对"，度量本身也要单独验。
      */
     {
         u32 b = 0;
-        u32 first = 0;
+        u32 fill = 0;      /* 当前桶已经装了多少条（**局部**计数，见上面的坑） */
 
         for (i = 0; i < n; i++) {
             ix->entries[i].code = keys[i].code;
             ix->entries[i].row_id = keys[i].row_id;
 
             if (i == 0u || keys[i].cell_code != keys[i - 1u].cell_code ||
-                ix->buckets[b].count >= GEO_Z_BUCKET_CAP) {
+                fill >= GEO_Z_BUCKET_CAP) {
                 if (i > 0u) {
-                    ix->buckets[b].count = i - first;
+                    ix->buckets[b].count = fill;
                     b++;
                 }
-                first = i;
                 ix->buckets[b].cell = (u32)keys[i].cell_code;
                 ix->buckets[b].first = i;
-                ix->buckets[b].count = 0;
+                fill = 0;
             }
+            fill++;
         }
-        ix->buckets[b].count = n - first;
+        ix->buckets[b].count = fill;
         b++;
         ix->n_buckets = b;
     }
