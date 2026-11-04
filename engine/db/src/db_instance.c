@@ -78,6 +78,18 @@ static void instance_close(DbInstance *inst)
     db_geo_close(inst);
 
     /*
+     * 时序模态（v1.5）。
+     *
+     * ts 不持有页（页归 pager 管），所以顺序上 pager_close 之前或之后都能跑；
+     * 放在这里是为了和 db_vec_close / db_ft_close / db_geo_close 保持同一处、
+     * 同一套释放次序。
+     *
+     * ts 的页是**普通脏页**，pager_close 会把它们刷盘 ⇒
+     * **数据不依赖这个顺序**；把 TsStore 的内存放在 pager 之前释放更干净。
+     */
+    db_ts_close(inst);
+
+    /*
      * 关闭顺序很重要：**先刷页，再写 CHECKPOINT**。
      *
      * 反过来的话：CHECKPOINT 先落盘，然后刷页时崩溃了 ——
@@ -199,6 +211,12 @@ void db_abandon(DB *db)
          * 重开库时由 WAL 重放整页镜像补回来。这里只是释放内存。
          */
         db_geo_close(inst);
+        /*
+         * 时序模态（v1.5）：断电时读数页**不**落盘 ——
+         * 本模态不写 WAL（坑 M6-41：WAL 是步骤 6 的账），
+         * 所以断电时这批读数就是没了。这里只是释放内存。
+         */
+        db_ts_close(inst);
         spi_registry_destroy(inst->reg);
         pager_abandon(inst->pager);     /* 脏页全丢 —— 这就是"断电" */
         wal_close(inst->wal);            /* 日志已经 fsync 过了，关掉即可 */

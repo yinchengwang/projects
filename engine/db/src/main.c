@@ -61,6 +61,7 @@
 #include "db.h"
 #include "repl_ft.h"
 #include "repl_geo.h"
+#include "repl_ts.h"
 #include "repl_vec.h"
 
 static void print_result(Result *r)
@@ -615,6 +616,18 @@ int main(int argc, char **argv)
             }
             if (strncmp(p, "GEO", 3) == 0) {
                 handle_geo(db, line);
+                len = 0;
+                sql[0] = '\0';
+                continue;
+            }
+            /*
+             * TS 命令同理（v1.5 步骤 5）。
+             *
+             * ⚠️ 必须排在 SQL 缓冲**之前**（坑 M6-59）：
+             * 否则 "TS INSERT 100 1 2.5" 会被当成 SQL 送去解析 → 语法错误。
+             */
+            if (strncmp(p, "TS", 2) == 0) {
+                handle_ts(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;

@@ -21,6 +21,9 @@
 #include "modalities/geo/geo_state.h"
 #include "modalities/graph/graph.h"
 #include "modalities/graph/graph_am.h"
+#include "modalities/ts/ts_am.h"
+#include "modalities/ts/ts_am_ext.h"
+#include "modalities/ts/tsstore.h"
 #include "modalities/vector/hnsw_am.h"
 #include "modalities/vector/vector_am.h"
 #include "modalities/vector/vector_state.h"
@@ -166,6 +169,33 @@ typedef struct DbInstance {
     GeoAmCtx     geo_ctx;
     u64          geo_tree_reads_seen;
 
+    /*
+     * 时序模态（v1.5）。
+     *
+     * 同样是**实例级共享**：所有连接看同一批读数。
+     *
+     * ts 为 NULL 表示"这个库还没建过时序存储"——
+     * 这时 ts_readings / ts_partitions 这两张虚拟表也不存在，
+     * 查它们会得到"表不存在"（与图模态、地理模态同一个口径）。
+     *
+     * 【两张表 ⇒ 两个上下文】
+     *
+     * 两张表的列不同、行为不同（读数表能插，分区表只读），
+     * 所以各有一个 AM 上下文。
+     * 上下文用的是**扩展结构**（TsAmExt，见 ts_am_ext.h 的坑 M6-53）：
+     * 契约里的 TsAmCtx 只有两个字段，装不下"时间范围"与"这是哪张表"。
+     *
+     * ⚠️ 时序的写**没有事务边界**（xid 固定 0 = 系统事务），
+     *    而且**本模态不写 WAL**（步骤 6 的账，坑 M6-41）：
+     *    崩了 ⇒ 这批读数没了（页是脏页，日志里没有镜像）。
+     */
+    TsStore     *ts;
+    bool         ts_ready;
+    StorageAM    ts_am_readings;
+    StorageAM    ts_am_partitions;
+    TsAmExt      ts_ext_readings;
+    TsAmExt      ts_ext_partitions;
+
     char     *walpath;
     char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
     int       nconns;       /* 引用计数 */
@@ -252,6 +282,34 @@ int db_ft_open(DbInstance *inst);
 
 /* 关库：释放索引（必须在 pager_close 之前调） */
 void db_ft_close(DbInstance *inst);
+
+/*
+ * ---------------- 时序模态（v1.5，db_ts.c 实现） ----------------
+ */
+
+/*
+ * 把两张时序虚拟表接进注册表（仿 db_geo_register）。
+ *
+ * 注册表只知道"名字 → 一个 StorageAM"，
+ * 所以加第 6 个模态不需要改注册表，更不需要改执行器。
+ */
+int db_ts_register(DbInstance *inst);
+
+/*
+ * 开库时接管磁盘上已有的时序存储。
+ *
+ * 磁盘上没有 → E_NOTFOUND（**不是错误**：那是个还没建过时序存储的库，
+ * 和图模态一样），由调用方决定是不是错误。
+ */
+int db_ts_open(DbInstance *inst);
+
+/*
+ * 关库：释放模态状态（必须在 pager_close 之前调）。
+ *
+ * **幂等**：inst->ts == NULL 时直接返回，
+ * 所以多条失败清理路径重复调用也安全。
+ */
+void db_ts_close(DbInstance *inst);
 
 /*
  * ---------------- 地理空间模态（v1.4，db_geo.c 实现） ----------------

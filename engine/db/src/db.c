@@ -699,9 +699,34 @@ db_err db_open(const char *path, DB **out)
         rc = grc;
     }
 
+    /*
+     * 时序模态（v1.5）。
+     *
+     * 和 blob / graph / vector / geo 一样是**实例级共享**：所有连接看同一批读数。
+     *
+     * 【打开时可能根本没有时序存储】
+     * 磁盘上没建过 → db_ts_open 返回 E_NOTFOUND。
+     * 这不是错误（是个还没建过时序存储的库），所以 inst->ts 留空，
+     * ts_readings / ts_partitions 这两张虚拟表也不注册 ——
+     * 查它们会得到"表不存在"，而不是"查出一张空表"。
+     *
+     * 【注册在 db_ts_open 里面做】
+     * 与 db_geo_open 同一个套路：打开成功就意味着"磁盘上有时序存储"，
+     * 那两张虚拟表就该存在。建（db_ts_create）那次也注册一次 ——
+     * 两条路互斥（没建过才建，建过就不许再建），不会重名。
+     */
+    if (rc == OK) {
+        int trc = db_ts_open(inst);
+        if (trc == E_NOTFOUND) {
+            trc = OK;       /* 这个库还没建时序存储 —— 不是错误 */
+        }
+        rc = trc;
+    }
+
     if (rc != OK) {
         db_ft_close(inst);
         db_geo_close(inst);
+        db_ts_close(inst);
         graph_destroy(inst->graph);
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);
