@@ -554,4 +554,118 @@ uint32_t db_ft_ntombstones(DB *db);
  */
 uint64_t db_ft_page_reads(DB *db);
 
+/* ---------------- 地理空间模态（v1.4） ---------------- */
+
+/*
+ * 地理空间 = 模态 5（R-tree 空间索引）。
+ *
+ * 【两条路径，各管各的】
+ *
+ *   db_geo_window() / db_geo_knn()  专用 API：按空间谓词查
+ *   geo_points 虚拟表               元数据路径：SELECT row_id, x, y, deleted FROM geo_points
+ *
+ * 为什么窗口/KNN **不进 SQL 谓词**（计划 §1.1 明确划在范围外）：
+ * 窗口查询要的是"点落在矩形内"这个几何谓词，
+ * 而执行器的谓词系统里没有这种算子 ——
+ * 与向量模态的"距离排序不进 SQL"、FT 模态的"相关性排序不进 SQL"同一个判断。
+ *
+ * 【坐标系】
+ *
+ * 假定**平面直角坐标**。不做坐标系转换、不做投影、不做测地距离
+ * （计划 §1.1 明确不做）。
+ */
+
+/* 一个空间查询命中 */
+typedef struct {
+    uint64_t row_id;   /* 点的标识（插入顺序分配，单调递增，不复用） */
+    float    dist;     /* 距离（越小越近；**平方距离**） */
+} db_geo_hit;
+
+/*
+ * 建几何存储（一个库只能建一次）。
+ *
+ * 建之前这个库没有几何存储 —— 此时查 geo_points 会得到"表不存在"，
+ * 而不是"查出一张空表"（与图模态同一个口径：
+ * "没有图"和"图是空的"是两件事，要能被区分开）。
+ *
+ * 第二次建 → DB_E_INVAL。
+ */
+db_err db_geo_create(DB *db);
+
+/* 这个库有没有几何存储 */
+int db_geo_exists(DB *db);
+
+/*
+ * 插入一个点。
+ *
+ * 坐标必须是有限值（不是 NaN / Inf）—— NaN 会让所有几何比较返回 false，
+ * 剪枝会**静默失效**，所以这里直接拒绝（DB_E_INVAL）。
+ *
+ * row_id 按插入顺序分配（从 0 开始，单调递增，**不复用**）：
+ * 删除的点也不会把 id 让出来，免得"旧 id 指向新点"这种张冠李戴。
+ */
+db_err db_geo_insert(DB *db, float x, float y, uint64_t *row_id_out);
+
+/*
+ * 窗口查询：返回落在矩形 [minx,maxx] × [miny,maxy] 内的点的 row_id。
+ *
+ * 边界是**闭区间** —— 落在边上的点算命中
+ * （与树里的剪枝判据、暴力基准用的是同一套几何函数）。
+ *
+ * max_out —— out 的容量。**装不下就报 DB_E_NOSPACE**，不静默截断。
+ * *n_out —— 实际返回几个（可能少于 max_out：窗口里没那么多点时）。
+ *
+ * 被删除的点**不返回**。
+ */
+db_err db_geo_window(DB *db, float minx, float miny, float maxx, float maxy,
+                     uint32_t *out_ids, uint32_t max_out, uint32_t *n_out);
+
+/*
+ * 近邻查询（**精确** KNN，不是近似）。
+ *
+ * 与 v1.0 的 HNSW 形成对照：HNSW 的 KNN 是近似的（用 ef 换召回），
+ * 这里是精确的 —— mindist 优先队列 + 提前终止。
+ *
+ * 排序：(距离升序, row_id 升序)。距离并列时按 row_id 升序定死，
+ * 否则"第 k 名"不唯一，结果没法逐位对照。
+ *
+ * 被删除的点**不返回**。
+ */
+db_err db_geo_knn(DB *db, float qx, float qy, uint32_t k,
+                  db_geo_hit *out, uint32_t max_out, uint32_t *n_out);
+
+/*
+ * 删一个点（打删除标记）。
+ *
+ * 立刻生效：之后的窗口/KNN 查询不再返回它，geo_points 里它的 deleted = 1。
+ *
+ * 删除**不重排树**（不合并、不搬条目）：死条目留在原地，
+ * 空间也不回收 —— 与 B+tree 的"标记死条目"是同一个先例。
+ * 真正清掉死条目由 db_geo_reindex() 负责。
+ *
+ * 删一个不存在的点 → DB_E_NOTFOUND。
+ */
+db_err db_geo_delete(DB *db, uint64_t row_id);
+
+/*
+ * 重建索引：扫一遍现存的点，把**活点**重新插进一棵新树。
+ *
+ * 什么时候需要：树里死条目太多（查询白扫），或者树页读不懂。
+ *
+ * 代价：老树的页**不回收**（页归 pager 管，本轮没有页回收机制），
+ * 文件会变大 —— 这一点如实记在文档里。
+ */
+db_err db_geo_reindex(DB *db);
+
+/* 活着的点数（不含已删除的） */
+db_err db_geo_count(DB *db, uint64_t *n);
+
+/*
+ * 诊断：累计读了多少页。
+ *
+ * 与 db_vec_page_reads / db_ft_page_reads 同一个思路：
+ * **用可观测量证明"少读了"**（A4 的度量）。
+ */
+uint64_t db_geo_page_reads(DB *db);
+
 #endif /* DB_DB_H */

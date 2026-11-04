@@ -67,6 +67,17 @@ static void instance_close(DbInstance *inst)
     db_ft_close(inst);
 
     /*
+     * 地理空间模态（v1.4）。
+     *
+     * geo 不持有页（页归 pager 管），所以顺序上 pager_close 之前或之后都能跑；
+     * 放在这里是为了和 db_vec_close / db_ft_close 保持同一处、同一套释放次序。
+     *
+     * geo 的页是**普通脏页**，pager_close 会把它们刷盘 ⇒
+     * **数据不依赖这个顺序**；把 GeoState 的内存放在 pager 之前释放更干净。
+     */
+    db_geo_close(inst);
+
+    /*
      * 关闭顺序很重要：**先刷页，再写 CHECKPOINT**。
      *
      * 反过来的话：CHECKPOINT 先落盘，然后刷页时崩溃了 ——
@@ -182,6 +193,12 @@ void db_abandon(DB *db)
          * 清单更是一开始就没落盘 —— 所以这里只是释放内存。
          */
         db_ft_close(inst);
+        /*
+         * 地理空间模态（v1.4）：断电时树页**不**落盘 ——
+         * geo 本来就没有 WAL，脏页丢了就是丢了（坑 M4-38，
+         * 崩溃恢复是步骤 6 的账）。这里只是释放内存。
+         */
+        db_geo_close(inst);
         spi_registry_destroy(inst->reg);
         pager_abandon(inst->pager);     /* 脏页全丢 —— 这就是"断电" */
         wal_close(inst->wal);            /* 日志已经 fsync 过了，关掉即可 */

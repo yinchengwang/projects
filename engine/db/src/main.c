@@ -34,6 +34,24 @@
  *   GRAPH STAT              统计
  *
  * 遍历走命令而不是 SQL，是因为 SQL 表达不了递归（"3 跳"）。
+ *
+ * 【geo 命令】
+ *
+ * 空间模态的元数据走 SPI 虚拟表（geo_points），
+ * 但**建存储**和**空间谓词查询**还得走命令：
+ *
+ *   GEO CREATE              建几何存储（一个库只能建一次）
+ *   GEO EXISTS              这个库有没有几何存储
+ *   GEO INSERT <x> <y>      插一个点
+ *   GEO WINDOW <minx> <miny> <maxx> <maxy>   窗口查询
+ *   GEO KNN <x> <y> <k>     近邻查询
+ *   GEO DELETE <row_id>     删一个点
+ *   GEO COUNT               活着的点数
+ *   GEO REINDEX             重建索引
+ *   GEO READS               诊断：累计读了多少页
+ *
+ * 窗口和 KNN 不走 SQL，与向量模态的 VEC KNN、全文模态的 FT SEARCH
+ * 同一个判断：几何谓词和距离排序都算不出来。
  */
 
 #include <stdio.h>
@@ -42,6 +60,7 @@
 
 #include "db.h"
 #include "repl_ft.h"
+#include "repl_geo.h"
 #include "repl_vec.h"
 
 static void print_result(Result *r)
@@ -590,6 +609,12 @@ int main(int argc, char **argv)
             }
             if (strncmp(p, "FT", 2) == 0) {
                 handle_ft(db, line);
+                len = 0;
+                sql[0] = '\0';
+                continue;
+            }
+            if (strncmp(p, "GEO", 3) == 0) {
+                handle_geo(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;

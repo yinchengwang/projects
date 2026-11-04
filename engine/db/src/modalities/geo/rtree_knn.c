@@ -234,8 +234,6 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
     KnHit *hits = NULL;
     KnHeap heap;
     u32 nhit = 0;
-    u32 npoints;
-    u32 nres;
     u64 reads = 0;
     int rc = OK;
     u32 i;
@@ -254,20 +252,32 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
     if (buf == NULL)
         return E_NOSPACE;
 
-    /* 根页读一次：拿点数、判容量、看根是叶子还是内部 */
+    /* 根页读一次：判容量、看根是叶子还是内部 */
     rc = rtk_load(pg, root_page, buf, &reads);
     if (rc != OK) {
         free(buf);
         return rc;
     }
-    npoints = get_u32(buf + RT_NPOINTS_OFF);
 
-    /* 结果个数 = min(k, 点数)；装不下就报错，不静默截断 */
-    nres = (k < npoints) ? k : npoints;
-    if (nres > max_out) {
-        free(buf);
-        return E_NOSPACE;
-    }
+    /*
+     * 结果个数 = min(k, **活点**数)；死条目不进结果集。
+     *
+     * ⚠️ **坑 M5-11（2026-11-04 修）**：这里**不能**再用"树里的总点数"
+     * 去做"装不装得下"的前置检查。
+     *
+     * 第一版是这么写的：
+     *     nres = (k < npoints) ? k : npoints;
+     *     if (nres > max_out) return E_NOSPACE;
+     * 而 npoints 是**总**点数（含死条目）⇒ 当"活点数 ≤ max_out < 总点数"时
+     * 会**保守地误报** E_NOSPACE —— 明明放得下却报错。
+     * 场景很现实：删掉一批点之后，用"实际活点数"当 max_out 查一次。
+     *
+     * 改成**事后精确判**：先把活点全找出来（nhit = min(k, 活点数)），
+     * 再判 nhit > max_out 才报错。
+     * 代价是"缓冲区太小"这件事要到查完才知道（白做一遍功），
+     * 但换来的是判据与真实结果个数**逐位一致** ——
+     * 这正是"装不下就报错、不静默截断"这条铁律要保证的东西。
+     */
 
     hits = (KnHit *)calloc((size_t)(k > 0 ? k : 1u), sizeof(KnHit));
     if (hits == NULL) {
@@ -289,9 +299,15 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
             Mbr m;
 
             rtk_ent_get(p, &id, &m);
+            /*
+             * 死条目（id 最高位 = 已删除标志）**不进结果集** ——
+             * 死点不算近邻。row_id 取低 31 位。
+             */
+            if (id & RT_ENT_DEAD)
+                continue;
             /* 叶子条目的 MBR 是点的退化矩形 ⇒ 取中心就是那个点 */
             kn_res_insert(hits, &nhit, k,
-                          geo_dist2(qx, qy, m.minx, m.miny), id);
+                          geo_dist2(qx, qy, m.minx, m.miny), id & RT_ROWID_MAX);
         }
     } else {
         u16 n = rtk_nent(buf);
@@ -321,6 +337,13 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
          *
          * 堆顶 mindist2 是"这棵子树里所有点的距离下界"；
          * 它 > 第 k 近的真实距离 ⇒ 这棵子树里不可能有能进前 k 的点。
+         *
+         * 【死条目被跳过，不影响这个判据的正确性】
+         *
+         * mindist2 是子树 MBR 到查询点的距离下界，而 MBR 记的是
+         * **所有**点（含死点）的包围盒 ⇒ 这个下界对"活点"同样成立。
+         * 所以含死点的子树被剪掉只是**保守地白读**，不会漏掉活点。
+         * 换句话说：死点让"提前终止"变得不那么早，但不会变得不正确。
          */
         if (nhit == k && nd.md2 > hits[k - 1u].d2)
             break;
@@ -338,8 +361,11 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
                 Mbr m;
 
                 rtk_ent_get(p, &id, &m);
+                /* 死条目不进结果集（与根是叶子的那条路径同一口径） */
+                if (id & RT_ENT_DEAD)
+                    continue;
                 kn_res_insert(hits, &nhit, k,
-                              geo_dist2(qx, qy, m.minx, m.miny), id);
+                              geo_dist2(qx, qy, m.minx, m.miny), id & RT_ROWID_MAX);
             }
         } else {
             u16 n = rtk_nent(buf);
@@ -361,6 +387,15 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
     for (i = 0; i < nhit; i++)
         out_ids[i] = hits[i].row_id;
     *n_out = nhit;
+
+    /*
+     * 精确的"装不下"判据（见上面的坑 M5-11）：
+     * nhit = min(k, **活点**数) ⇒ nhit > max_out 才是真的装不下。
+     */
+    if (nhit > max_out) {
+        rc = E_NOSPACE;
+        goto done;
+    }
 
 done:
     if (page_reads_out != NULL)

@@ -17,6 +17,8 @@
 #include "catalog/catalog.h"
 #include "modalities/ft/ft_am.h"
 #include "modalities/ft/ft_index.h"
+#include "modalities/geo/geo_am.h"
+#include "modalities/geo/geo_state.h"
 #include "modalities/graph/graph.h"
 #include "modalities/graph/graph_am.h"
 #include "modalities/vector/hnsw_am.h"
@@ -132,6 +134,34 @@ typedef struct DbInstance {
     FtReplaySet  ft_replay_redo;
     FtReplaySet  ft_replay_undo;
 
+    /*
+     * 地理空间模态（v1.4）。
+     *
+     * 同样是**实例级共享**：所有连接看同一批点。
+     *
+     * geo 为 NULL 表示"这个库还没建过几何存储"——
+     * 这时 geo_points 这张虚拟表也不存在，查它会得到"表不存在"，
+     * 而不是"查出一张空表"（与图模态同一个口径）。
+     *
+     * ⚠️ **本模态没有 WAL**：树页与 meta 页都不进日志，
+     *    断电可能留下半截的树（坑 M4-38，步骤 6 才做崩溃恢复）。
+     *
+     * geo_tree_reads_seen —— 上一次记账时 rtree_page_reads(tree) 的值。
+     *
+     * 为什么要在实例里存一份：rtree_page_reads 是**累计值**，
+     * 每次查询后再加一遍会把历史读数重复计入。
+     * 所以这里存"上次看到的累计值"，每次只把**增量**加进
+     * GeoState.page_reads（那个才是对外的总数）。
+     *
+     * reindex 换了一棵新树 → 累计值从头开始 → 增量算出来是 0，
+     * 逻辑自然成立（见 db_geo.c 的 geo_account_tree_reads）。
+     */
+    GeoState    *geo;
+    bool         geo_ready;
+    StorageAM    geo_am;
+    GeoAmCtx     geo_ctx;
+    u64          geo_tree_reads_seen;
+
     char     *walpath;
     char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
     int       nconns;       /* 引用计数 */
@@ -218,6 +248,65 @@ int db_ft_open(DbInstance *inst);
 
 /* 关库：释放索引（必须在 pager_close 之前调） */
 void db_ft_close(DbInstance *inst);
+
+/*
+ * ---------------- 地理空间模态（v1.4，db_geo.c 实现） ----------------
+ */
+
+/*
+ * 摊平后的点表：按 row_id 索引存坐标与死活。
+ *
+ * 【为什么按 row_id 索引】
+ *
+ * 查询返回的是 row_id，要给它补上坐标才能算距离 —— 索引查才 O(1)。
+ * 容量取"总条目数"：row_id 从 0 连续分配，所以 row_id < n_total
+ * 恒成立（不成立就是数据坏了 → E_CORRUPT）。
+ *
+ * db_geo.c 与 db_geo_query.c 共用，所以定义放在这里。
+ */
+typedef struct {
+    float x;
+    float y;
+    bool  dead;
+} GeoPtEntry;
+
+typedef struct {
+    GeoPtEntry *p;
+    u32    cap;            /* 容量（= 总条目数） */
+    u32    n;              /* 扫到的条目数 */
+    u32    live;           /* 活条目数 */
+    u32    dead_n;         /* 死条目数 */
+} GeoTab;
+
+/* 扫一遍全树，把点摊平进表里（db_geo.c 实现，db_geo_query.c 也用） */
+int  db_geo_flatten(DbInstance *inst, GeoTab *tab);
+
+/* 释放摊平表 */
+void db_geo_tab_free(GeoTab *tab);
+
+/*
+ * 把 geo_points 虚拟表接进注册表（仿 db_vec_register）。
+ *
+ * 注册表只知道"名字 → 一个 StorageAM"，
+ * 所以加第 5 个模态不需要改注册表，更不需要改执行器。
+ */
+int db_geo_register(DbInstance *inst);
+
+/*
+ * 开库时接管磁盘上已有的几何存储。
+ *
+ * 磁盘上没有 → E_NOTFOUND（**不是错误**：那是个还没建过几何存储的库，
+ * 和图模态一样），由调用方决定是不是错误。
+ */
+int db_geo_open(DbInstance *inst);
+
+/*
+ * 关库：释放模态状态（必须在 pager_close 之前调）。
+ *
+ * **幂等**：inst->geo == NULL 时直接返回，
+ * 所以多条失败清理路径重复调用也安全。
+ */
+void db_geo_close(DbInstance *inst);
 
 /*
  * WAL 钩子（db.c 实现，db_graph.c 复用）。

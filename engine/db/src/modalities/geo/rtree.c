@@ -435,6 +435,13 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
         return E_INVAL;
     if (!isfinite(x) || !isfinite(y))
         return E_INVAL;
+    /*
+     * 叶子条目 id 的最高位是"已删除"标志（见 rtree.h 的 RT_ENT_DEAD），
+     * 所以 row_id 只能用低 31 位 —— 超了就直接拒绝，
+     * 不能让两个不同的 row_id 撞成同一个键。
+     */
+    if (row_id > RT_ROWID_MAX)
+        return E_INVAL;
 
     mbr_set_point(&e, x, y);
     newn = t->npoints + 1u;
@@ -663,13 +670,16 @@ static int rt_window_rec(RTree *t, u32 pid, const Mbr *win,
             RtEntry e;
 
             rt_ent_get(ents + (size_t)i * RT_ENT_SIZE, &e);
+            /* 死条目（id 最高位）直接跳过 —— 标记删除不等于从树上消失 */
+            if (e.id & RT_ENT_DEAD)
+                continue;
             if (mbr_contains_point(win, e.minx, e.miny)) {
                 if (*count >= max_out) {
                     /* 装不下就报错，不静默截断 */
                     pager_unpin(t->pg, pid, false);
                     return E_NOSPACE;
                 }
-                out[(*count)++] = e.id;
+                out[(*count)++] = e.id & RT_ROWID_MAX;
             }
         }
     } else {

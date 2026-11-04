@@ -492,6 +492,7 @@ db_err db_open(const char *path, DB **out)
      */
     rc = db_ft_open(inst);
     if (rc != OK) {
+        db_geo_close(inst);
         txn_clog_close(&inst->txns);
         pager_close(pg);
         wal_close(inst->wal);
@@ -506,6 +507,7 @@ db_err db_open(const char *path, DB **out)
     rc = catalog_open(pg, db_wal_hook, inst, &cat);
     if (rc != OK) {
         db_ft_close(inst);
+        db_geo_close(inst);
         txn_clog_close(&inst->txns);
         pager_close(pg);
         wal_close(inst->wal);
@@ -532,6 +534,7 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         catalog_close(cat);
         db_ft_close(inst);
+        db_geo_close(inst);
         txn_clog_close(&inst->txns);
         pager_close(pg);
         wal_close(inst->wal);
@@ -560,6 +563,7 @@ db_err db_open(const char *path, DB **out)
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
         db_ft_close(inst);
+        db_geo_close(inst);
         txn_clog_close(&inst->txns);
         pager_close(pg);
         wal_close(inst->wal);
@@ -584,6 +588,7 @@ db_err db_open(const char *path, DB **out)
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
         db_ft_close(inst);
+        db_geo_close(inst);
         txn_clog_close(&inst->txns);
         pager_close(pg);
         wal_close(inst->wal);
@@ -668,8 +673,35 @@ db_err db_open(const char *path, DB **out)
         rc = db_ft_register(inst);
     }
 
+    /*
+     * 地理空间模态（v1.4）。
+     *
+     * 和 blob / graph / vector 一样是**实例级共享**：所有连接看同一批点。
+     *
+     * 【打开时可能根本没有几何存储】
+     *
+     * 磁盘上没建过 → db_geo_open 返回 E_NOTFOUND。
+     * 这不是错误（是个还没建过几何存储的库），所以 inst->geo 留空，
+     * geo_points 这张虚拟表也不注册 ——
+     * 查它会得到"表不存在"，而不是"查出一张空表"。
+     *
+     * 【注册在 db_geo_open 里面做】
+     *
+     * 与 db_vec_open 同一个套路：打开成功就意味着"磁盘上有几何存储"，
+     * 那 geo_points 就该存在。建（db_geo_create）那次也注册一次 ——
+     * 两条路互斥（没建过才建，建过就不许再建），不会重名。
+     */
+    if (rc == OK) {
+        int grc = db_geo_open(inst);
+        if (grc == E_NOTFOUND) {
+            grc = OK;       /* 这个库还没建几何存储 —— 不是错误 */
+        }
+        rc = grc;
+    }
+
     if (rc != OK) {
         db_ft_close(inst);
+        db_geo_close(inst);
         graph_destroy(inst->graph);
         spi_registry_destroy(inst->reg);
         blob_store_destroy(inst->blobs);
