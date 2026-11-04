@@ -56,6 +56,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "modalities/geo/geo_wal.h"
 #include "modalities/geo/rtree.h"
 #include "storage/page.h"
 
@@ -208,11 +209,13 @@ int rtree_scan_all(Pager *pg, u32 root_page, RTreePointCb cb, void *ctx,
  * found 置 true 表示"找到了"（不论这次是不是刚标的）。
  *
  * 叶子：捏着帧扫，**在同一个帧里**改 id 的最高位，
- *       page_set_checksum 之后 unpin(dirty=true) —— 同一页不重复 get。
+ *       先写日志（整页镜像）再交页 —— 同一页不重复 get。
  * 内部：读一次页拷出孩子页号，随即 unpin，再递归（帧池压力与树高无关）。
+ *
+ * wal == NULL ⇒ 不写日志（单元测试直接用模态时）。
  */
 static int rts_mark_rec(Pager *pg, u32 pid, u32 row_id, u64 *reads,
-                        bool *found, u32 depth)
+                        bool *found, u32 depth, const GeoWal *wal)
 {
     u32 child[RT_CAP];
     u32 nchild = 0;
@@ -253,10 +256,14 @@ static int rts_mark_rec(Pager *pg, u32 pid, u32 row_id, u64 *reads,
                 return OK;
             }
 
-            /* 置最高位 + 重算校验和 + 脏页归还 */
+            /* 置最高位 + 写日志 + 重算校验和 + 脏页归还 */
+            u8 before[PAGE_SIZE];
+
+            memcpy(before, fr->data, PAGE_SIZE);
             put_u32(p, id | RT_ENT_DEAD);
-            page_set_checksum(fr->data);
-            pager_unpin(pg, pid, true);
+            rc = geo_pg_commit(pg, pid, fr, wal, before);
+            if (rc != OK)
+                return rc;
             *found = true;
             return OK;
         }
@@ -274,7 +281,7 @@ static int rts_mark_rec(Pager *pg, u32 pid, u32 row_id, u64 *reads,
     pager_unpin(pg, pid, false);
 
     for (i = 0; i < nchild; i++) {
-        rc = rts_mark_rec(pg, child[i], row_id, reads, found, depth + 1);
+        rc = rts_mark_rec(pg, child[i], row_id, reads, found, depth + 1, wal);
         if (rc != OK)
             return rc;
         if (*found)
@@ -283,7 +290,14 @@ static int rts_mark_rec(Pager *pg, u32 pid, u32 row_id, u64 *reads,
     return OK;
 }
 
-int rtree_mark_dead(Pager *pg, u32 root_page, u32 row_id, u64 *page_reads_out)
+/*
+ * 标记死条目（可写日志的版本）。
+ *
+ * 死标记改了叶子页 —— 不写日志的话，崩溃重放后这个删除会**消失**，
+ * 被删的点诈尸。这是坑 M4-38 留下的窟窿，A7 补上。
+ */
+int rtree_mark_dead_wal(Pager *pg, u32 root_page, u32 row_id, const GeoWal *wal,
+                         u64 *page_reads_out)
 {
     u64 reads = 0;
     bool found = false;
@@ -300,7 +314,7 @@ int rtree_mark_dead(Pager *pg, u32 root_page, u32 row_id, u64 *page_reads_out)
     if (root_page == PAGE_ID_NIL)
         return E_NOTFOUND;
 
-    rc = rts_mark_rec(pg, root_page, row_id, &reads, &found, 0);
+    rc = rts_mark_rec(pg, root_page, row_id, &reads, &found, 0, wal);
     if (page_reads_out != NULL)
         *page_reads_out = reads;
     if (rc != OK)
@@ -308,6 +322,12 @@ int rtree_mark_dead(Pager *pg, u32 root_page, u32 row_id, u64 *page_reads_out)
     if (!found)
         return E_NOTFOUND;   /* 树里没有这个 row_id */
     return OK;
+}
+
+/* 不写日志的版本（单元测试直接用模态时） */
+int rtree_mark_dead(Pager *pg, u32 root_page, u32 row_id, u64 *page_reads_out)
+{
+    return rtree_mark_dead_wal(pg, root_page, row_id, NULL, page_reads_out);
 }
 
 /* ---------------- 活点计数 ---------------- */

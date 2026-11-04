@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "modalities/geo/geo_wal.h"
+#include "modalities/geo/rtree_priv.h"
 #include "storage/page.h"
 
 /*
@@ -17,8 +19,10 @@
  * 写一份"差不多的相交判断"，迟早在边界上差一个点；而空间查询漏点**不报错**，
  * 只是答案悄悄不对。
  *
- * 坑 M4-38：本轮不做 WAL（步骤 6 才做）。页是**原地改写**的，断电可能留下
- * 一棵半截的树 —— 这是已知状态，不是 bug，但接线前必须先有 WAL。
+ * 坑 M4-38（**已在 v1.4 步骤 6 消除**）：以前树页不进 WAL，页又是**原地
+ * 改写**的，断电会留下半截的树。现在每个改页的写点都先写日志
+ * （geo_wal.h 的 geo_pg_commit），崩溃后由 WAL 重放整页镜像补回来。
+ * 二次分裂那一段因此搬到了 rtree_split.c —— 本文件要腾行数给写日志。
  */
 
 /* ---------------- 内部结构 ---------------- */
@@ -29,13 +33,8 @@ struct RTree {
     u32    height;      /* 层数 = 根的 level + 1；空树为 0 */
     u32    npoints;     /* 树里的点数 */
     u64    page_reads;  /* 逻辑页读（pager_get 次数） */
+    GeoWal wal;         /* 写日志上下文（钩子为 NULL = 本库不写日志） */
 };
-
-/* 条目的内存解码形式：叶子 id = row_id，内部 id = child_page */
-typedef struct {
-    u32   id;
-    float minx, miny, maxx, maxy;
-} RtEntry;
 
 /* ---------------- 页内访问 ---------------- */
 
@@ -46,29 +45,6 @@ static inline u32 rt_level(const u8 *pg)     { return get_u32(pg + RT_LEVEL_OFF)
 static inline u32 rt_npoints(const u8 *pg)   { return get_u32(pg + RT_NPOINTS_OFF); }
 static inline const u8 *rt_ents_c(const u8 *pg) { return pg + RT_ENT_OFF; }
 static inline u8 *rt_ents(u8 *pg)           { return pg + RT_ENT_OFF; }
-
-static void rt_ent_get(const u8 *p, RtEntry *e)
-{
-    e->id = get_u32(p);
-    e->minx = rt_u2f(get_u32(p + 4));
-    e->miny = rt_u2f(get_u32(p + 8));
-    e->maxx = rt_u2f(get_u32(p + 12));
-    e->maxy = rt_u2f(get_u32(p + 16));
-}
-
-static void rt_ent_put(u8 *p, const RtEntry *e)
-{
-    put_u32(p, e->id);
-    put_u32(p + 4, rt_f2u(e->minx));
-    put_u32(p + 8, rt_f2u(e->miny));
-    put_u32(p + 12, rt_f2u(e->maxx));
-    put_u32(p + 16, rt_f2u(e->maxy));
-}
-
-static void rt_ent_mbr(const RtEntry *e, Mbr *m)
-{
-    *m = (Mbr){ e->minx, e->miny, e->maxx, e->maxy };
-}
 
 /* 只改条目的 MBR（id 不动）—— 父节点更新孩子包围盒时用 */
 static void rt_ent_set_mbr(u8 *p, const Mbr *m)
@@ -201,165 +177,10 @@ static u32 rt_choose_subtree(const u8 *pg, const Mbr *e)
 
 /* ---------------- 二次分裂（QuadraticSplit） ---------------- */
 
-/* 把一组下标排成升序（原地） */
-static void rt_sort_idx(u32 *a, u32 n)
-{
-    u32 i;
-
-    for (i = 1; i < n; i++) {
-        u32 v = a[i];
-        u32 j = i;
-
-        while (j > 0 && a[j - 1] > v) {
-            a[j] = a[j - 1];
-            j--;
-        }
-        a[j] = v;
-    }
-}
-
 /*
- * QuadraticSplit（Guttman 1984 §3.3）。
- *
- * 输入：溢出的节点页（n = M + 1 = 204 条）；输出：两组条目的下标。
- *
- * PickSeeds：取**合并后 MBR 面积最大**的那一对做种子（往往离得最远）。
- *
- * PickNext：剩下的条目里挑"对两组的**扩张面积之差**最大"的那个 ——
- * 差得越大归属越明确，先放进去最省事；分配给**扩张面积较小**的那组。
- * 差相同时给面积更小的那组；面积也相同时给条目更少的那组。
- *
- * 坑 M4-39：每组至少 m = ceil(M/2) = 102 个。循环里有一条**保底规则**：
- * 若把某条目放进偏好组之后另一组就再也吃不到 m 个了，那它必须改投另一
- * 组。没有这条规则，树会长出"瘦长条"的节点 —— 退化链的起点。
+ * 分裂算法搬到 rtree_split.c 了（v1.4 步骤 6：给写日志腾行数）。
+ * 私有胶水（条目解码、分裂函数原型）在 rtree_priv.h。
  */
-static void rt_quadratic_split(const RtEntry *ents, u32 n,
-                               u32 *g1, u32 *n1_out, Mbr *mbr1,
-                               u32 *g2, u32 *n2_out, Mbr *mbr2)
-{
-    bool used[RT_CAP + 1];
-    u32 s1 = 0;
-    u32 s2 = 0;
-    u32 n1 = 0;
-    u32 n2 = 0;
-    u32 remaining;
-    float best_area = -1.0f;
-    Mbr m1;
-    Mbr m2;
-    u32 i;
-    u32 j;
-
-    memset(used, 0, sizeof(used));
-
-    /* PickSeeds：合并后面积最大的一对 */
-    for (i = 0; i < n; i++) {
-        for (j = i + 1; j < n; j++) {
-            Mbr mi, mj, u;
-            float a;
-
-            rt_ent_mbr(&ents[i], &mi);
-            rt_ent_mbr(&ents[j], &mj);
-            mbr_union(&mi, &mj, &u);
-            a = mbr_area(&u);
-            if (a > best_area) {
-                best_area = a;
-                s1 = i;
-                s2 = j;
-            }
-        }
-    }
-
-    g1[n1++] = s1;
-    g2[n2++] = s2;
-    used[s1] = true;
-    used[s2] = true;
-    rt_ent_mbr(&ents[s1], &m1);
-    rt_ent_mbr(&ents[s2], &m2);
-
-    /* PickNext：逐个分配剩下的条目 */
-    remaining = n - 2;
-    while (remaining > 0) {
-        u32 pick = 0;
-        float best_diff = -1.0f;
-        float best_sum = -1.0f;
-        float d1, d2;
-        int to;
-        Mbr mi;
-
-        for (i = 0; i < n; i++) {
-            float e1, e2, diff, sum;
-
-            if (used[i])
-                continue;
-            rt_ent_mbr(&ents[i], &mi);
-            e1 = mbr_enlarge_area(&m1, &mi);
-            e2 = mbr_enlarge_area(&m2, &mi);
-            diff = (e1 > e2) ? (e1 - e2) : (e2 - e1);
-            sum = e1 + e2;
-            if (diff > best_diff || (diff == best_diff && sum > best_sum)) {
-                best_diff = diff;
-                best_sum = sum;
-                pick = i;
-            }
-        }
-
-        rt_ent_mbr(&ents[pick], &mi);
-        d1 = mbr_enlarge_area(&m1, &mi);
-        d2 = mbr_enlarge_area(&m2, &mi);
-
-        /* 分配给扩张面积较小的那一组 */
-        if (d1 < d2) {
-            to = 0;
-        } else if (d2 < d1) {
-            to = 1;
-        } else {
-            float a1 = mbr_area(&m1);
-            float a2 = mbr_area(&m2);
-
-            if (a1 < a2)
-                to = 0;
-            else if (a2 < a1)
-                to = 1;
-            else
-                to = (n1 <= n2) ? 0 : 1;
-        }
-
-        /* 保底：另一组必须还吃得到 m 个（坑 M4-39） */
-        {
-            u32 other = (to == 0) ? n2 : n1;
-
-            if (other + (remaining - 1) < RT_MIN)
-                to = 1 - to;
-        }
-
-        if (to == 0) {
-            g1[n1++] = pick;
-            mbr_union(&m1, &mi, &m1);
-        } else {
-            g2[n2++] = pick;
-            mbr_union(&m2, &mi, &m2);
-        }
-        used[pick] = true;
-        remaining--;
-    }
-
-    /* 两组各自升序 —— 写回时条目顺序与原下标一致，结果可复现 */
-    rt_sort_idx(g1, n1);
-    rt_sort_idx(g2, n2);
-    *n1_out = n1;
-    *n2_out = n2;
-    *mbr1 = m1;      /* m1 / m2 就是两组的包围盒（循环里一直在维护） */
-    *mbr2 = m2;
-}
-
-/* 把一组（解码后的）条目写进目标页的条目区 */
-static void rt_group_write(u8 *dst, const RtEntry *src, const u32 *g, u32 n)
-{
-    u32 w;
-
-    for (w = 0; w < n; w++)
-        rt_ent_put(dst + (size_t)w * RT_ENT_SIZE, &src[g[w]]);
-}
 
 /*
  * 把分裂结果落到磁盘上：组 1 留在原页，组 2 写进新页。
@@ -384,8 +205,18 @@ static int rt_split_commit(RTree *t, PageFrame *fr, const RtEntry *ents,
     rt_node_init(nfr->data, rt_is_leaf(pg), rt_level(pg));
     rt_group_write(rt_ents(nfr->data), ents, g2, n2);
     put_u16(nfr->data + RT_NENT_OFF, (u16)n2);
-    page_set_checksum(nfr->data);
-    pager_unpin(t->pg, npid, true);
+    /*
+     * 新页的前像就是全零（pager_alloc 把页清零了）。
+     *
+     * 写日志在交页**之前**：页先于日志落盘的话，崩溃后日志里缺这条
+     * 记录，而页上却有它的内容 —— 数据"没根"。
+     *
+     * 注意顺序：新页先落日志，**原页还没动**。所以这里失败可以直接
+     * 返回（调用方会把原页按原样归还，不用回滚）。
+     */
+    rc = geo_pg_commit(t->pg, npid, nfr, &t->wal, GEO_ZERO_PAGE);
+    if (rc != OK)
+        return rc;
 
     rt_group_write(rt_ents(pg), ents, g1, n1);
     put_u16(pg + RT_NENT_OFF, (u16)n1);
@@ -458,8 +289,10 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
         if (rc != OK)
             return rc;
         rt_node_init(fr->data, true, 0);
-        page_set_checksum(fr->data);
-        pager_unpin(t->pg, pid, true);
+        /* 新页：前像全零；先写日志，交页在后 */
+        rc = geo_pg_commit(t->pg, pid, fr, &t->wal, GEO_ZERO_PAGE);
+        if (rc != OK)
+            return rc;
         t->root = pid;
         t->height = 1;
     }
@@ -497,12 +330,14 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
     /* ---- 叶子追加条目 ---- */
     {
         PageFrame *fr = NULL;
+        u8 before[PAGE_SIZE];   /* 前像：改之前把整页拍下来 */
         u32 n;
         RtEntry ent;
 
         rc = rt_node_get(t, leaf_pid, &fr);
         if (rc != OK)
             return rc;
+        memcpy(before, fr->data, PAGE_SIZE);
         n = rt_nent(fr->data);
         ent.id = row_id;
         ent.minx = x;
@@ -537,19 +372,23 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
 
         /* 叶子页上的 n_points：只有当叶子就是根时才记全树点数 */
         put_u32(fr->data + RT_NPOINTS_OFF, (depth == 0) ? newn : 0u);
-        page_set_checksum(fr->data);
-        pager_unpin(t->pg, leaf_pid, true);
+        /* 先写日志（整页镜像），再把 LSN 写进页头，最后交页 */
+        rc = geo_pg_commit(t->pg, leaf_pid, fr, &t->wal, before);
+        if (rc != OK)
+            return rc;
     }
 
     /* ---- 往回走：处理每一层父节点 ---- */
     for (i = depth; i-- > 0; ) {
         u32 ppid = path[i];
         PageFrame *fr = NULL;
+        u8 before[PAGE_SIZE];   /* 前像：改之前把整页拍下来 */
         u32 n;
 
         rc = rt_node_get(t, ppid, &fr);
         if (rc != OK)
             return rc;
+        memcpy(before, fr->data, PAGE_SIZE);
         n = rt_nent(fr->data);
 
         /* 把"刚改过的那个孩子"的 MBR 写回指向它的那条条目 */
@@ -596,8 +435,10 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
 
         /* 只有根页记全树点数 */
         put_u32(fr->data + RT_NPOINTS_OFF, (i == 0) ? newn : 0u);
-        page_set_checksum(fr->data);
-        pager_unpin(t->pg, ppid, true);
+        /* 先写日志（整页镜像），再把 LSN 写进页头，最后交页 */
+        rc = geo_pg_commit(t->pg, ppid, fr, &t->wal, before);
+        if (rc != OK)
+            return rc;
     }
 
     /* ---- 根分裂 → 新建更高一层的根 ---- */
@@ -625,8 +466,10 @@ int rtree_insert(RTree *t, u32 row_id, float x, float y)
         rt_ent_put(rt_ents(fr->data) + RT_ENT_SIZE, &e2);
         put_u16(fr->data + RT_NENT_OFF, 2);
         put_u32(fr->data + RT_NPOINTS_OFF, newn);
-        page_set_checksum(fr->data);
-        pager_unpin(t->pg, npid, true);
+        /* 新根页：前像全零；先写日志，交页在后 */
+        rc = geo_pg_commit(t->pg, npid, fr, &t->wal, GEO_ZERO_PAGE);
+        if (rc != OK)
+            return rc;
         t->root = npid;
         t->height++;
     }
@@ -772,6 +615,23 @@ int rtree_open(Pager *pg, u32 root_page, RTree **out)
 void rtree_destroy(RTree *t)
 {
     free(t);
+}
+
+/*
+ * 接上写日志钩子（v1.4 步骤 6 · A7）。
+ *
+ * 为什么是"接上去"而不是"创建时传进来"：树对象归 geo_state 管，
+ * 由 geo_state_create_wal / geo_state_open_wal 在拿到钩子之后立刻接上，
+ * 之后树里每个写页点都会先写日志（见 geo_pg_commit）。
+ *
+ * 钩子为 NULL ⇒ 本库不写日志（单元测试直接用模态时走这条路）。
+ */
+void rtree_set_wal(RTree *t, LogHookFn fn, void *ctx)
+{
+    if (!t)
+        return;
+    t->wal.fn = fn;
+    t->wal.ctx = ctx;
 }
 
 u32 rtree_root_page(const RTree *t)

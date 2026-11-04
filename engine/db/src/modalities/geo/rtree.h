@@ -3,6 +3,7 @@
 
 #include "common/error.h"
 #include "common/types.h"
+#include "modalities/geo/geo_wal.h"
 #include "modalities/geo/mbr.h"
 #include "storage/pager.h"
 
@@ -187,6 +188,19 @@ int rtree_create(Pager *pg, RTree **out);
  * 不返回一棵"看起来能查但结果悄悄不对"的树。
  */
 int rtree_open(Pager *pg, u32 root_page, RTree **out);
+
+/*
+ * 接上写日志钩子（v1.4 步骤 6 · A7）。
+ *
+ * 接上之后，树里每个改页的写点都会**先写日志再改页**
+ * （整页镜像，见 geo_wal.h）。
+ *
+ * fn == NULL ⇒ 不写日志（单元测试直接用模态时）。
+ * ctx —— 钩子自己的上下文（db 层传 DbInstance *）。
+ *
+ * 必须在这棵树**第一次写页之前**接上 —— 漏接的写点就是没进日志的页。
+ */
+void rtree_set_wal(RTree *t, LogHookFn fn, void *ctx);
 
 /* 释放树对象。**只释放内存，不释放页**（页归 pager 管）。 */
 void rtree_destroy(RTree *t);

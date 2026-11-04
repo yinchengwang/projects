@@ -35,11 +35,18 @@
  * 本轮没有照抄全文检索的"双根页"目录链机制（那是 FT 专用的），
  * 先用扫页空间把链路跑通，如实记下代价。
  *
- * ==================== 没有 WAL ====================
+ * ==================== WAL：v1.4 步骤 6（A7）已接入 ====================
  *
- * meta 页与树页都**不进 WAL**（与 R-tree 本身一致，坑 M4-38）。
- * 断电可能留下半截的树 —— 已知状态，不是 bug。
- * 崩溃恢复属于步骤 6（A7）。
+ * meta 页与树页现在都**进 WAL**（整页镜像，见 geo_wal.h）：
+ * 写页的顺序是"先写日志 → 再改页 → LSN 写进页头"，
+ * 断电后由 WAL 重放把页补回来。
+ *
+ * ⚠️ geo 的写**没有事务边界**：日志只用于 redo，**不用于 undo**
+ * （xid 固定 0 = 系统事务，恢复时永不回滚）。
+ * 将来要把 geo 的写纳入用户事务，必须同时补真正的 undo。
+ *
+ * ⚠️ 坑 M5-16：地理模态的点**只存在树里**（没有第二份行存），
+ * 所以 WAL 是**唯一**的恢复路径 —— 没有 WAL ⇒ 崩溃后这批点就是没了。
  */
 
 #include <stdlib.h>
@@ -61,29 +68,43 @@
  *
  * 校验和覆盖整页（见 page.c）。改了根页号却不重算，
  * 校验和就与内容对不上 —— 以后再打开会被当成坏页。
+ * （有写日志钩子时，page_set_lsn 会顺带重算 —— 见 geo_pg_commit。）
+ *
+ * 【为什么 meta 页也要写日志】
+ *
+ * meta 页记的是**根页号**。根分裂时根页号会变，这时 meta 页是
+ * 唯一知道"新根是谁"的地方 —— 它丢了，整棵树就找不回来了。
  */
-static int geo_meta_store(Pager *pg, u32 pid, u32 root)
+static int geo_meta_store(Pager *pg, u32 pid, u32 root, const GeoWal *wal)
 {
     PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
     int rc;
 
     rc = pager_get(pg, pid, &fr);
     if (rc != OK) {
         return rc;
     }
+    memcpy(before, fr->data, PAGE_SIZE);   /* 前像：改之前拍下来 */
     fr->data[GEO_META_VER_OFF] = (u8)GEO_META_VER;
     put_u32(fr->data + GEO_META_ROOT_OFF, root);
-    page_set_checksum(fr->data);
-    return pager_unpin(pg, pid, true);
+    /* 先写日志（整页镜像），再交页 */
+    return geo_pg_commit(pg, pid, fr, wal, before);
 }
 
 /* ---------------- 新建 ---------------- */
 
 int geo_state_create(Pager *pg, GeoState **out)
 {
+    return geo_state_create_wal(pg, NULL, NULL, out);
+}
+
+int geo_state_create_wal(Pager *pg, LogHookFn fn, void *ctx, GeoState **out)
+{
     GeoState *st;
     RTree *tree = NULL;
     PageFrame *fr = NULL;
+    GeoWal wal;
     u32 pid = 0;
     int rc;
 
@@ -91,6 +112,9 @@ int geo_state_create(Pager *pg, GeoState **out)
         return E_INVAL;
     }
     *out = NULL;
+
+    wal.fn = fn;
+    wal.ctx = ctx;
 
     /*
      * 分配 meta 页。
@@ -136,9 +160,9 @@ int geo_state_create(Pager *pg, GeoState **out)
     fr->data[GEO_META_VER_OFF] = (u8)GEO_META_VER;
     /* 空树：还没有根页 */
     put_u32(fr->data + GEO_META_ROOT_OFF, PAGE_ID_NIL);
-    page_set_checksum(fr->data);
 
-    rc = pager_unpin(pg, pid, true);
+    /* 新页：前像全零；先写日志，交页在后 */
+    rc = geo_pg_commit(pg, pid, fr, &wal, GEO_ZERO_PAGE);
     if (rc != OK) {
         return rc;
     }
@@ -153,6 +177,8 @@ int geo_state_create(Pager *pg, GeoState **out)
     if (rc != OK) {
         return rc;
     }
+    /* 树也接上同一个钩子 —— 之后每次插入/删除都会写日志 */
+    rtree_set_wal(tree, fn, ctx);
 
     st = (GeoState *)calloc(1, sizeof(GeoState));
     if (st == NULL) {
@@ -166,6 +192,7 @@ int geo_state_create(Pager *pg, GeoState **out)
     st->n_live = 0;
     st->n_total = 0;
     st->page_reads = 0;
+    st->wal = wal;
     *out = st;
     return OK;
 }
@@ -174,9 +201,15 @@ int geo_state_create(Pager *pg, GeoState **out)
 
 int geo_state_open(Pager *pg, GeoState **out)
 {
+    return geo_state_open_wal(pg, NULL, NULL, out);
+}
+
+int geo_state_open_wal(Pager *pg, LogHookFn fn, void *ctx, GeoState **out)
+{
     GeoState *st;
     RTree *tree = NULL;
     PageFrame *fr = NULL;
+    GeoWal wal;
     u64 npages;
     u32 pid;
     u32 meta = PAGE_ID_NIL;
@@ -187,6 +220,9 @@ int geo_state_open(Pager *pg, GeoState **out)
         return E_INVAL;
     }
     *out = NULL;
+
+    wal.fn = fn;
+    wal.ctx = ctx;
 
     /*
      * 扫页空间找 meta 页（坑 M5-9：开库时间随库大小线性增长）。
@@ -256,6 +292,8 @@ int geo_state_open(Pager *pg, GeoState **out)
     if (rc != OK) {
         return rc;
     }
+    /* 树接上写日志钩子 —— 之后每次插入/删除都会写日志 */
+    rtree_set_wal(tree, fn, ctx);
 
     st = (GeoState *)calloc(1, sizeof(GeoState));
     if (st == NULL) {
@@ -269,6 +307,7 @@ int geo_state_open(Pager *pg, GeoState **out)
     st->n_live = 0;
     st->n_total = 0;
     st->page_reads = 0;
+    st->wal = wal;
 
     /* 开库时数一遍活点数 / 总条目数 */
     rc = geo_state_refresh_counts(st);
@@ -316,7 +355,7 @@ int geo_state_sync_root(GeoState *st)
         return OK;
     }
 
-    rc = geo_meta_store(st->pg, st->meta_page, cur);
+    rc = geo_meta_store(st->pg, st->meta_page, cur, &st->wal);
     if (rc != OK) {
         return rc;
     }

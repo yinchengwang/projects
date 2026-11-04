@@ -45,11 +45,19 @@ extern "C" {
  * 本轮**没有**照抄那套（那是 FT 专用的目录链机制），
  * 先用扫页空间把链路跑通，如实记下代价。
  *
- * 【没有 WAL】
+ * 【WAL：v1.4 步骤 6（A7）已接入】
  *
- * meta 页与树页都**不进 WAL**（与 R-tree 本身一致，坑 M4-38）。
- * 断电可能留下半截的树 —— 已知状态，不是 bug。
- * 崩溃恢复属于步骤 6（A7）。
+ * meta 页与树页现在都**进 WAL**（整页镜像，见 geo_wal.h）：
+ * 写页的顺序是"先写日志 → 再改页 → LSN 写进页头"，
+ * 断电后由 WAL 重放把页补回来。
+ *
+ * ⚠️ 但 geo 的写**没有事务边界**：日志只用于 redo，**不用于 undo**
+ * （xid 固定 0 = 系统事务，恢复时永不回滚）。
+ * 将来要把 geo 的写纳入用户事务，必须同时补真正的 undo。
+ *
+ * ⚠️ 还有一个"兜底不存在"的事实（坑 M5-16）：地理模态的点
+ * **只存在树里**（没有第二份行存），所以 WAL 是**唯一**的恢复路径 ——
+ * 没有 WAL ⇒ 崩溃后这批点就是没了。
  */
 
 /* 页类型：接在 PT_FT_CATALOG(0x14) 之后，与 common/config.h 不冲突 */
@@ -77,6 +85,7 @@ typedef struct {
     u32    root_cached;/* 缓存的根页号：避免每次插入都去读一遍 meta 页 */
     u32    n_live;     /* 活点数（不含死条目） */
     u32    n_total;    /* 总条目数（含死条目）；下一个 row_id 就是它 */
+    GeoWal wal;        /* 写日志上下文（钩子为 NULL = 本库不写日志） */
 
     /*
      * 累计逻辑页读（诊断用，喂给 db_geo_page_reads）。
@@ -104,6 +113,17 @@ typedef struct {
 int geo_state_create(Pager *pg, GeoState **out);
 
 /*
+ * 同上，但**写日志**（v1.4 步骤 6 · A7）。
+ *
+ * fn —— 写日志钩子（db 层传 db_wal_hook）；NULL = 不写日志。
+ * ctx —— 钩子上下文（db 层传 DbInstance *）。
+ *
+ * 接上之后：meta 页与树页的每一次改写都先写日志（整页镜像），
+ * 崩溃后由 WAL 重放补回来。
+ */
+int geo_state_create_wal(Pager *pg, LogHookFn fn, void *ctx, GeoState **out);
+
+/*
  * 打开磁盘上已有的几何存储。
  *
  * 磁盘上没有 meta 页 → E_NOTFOUND（**不是错误**：
@@ -113,6 +133,15 @@ int geo_state_create(Pager *pg, GeoState **out);
  * 打开后会扫一遍树，把 n_live / n_total 数出来。
  */
 int geo_state_open(Pager *pg, GeoState **out);
+
+/*
+ * 同上，但**写日志**（v1.4 步骤 6 · A7）。
+ *
+ * 开库时树还没有写点，但后面每次插入/删除都要写日志 ——
+ * 所以钩子在这里就接上（geo_state_open 本身不写页，接上不接上都一样，
+ * 但接上之后调用方不必再操心）。
+ */
+int geo_state_open_wal(Pager *pg, LogHookFn fn, void *ctx, GeoState **out);
 
 /* 释放（**不释放页** —— 页归 pager 管）。 */
 void geo_state_destroy(GeoState *st);

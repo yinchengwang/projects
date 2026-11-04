@@ -195,8 +195,8 @@ void db_abandon(DB *db)
         db_ft_close(inst);
         /*
          * 地理空间模态（v1.4）：断电时树页**不**落盘 ——
-         * geo 本来就没有 WAL，脏页丢了就是丢了（坑 M4-38，
-         * 崩溃恢复是步骤 6 的账）。这里只是释放内存。
+         * 没关系：树页与 meta 页都进 WAL（v1.4 步骤 6 · A7），
+         * 重开库时由 WAL 重放整页镜像补回来。这里只是释放内存。
          */
         db_geo_close(inst);
         spi_registry_destroy(inst->reg);

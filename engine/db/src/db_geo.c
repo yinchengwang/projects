@@ -10,20 +10,28 @@
  * 向量模态是"行存 + 内存索引"两层；地理空间模态的 R-tree **就是数据本身**
  * —— 点坐标只存在树里，没有第二份行存。所以本层的写/查直接改树。
  *
- * 【⚠️ 本模态没有 WAL】
+ * 【WAL：v1.4 步骤 6（A7）已接入】
  *
- * 树页与 meta 页都不进日志（坑 M4-38，崩溃恢复是步骤 6 的事）。
- * 断电可能留下半截的树 —— 这是**已知状态**，不是本层能修的。
+ * 树页与 meta 页现在都进日志（整页镜像，见 geo_wal.h）：
+ * 本层把 db_wal_hook 注入模态，模态每个改页的写点都"先写日志再改页"，
+ * 崩溃后由 WAL 重放把页补回来（坑 M4-38 由此消除）。
+ *
+ * ⚠️ 但 geo 的写**没有事务边界**：日志只用于 redo，**不用于 undo**
+ * （xid 固定 0 = 系统事务，恢复时永不回滚）。
+ * 将来要把 geo 的写纳入用户事务，必须同时补真正的 undo。
+ *
+ * ⚠️ 坑 M5-16：地理模态的点**只存在树里**（没有第二份行存），
+ * 所以 WAL 是**唯一**的恢复路径 —— 没有 WAL ⇒ 崩溃后这批点就是没了。
  *
  * 【本层要替模态挡的三件事】
  *
- * 1. **死条目**（坑 M4-39）：删除是"给叶子条目的 id 打最高位"，而
+ * 1. **死条目**（坑 M5-12）：删除是"给叶子条目的 id 打最高位"，而
  *    rtree.c / rtree_knn.c 写得比 rtree_scan.c 早，不认这一位 ——
  *    死条目会被照常吐出来，过滤的活儿落在本层。
- * 2. **距离**（坑 M4-40）：rtree_knn 只返回 row_id，不返回距离；而公开
+ * 2. **距离**（坑 M5-13）：rtree_knn 只返回 row_id，不返回距离；而公开
  *    API 的 db_geo_hit 要带平方距离 —— 所以要**额外扫一遍树**把坐标捞
  *    回来自己算。这一遍是本轮的额外成本，如实记下。
- * 3. **行号不复用**（坑 M4-41）：reindex 把死条目**物理**清掉后，
+ * 3. **行号不复用**（坑 M5-14）：reindex 把死条目**物理**清掉后，
  *    "条目数"与"最大行号 + 1"分家了，按条目数发号会发出用过的号。
  */
 #include "db_internal.h"
@@ -227,7 +235,12 @@ int db_geo_open(DbInstance *inst)
         return E_INVAL;
 
     GeoState *st = NULL;
-    int rc = geo_state_open(inst->pager, &st);
+    /*
+     * 注入写日志钩子（v1.4 步骤 6 · A7）：
+     * 模态只认 L0 的 LogHookFn，不碰 wal/（分层：模态不能依赖 L1）。
+     * 钩子的实现是 db_wal_hook（src/db.c），它把记录翻译成 WAL 记录。
+     */
+    int rc = geo_state_open_wal(inst->pager, db_wal_hook, inst, &st);
     if (rc != OK) {
         inst->geo = NULL;
         inst->geo_ready = false;
@@ -293,7 +306,8 @@ db_err db_geo_create(DB *db)
     }
 
     GeoState *st = NULL;
-    int rc = geo_state_create(inst->pager, &st);
+    /* 注入写日志钩子（v1.4 步骤 6 · A7）—— 见 db_geo_open 的说明 */
+    int rc = geo_state_create_wal(inst->pager, db_wal_hook, inst, &st);
     if (rc == OK) {
         inst->geo = st;
         inst->geo_ready = true;
@@ -372,6 +386,16 @@ db_err db_geo_insert(DB *db, float x, float y, uint64_t *row_id_out)
 
         /* 根页可能变了（根分裂）——写回 meta 页 */
         rc = geo_state_sync_root(st);
+
+        /*
+         * 日志落盘（WAL 规则：日志先落盘，脏页才能落盘）。
+         *
+         * geo 的写**不在用户事务里**（没有事务边界），所以每次写完
+         * 就把日志刷到盘上 —— 与堆表"每条语句结束时 fsync"同一个口径。
+         * 不这么做的话，断电时日志还在缓冲区里，页又没落盘 ⇒ 点没了。
+         */
+        if (rc == OK)
+            rc = wal_fsync(inst->wal);
     }
 
     dg_account_tree(inst);
@@ -441,13 +465,17 @@ db_err db_geo_delete(DB *db, uint64_t row_id)
         return DB_OK;
     }
 
-    /* ② 打标记 */
+    /* ② 打标记（写日志版：死标记改了叶子页，不记日志的话崩溃后会诈尸） */
     reads = 0;
-    rc = rtree_mark_dead(inst->pager, root, (u32)row_id, &reads);
+    rc = rtree_mark_dead_wal(inst->pager, root, (u32)row_id, &st->wal, &reads);
     st->page_reads += reads;
 
     if (rc == OK && st->n_live > 0)
         st->n_live--;
+
+    /* 日志落盘（理由同 db_geo_insert） */
+    if (rc == OK)
+        rc = wal_fsync(inst->wal);
 
     latch_unlock();
 
@@ -464,7 +492,7 @@ db_err db_geo_delete(DB *db, uint64_t row_id)
  * 【代价与后果】
  *
  * - 老树的页**不回收**（本轮没有页回收机制），文件会变大。
- * - 行号**不复用**（坑 M4-41）：reindex 把死条目物理清掉之后，树里的
+ * - 行号**不复用**（坑 M5-14）：reindex 把死条目物理清掉之后，树里的
  *   条目数会变小；而行号是从"总条目数"分配的 —— 所以这里把总条目数
  *   **保住在旧值**上。
  *
@@ -502,6 +530,10 @@ db_err db_geo_reindex(DB *db)
     RTree *nt = NULL;
     rc = rtree_create(inst->pager, &nt);
     if (rc == OK) {
+        /* 新树也要接写日志钩子 —— 否则重建过程中的页不在 WAL 里 */
+        rtree_set_wal(nt, db_wal_hook, inst);
+    }
+    if (rc == OK) {
         for (u32 id = 0; id < tab.cap; id++) {
             if (tab.p[id].dead)
                 continue;
@@ -538,6 +570,10 @@ db_err db_geo_reindex(DB *db)
         if (st->n_total < old_total)
             st->n_total = old_total;
     }
+
+    /* 日志落盘（理由同 db_geo_insert） */
+    if (rc == OK)
+        rc = wal_fsync(inst->wal);
 
     latch_unlock();
 
