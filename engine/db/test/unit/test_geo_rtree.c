@@ -81,8 +81,12 @@ static float lcg_range(float lo, float hi)
 
 /* ---------------- 测试用的缓冲（放文件级，避免大栈） ---------------- */
 
+/*
+ * MAX_OUT 要装得下"全扫"的返回：页读那一项有 100000 个点，
+ * 全扫窗口会把**全部**点都返回 ⇒ 容量必须 ≥ 点数。
+ */
 #define MAX_PTS  8192
-#define MAX_OUT  8192
+#define MAX_OUT  131072
 
 static GeoPoint g_pts[MAX_PTS];
 static u32      g_a[MAX_OUT];
@@ -524,11 +528,40 @@ static void t_structure_small(void)
     pager_close(pg);
 }
 
-/* ---------------- 5. 页读计数 ---------------- */
+/* ---------------- 5. 页读计数（A4 判据：1% 窗口 IO < 全扫/10） ---------------- */
 
+/*
+ * 【判据为什么是这一条】
+ *
+ * 与 bench/geo_bench.c **同口径**：那边量的是"1% 面积的小窗口 vs 整片全扫"，
+ * 判据是 `1% 窗口 IO < 全扫/10`。这里用同一条判据，
+ * 于是"剪枝塌掉"这种缺陷在**单测层**也红得起来。
+ *
+ * （原来的判据只有 `small_reads < full_reads` —— 弱到剪枝塌 40 倍也照样绿：
+ *  注入 1 实测 36 < 40，照样 PASS。）
+ *
+ * 【为什么必须把点数放大到 100000】
+ *
+ * 两个数字的**增长方式不同**：
+ *
+ *   - 全扫页读 ≈ 点数 / 每页 203 条（**线性增长**）
+ *   - 1% 窗口页读 ≈ 下降路径 + 命中的叶子页（**几乎不随点数增长**）
+ *
+ * 点数不够多时，"全扫/10"本身就小，判据会在**干净树上**直接变红：
+ * 实测 4000 点时全扫 29 页 ⇒ 阈值 2.9 页，而 1% 窗口要 5 页 —— 已经红了。
+ * 放大点数不是把判据放松，而是把**余量**拉开：
+ *
+ *   干净树：全扫 ≈ 700 页，1% 窗口 ≈ 21 页 ⇒ 阈值 70 页，余量约 3 倍
+ *   注入 1：1% 窗口 ≈ 860 页 ⇒ 超阈值十几倍，红
+ *
+ * 【为什么不会 flaky】
+ *
+ * 数据由固定种子的 LCG 生成 ⇒ 树形完全确定 ⇒ 两个页读数也是确定的；
+ * 余量又有 3 倍以上，浮点/编译器的末位差异翻不动它。
+ */
 static void t_page_reads(void)
 {
-    enum { N = 4000 };
+    enum { N = 100000 };
     RTree *tree = NULL;
     Pager *pg = NULL;
     u32 i;
@@ -540,15 +573,19 @@ static void t_page_reads(void)
     Mbr small;
 
     remove(PATH);
-    CHECK(pager_open(PATH, 1024, &pg) == OK);
+    CHECK(pager_open(PATH, 4096, &pg) == OK);
     CHECK(rtree_create(pg, &tree) == OK);
 
     lcg_seed(31337u);
     for (i = 0; i < N; i++) {
-        g_pts[i].row_id = i + 1u;
-        g_pts[i].x = lcg_range(-1000.0f, 1000.0f);
-        g_pts[i].y = lcg_range(-1000.0f, 1000.0f);
-        CHECK(rtree_insert(tree, g_pts[i].row_id, g_pts[i].x, g_pts[i].y) == OK);
+        /*
+         * 坐标**就地生成**，不往 g_pts 里放 ——
+         * g_pts 只有 MAX_PTS(8192) 项，装不下 10 万个点。
+         */
+        float x = lcg_range(-1000.0f, 1000.0f);
+        float y = lcg_range(-1000.0f, 1000.0f);
+
+        CHECK(rtree_insert(tree, i + 1u, x, y) == OK);
     }
 
     /* 全扫：整片平面 */
@@ -558,21 +595,29 @@ static void t_page_reads(void)
     full_reads = rtree_page_reads(tree) - before;
     CHECK(n == N);
 
-    /* 小窗：剪枝应该把大部分子树挡在门外 */
-    mbr_set_rect(&small, 0.0f, 0.0f, 1.0f, 1.0f);
+    /*
+     * 小窗口：**1% 面积**（与 bench 同口径）。
+     *
+     * 数据铺在 [-1000,1000]² 里 ⇒ 整片 2000×2000；
+     * 1% 面积 ⇒ 边长 200 的正方形，摆在数据中央。
+     */
+    mbr_set_rect(&small, -100.0f, -100.0f, 100.0f, 100.0f);
     before = rtree_page_reads(tree);
     CHECK(rtree_window(tree, &small, g_b, MAX_OUT, &n) == OK);
     small_reads = rtree_page_reads(tree) - before;
 
-    printf("    页读：全扫 %llu，小窗 %llu（叶子约 %u 个）\n",
+    printf("    页读：全扫 %llu，1%% 窗口 %llu（阈值 全扫/10 = %llu）\n",
            (unsigned long long)full_reads,
            (unsigned long long)small_reads,
-           (unsigned)(full_reads > 0 ? full_reads - 1u : 0u));
+           (unsigned long long)(full_reads / 10u));
 
     CHECK(rtree_page_reads(tree) > 0);
     CHECK(full_reads > 0);
     CHECK(small_reads > 0);
-    CHECK(small_reads < full_reads);     /* 小窗明显少于全扫 */
+    /* A4 判据：1% 窗口 IO < 全扫/10（与 bench/geo_bench.c 同口径） */
+    CHECK(small_reads * 10u < full_reads);
+    /* 弱判据保留：剪枝确实存在（小窗确实少于全扫） */
+    CHECK(small_reads < full_reads);
 
     rtree_destroy(tree);
     pager_close(pg);

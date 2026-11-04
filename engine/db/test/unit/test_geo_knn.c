@@ -82,8 +82,12 @@ static float lcg_range(float lo, float hi)
 
 /* ---------------- 测试用缓冲 ---------------- */
 
+/*
+ * MAX_OUT 要装得下"全扫"的返回：页读那一项有 100000 个点，
+ * 全扫窗口会把**全部**点都返回 ⇒ 容量必须 ≥ 点数。
+ */
 #define MAX_PTS  8192
-#define MAX_OUT  8192
+#define MAX_OUT  131072
 
 static GeoPoint g_pts[MAX_PTS];
 static u32      g_a[MAX_OUT];
@@ -103,7 +107,11 @@ static void fx_open(Fixture *fx)
     fx->pg = NULL;
     fx->tree = NULL;
     fx->n = 0;
-    CHECK(pager_open(PATH, 512, &fx->pg) == OK);
+    /*
+     * 2048 帧：页读那一项要放 10 万个点 ⇒ 约 500 个叶子页。
+     * 帧池太小会撞上"所有帧都被钉住"（pager_get 返回 E_NOSPACE）。
+     */
+    CHECK(pager_open(PATH, 2048, &fx->pg) == OK);
     CHECK(rtree_create(fx->pg, &fx->tree) == OK);
 }
 
@@ -412,15 +420,36 @@ static void t_knn_edge_cases(void)
     fx_close(&fx);
 }
 
-/* ---------------- 5. 页读计数 ---------------- */
+/* ---------------- 5. 页读计数（含 IO 预算判据） ---------------- */
 
+/*
+ * 【为什么 KNN 也要有 IO 预算】
+ *
+ * KNN 的**全部价值**就在剪枝：只要最近的那几个点，不必扫整棵树。
+ * 剪枝一塌，KNN 就退化成全扫 —— 那这条判据就该红。
+ *
+ * 原来这条测试只有 `r_small < r_scan`（弱判据），
+ * 剪枝塌 40 倍也照样绿（注入 1 实测 k=1 要 39 页、全扫 40 页）。
+ * 现在补上与 bench/geo_bench.c、test_geo_rtree.c **同口径**的 10 倍余量预算。
+ *
+ * 【余量】
+ *
+ * 干净树：k=1 只碰下降路径（实测 6 页：根 + 中间层 + 一片叶子），
+ * 全扫 ≈ 739 页 ⇒ 阈值 73 页，余量约 12 倍；
+ * 注入 1 之后 k=1 要 867 页 ⇒ 超阈值 8 倍，红。
+ *
+ * 【为什么不会 flaky】
+ *
+ * 固定种子 ⇒ 树形确定 ⇒ 页读数确定；余量 12 倍以上，翻不动。
+ */
 static void t_knn_page_reads(void)
 {
-    enum { N = 4000 };
+    enum { N = 100000 };
     Fixture fx;
     u64 r_small = 0;
     u64 r_big = 0;
     u64 r_scan = 0;
+    u64 before = 0;
     u32 n = 0;
     u32 i;
     Mbr full;
@@ -428,11 +457,16 @@ static void t_knn_page_reads(void)
     fx_open(&fx);
     lcg_seed(99991u);
     for (i = 0; i < N; i++) {
-        g_pts[i].row_id = i + 1u;
-        g_pts[i].x = lcg_range(-10000.0f, 10000.0f);
-        g_pts[i].y = lcg_range(-10000.0f, 10000.0f);
+        /*
+         * 坐标**就地生成**，不往 g_pts 里放 ——
+         * g_pts 只有 MAX_PTS(8192) 项，装不下 10 万个点。
+         */
+        float x = lcg_range(-10000.0f, 10000.0f);
+        float y = lcg_range(-10000.0f, 10000.0f);
+
+        CHECK(rtree_insert(fx.tree, i + 1u, x, y) == OK);
     }
-    fx_fill(&fx, N);
+    fx.n = N;
 
     /* k = 1：只碰少数几页 */
     CHECK(rtree_knn(fx.pg, rtree_root_page(fx.tree), 0.0f, 0.0f, 1u,
@@ -446,17 +480,30 @@ static void t_knn_page_reads(void)
     CHECK(n == 1000u);
     CHECK(r_big > r_small);
 
-    /* 全扫（整片平面的窗口查询）作参照：KNN 的 k=1 必须明显少于它 */
+    /*
+     * 全扫（整片平面的窗口查询）作参照。
+     *
+     * 量的是**这一次查询自己的**页读增量（前后相减）——
+     * 不能用 rtree_page_reads() 的累计值：那个累计值把
+     * 十万次插入的页读也算进去了，比的不是同一件事。
+     */
     mbr_set_rect(&full, -1.0e9f, -1.0e9f, 1.0e9f, 1.0e9f);
+    before = rtree_page_reads(fx.tree);
     CHECK(rtree_window(fx.tree, &full, g_a, MAX_OUT, &n) == OK);
     CHECK(n == N);
-    r_scan = rtree_page_reads(fx.tree);
+    r_scan = rtree_page_reads(fx.tree) - before;
     CHECK(r_scan > 0);
-    CHECK(r_small < r_scan);
 
-    printf("    [页读] k=1: %llu，k=1000: %llu，全扫窗口: %llu\n",
+    printf("    [页读] k=1: %llu，k=1000: %llu，全扫窗口: %llu"
+           "（阈值 全扫/10 = %llu）\n",
            (unsigned long long)r_small, (unsigned long long)r_big,
-           (unsigned long long)r_scan);
+           (unsigned long long)r_scan,
+           (unsigned long long)(r_scan / 10u));
+
+    /* IO 预算：k=1 必须远小于全扫（10 倍余量，与 bench 同口径） */
+    CHECK(r_small * 10u < r_scan);
+    /* 弱判据保留：KNN 确实比全扫省 */
+    CHECK(r_small < r_scan);
 
     fx_close(&fx);
 }
