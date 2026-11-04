@@ -1,6 +1,6 @@
 # v1.4 执行方案与计划 · 模态 5：地理空间（R-tree + 空间查询）
 
-> 状态：**执行中** —— 步骤 1、2、3、4 已完成，步骤 5（SPI 接线）待开工。执行记录见 §3。
+> 状态：**执行中** —— 步骤 1、2、3、4、5 已完成，步骤 6（崩溃恢复 + 基准 + 反向验证 + 文档）待开工。执行记录见 §3。
 > 前置：v1.3（全文检索）已完成。
 > 总览背景：`PLAN-modality-expansion.md` §2。
 
@@ -546,6 +546,127 @@ gcc -std=c11 -Wall -Wextra -Werror -O1 -g -fno-strict-aliasing \
 # A5 基准
 mingw32-make OBJ_DIR=build build/geo_bench.exe
 ./build/geo_bench.exe            # → RESULT geo verdict=PASS
+```
+
+### 步骤 5 · SPI 接线 + 公开 API + REPL（2026-11-04）
+
+**结论：完成（步骤 1~5 全部落地；**五处与计划的偏差**如实记录在下面）。**
+
+> ⚠️ **计划里写的"A8"在 §1.3 的验收表里没有编号**（表里只有 A1~A7）。
+> 本步骤的验收实际落在 **A6（删除 + reindex）** 上 ——
+> 删除 = 标记死条目 + reindex 重建，正是这一步接线的。
+> A7（崩溃恢复）属于步骤 6，**本轮没做**。
+
+#### 落地的东西
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `src/modalities/geo/geo_state.{h,c}` | 138 + 262 | 模态实例状态：meta 页（PT_GEO_META）存根页号、活点数 / 总条目数、累计页读 |
+| `src/modalities/geo/rtree_scan.{h,c}` | — + 269 | 全树遍历 / 标记死条目 / 数活点（给 API 层与 AM 层用） |
+| `src/modalities/geo/geo_am.{h,c}` | 78 + 328 | `geo_points` 虚拟表的 SPI 适配（4 列，只读） |
+| `src/db_geo.c` | 579 | 公开 API（`db_geo_*` 9 个）+ 实例接线（open / close） |
+| `src/db_geo_query.c` | 253 | 窗口 / KNN 的实现（从 `db_geo.c` 拆出来，见下面的行数纪律） |
+| `src/repl_geo.{h,c}` | — + 约 320 | REPL 的 `GEO` 命令族 |
+| `include/db.h` | +115 | 公开 API 声明 + `db_geo_hit` |
+| `test/unit/test_geo_dead.c` | 263 | 死条目标记 / 遍历 / 计活点（8 组） |
+| `test/unit/test_geo_am.c` | 362 | `geo_points` 虚拟表（6 组） |
+| `test/integration/test_geo_api.c` | 467 | 公开 API 端到端（8 组） |
+| `test/integration/test_geo_repl.c` | — | REPL 命令族（5 组） |
+
+**公开 API**（`include/db.h`）：
+`db_geo_create` / `db_geo_exists` / `db_geo_insert` / `db_geo_window` /
+`db_geo_knn` / `db_geo_delete` / `db_geo_reindex` / `db_geo_count` /
+`db_geo_page_reads`。
+
+**REPL 命令**（`GEO` 前缀，与 `VEC` / `FT` 同款）：
+`GEO CREATE` / `EXISTS` / `INSERT <x> <y>` /
+`WINDOW <minx> <miny> <maxx> <maxy>` / `KNN <x> <y> <k>` /
+`DELETE <row_id>` / `COUNT` / `REINDEX` / `READS`。
+
+#### 五个设计决定
+
+**① 适配器跟模态走，不放 `spi/`。**
+计划里写的是 `spi/geo_am.{h,c}`，但**分层门禁不允许**：spi/ 是 L3、modalities/ 是 L4，
+L3 不得依赖 L4（`tools/check_deps.sh` 会拦）。
+适配器因此放在 `modalities/geo/geo_am.c` —— 与 `vector_am.c` / `ft_am.c` 同一个做法。
+
+**② 模态自己管自己的元数据页（硬规则 6）。**
+根页号记在一张自有的 meta 页（页类型 `PT_GEO_META = 0x16`）里，
+**不登记进 catalog**。代价是开库要扫页空间找这张页（坑 M5-9，已知欠账）。
+
+**③ meta 页只记根页号，不记活点数。**
+记了活点数就得每次插入/删除都改 meta 页；而活点数本来就能从树里数出来
+（`rtree_count_live`），开库时数一次即可 —— **少一处会被写坏的状态**。
+meta 页只在**根页号变了**（根分裂）时才真的写。
+
+**④ 死条目的"位"由 API 层负责过滤。**
+`rtree.c` / `rtree_knn.c` 写于 `rtree_scan.c` 之前，**不认**死标记位，
+所以过滤只能落在 `db_geo.c` / `db_geo_query.c` 这一层（记为坑 M5-12）。
+
+**⑤ REPL 层的输出流可替换（测试钩子）。**
+REPL 的产物就是给人看的输出，只验 API 的话命令层写错了照样测不出来。
+MinGW 下 `stdout` 是个宏（`(&__iob_func()[1])`），不是可赋值的左值，
+`freopen` 又会把原 stdout 弄丢 ⇒ 留一个 `repl_geo_set_output(FILE *)` 钩子。
+
+#### 如实记录（不注水）
+
+- ⚠️ **五处与计划的偏差**：
+  ① `spi/geo_am` → `modalities/geo/geo_am`（分层门禁不允许 L3 依赖 L4）；
+  ② **没有 WAL** —— meta 页与树页都不进 WAL（与 R-tree 本身一致，坑 M4-38），
+  断电可能留下半截的树。A7（崩溃恢复）属步骤 6，**本轮没做**；
+  ③ **删除是 O(n) 全树扫**（先扫树判活，再 `rtree_mark_dead` 又扫一遍），
+  不 rebalance、不合并、不回收空间；
+  ④ **reindex 不回收老页** —— 新建一棵树插活点，老树的页还躺在文件里，文件只涨不缩；
+  ⑤ **KNN 要额外扫一遍整棵树** —— `rtree_knn` 只返回 row_id 不返回距离，
+  而公开 API 要平方距离，只能再扫一次把坐标捞回来自己算（记为坑 M5-13）。
+- **`geo_points` 每次扫描都全量物化**，没有缓存
+  （缓存会把"新插入的点"和"树里的旧点"混起来），所以 `get()` 是 O(n)，
+  RID = **输出序号**而不是物理行号 —— 与 `ft_docs` 的做法不同，这里没有物化缓存。
+- **row_id 在 reindex 后理论上仍可能被复用一次**：reindex 物理丢弃死条目，
+  而 meta 页只存根页号、不存"曾经用掉多少 id"，
+  开库时按 `max_row_id + 1` 修正，但若被删掉的正是最大 id 那条，计数会被重算。
+  已被两道闸挡住大部分情形（会话内保留旧 `n_total` 作分配上界），**残留这一种**（记为坑 M5-14）。
+- **每次开库都要付一次 O(npages) 的扫页空间**（坑 M5-9），
+  即使这个库根本没有几何数据 —— 元页查找发生在"有没有几何存储"这个判断之前。
+- **计划里写的"A8"没有对应编号**（§1.3 验收表里只有 A1~A7），本步骤落在 A6 上。
+- **`db_geo.c` 一度 842 行，超了 800 行的硬限制** → 拆成
+  `db_geo.c`（公开 API + 接线，579 行）+ `db_geo_query.c`（窗口 / KNN，253 行）。
+  拆分后两者都在限制内。
+
+#### 验证方式
+
+```bash
+cd engine/db
+mingw32-make all                  # -Werror 零警告
+sh tools/check_deps.sh            # ✓ 依赖方向正确
+sh test/run.sh                    # 74 个测试文件全绿 / 0 FAIL
+./build/geo_bench.exe             # → RESULT geo verdict=PASS（A5 数字不变）
+```
+
+**端到端 REPL 冒烟**（真实输出）：
+
+```
+$ printf 'GEO CREATE\nGEO INSERT 1 2\nGEO INSERT 3 4\nGEO INSERT 9 9\nGEO COUNT\n
+           GEO WINDOW 0 0 5 5\nGEO KNN 1 2 2\nGEO DELETE 0\nGEO COUNT\n
+           GEO WINDOW 0 0 5 5\nGEO REINDEX\nGEO READS\nGEO EXISTS\n' | ./db.exe test/tmp/smoke.db
+几何存储已建
+已插入 row_id=0
+已插入 row_id=1
+已插入 row_id=2
+3
+  row_id=0
+  row_id=1
+(2 个)
+  row_id=0  dist=0.000000
+  row_id=1  dist=8.000000
+(2 个)
+已删除 row_id=0
+2
+  row_id=1
+(1 个)
+索引已重建
+13
+有几何存储
 ```
 
 

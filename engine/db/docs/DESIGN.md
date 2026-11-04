@@ -2018,7 +2018,7 @@ checkpoint 的作用就是把它变成有界的：
 | **v1.1** | 向量化执行 + 规则 CBO | 扫描+过滤比火山模型快 ≥ 3 倍 | ⚠️ 已完成（A2 未达标，实测 1.11×，SPI 批接口顺延到 v1.2 步骤 0） |
 | **v1.2** | 内核收尾（copy-out → 细粒度 latch → 页内 compact → checkpoint） | 细粒度 latch 吞吐 ≥ 大锁 2×（8:2 读写）；恢复时间只与 checkpoint 后日志量相关；碎片率 < 20% | ✅ 已完成（**步骤 0 已完成**：SPI 批接口落地，A9 达标 —— 扫描+过滤 5.52× ≥ 3×；**步骤 1 已完成**：copy-out 三个接口改拷贝出参 + A2 回归测试；**步骤 2 已完成**：latch 框架（域编号 + 获取全序 + 断言），调用点未改；**步骤 3 已完成**：catalog 读写锁；**步骤 4a/4b/4c 已完成**：txn / wal / freelist+frame 三批域自带保护；**步骤 4d 已完成**：**`db_exec` 大锁退役**（关系型语句；模态语句仍取）+ **btree 域** —— ⚠️ 并**两次勘误了获取全序**（真实全序是 `catalog → txn → btree → frame → wal → freelist`）；⚠️ **4c 记的"去掉大锁后 58 PASS / 0 FAIL"是错的**（4d 复核 5/5 次失败），真正让缩小实验全绿的是 4d 修的堆「find → use」窗口与 B+tree 无锁两处缺陷；**步骤 5 已完成**：页内 compact + WAL 双镜像，**A5 达成（全表碎片率 < 20%）** —— ⚠️ 并**顺带修掉一个既有缺陷**（恢复阶段 xid 状态表固定 256 项 → 事务一多，重启后删掉的行又「活」了），见 §6.5；**步骤 6 已完成**：checkpoint + 日志截断，**A6 达成（恢复 824 ms → 16 ms，51×）**；**步骤 7 已完成**：拆文件（`btree.c` 325 行 / `catalog.c` 538 行）+ 反向验证（**A7 达成**，4 项全过）+ 文档四件套 —— ⚠️ **A3 未达标**（实测 0.78× – 1.01×，判据 ≥ 2×），瓶颈是缓冲池池级互斥量 `pg->mu`，见 **D4.9** / **D4.10**） |
 | **v1.3** | 模态 4：全文检索（Lucene segment） | 检索结果对照线性 BM25 全等；合并增量代价 O(N·log_f N) 可解释 | ✅ 已完成（**7 个步骤全做完**；2026-11-03 ~ 11-04 又跑了一轮**欠账修复**：7 条欠账里 6 条已修、1 条明确不做，详见 `PLAN-v1.3.md` §四 / `MODALITIES.md` §6.11.1） |
-| **v1.4** | 模态 5：地理空间（R-tree） | 窗口/KNN 对照暴力全等；1% 窗口 IO < 全扫 1/10 | 🔄 执行中（**步骤 1~4 已完成**：MBR 数学 + 暴力基准 / R-tree 插入·分裂·窗口查询 / 精确 KNN / Z-order 对照；步骤 5 SPI 接线待开工，详见 `PLAN-v1.4.md` §三） |
+| **v1.4** | 模态 5：地理空间（R-tree） | 窗口/KNN 对照暴力全等；1% 窗口 IO < 全扫 1/10 | 🔄 执行中（**步骤 1~5 已完成**：MBR 数学 + 暴力基准 / R-tree 插入·分裂·窗口查询 / 精确 KNN / Z-order 对照 / SPI 接线 + 公开 API + REPL；步骤 6 崩溃恢复 + 反向验证 + 文档待开工，详见 `PLAN-v1.4.md` §三） |
 | **v1.5** | 模态 6：时序（Gorilla 压缩 + 分区） | 压缩解压全等；TTL 整分区回收；跨分区裁剪超集正确 | |
 | **v1.6** | 模态 7：文档 / JSON（JSONB + 路径索引） | 对照 SQLite JSON1 全等；大文档外置 IO 可证；路径索引下推正确 | |
 | **v1.7+** | （八模态齐后）跨模态联合查询、图算法、量化 | 需求驱动，不排期 | |
@@ -2176,6 +2176,27 @@ BigMin 要解"矩形在 Z 序上拆成几个连续区间"，实现复杂且错�
 **教训**：降级方案不是"少做一点"，而是"换一个能验证的等价物" ——
 并且必须把"原计划是什么、为什么没做、代价是什么"逐条写进文档。
 
+#### v1.4 步骤 5 的两条复盘（2026-11-04）
+
+**① 同一个语义只能有一个主人。**
+
+删除是给叶子条目的 row_id 打最高位（bit31）当"死"标记；
+而 `rtree.c` / `rtree_knn.c` 写于 `rtree_scan.c` **之前**，不认这一位
+⇒ 死条目会被窗口 / KNN 照常吐出来。
+最后把过滤放到**API 层**（`db_geo.c` / `db_geo_query.c`），
+由 `rtree_scan.c` 提供"遍历 / 标死 / 数活点"三件套给上层用。
+**教训**：同一件事在几个文件里各写一遍，必然有一个忘了改 ——
+语义要有**唯一的定义处**，别的文件来问，别自己判。
+
+**② "装不下"这种判据，用不准的数去判就是在报假错。**
+
+`rtree_knn` 原先用 `min(k, 总点数)`（含死条目）跟前置检查比
+⇒ 在"活点数 ≤ max_out < 总点数"时**误报** `E_NOSPACE`。
+改成**事后精确判**（先把活点全找出来，再判 `nhit > max_out`）才准。
+**教训**：拿"含废弃项的总数"当容量判据，冤枉的是调用方；
+宁可多算一遍，也不要拿不准的数去下"装不下"的结论 ——
+**假错比慢更贵**（调用方会以为数据有问题）。
+
 ---
 
 ## 7.5 可见性规则（v0.7 落地，必须能背出来）
@@ -2303,10 +2324,10 @@ BigMin 要解"矩形在 Z 序上拆成几个连续区间"，实现复杂且错�
 | v1.1 代价估算 | `src/query/exec_cost.c` | ✅ | v1.1 |
 | v1.1 统计信息 | `src/catalog/catalog_stats.c` | ✅ | v1.1 |
 | 全文模态 | `modalities/ft/{tokenizer,bm25,ft_internal,ft_segment,ft_writer,ft_scan,ft_index,ft_merge,ft_catalog,ft_tomb,ft_recover}.{h,c}` + `modalities/ft/ft_am.{h,c}` | ✅ | v1.3 步骤 1–5 |
-| 空间模态 | `modalities/geo/{rtree,zorder}.{h,c}` + `spi/geo_am.{h,c}` | | v1.4 |
+| 空间模态 | `modalities/geo/{rtree,zorder,geo_state,geo_am,rtree_scan}.{h,c}` + `src/db_geo{,_query}.c` + `src/repl_geo.c` | 🔄 步骤 1–5 ✅（步骤 6 崩溃恢复待做） | v1.4 |
 | 时序模态 | `modalities/ts/{partition,compress}.{h,c}` + `spi/ts_am.{h,c}` | | v1.5 |
 | 文档 JSON | `modalities/json/{jsonb,path}.{h,c}`（寄生于 heap，无独立页） | | v1.6 |
-| REPL | `main.c`（BLOB / GRAPH / VEC / FT 命令） | 占位 | v0.4（v0.11 加 GRAPH / v1.0 加 VEC / v1.3 加 FT） |
+| REPL | `main.c`（BLOB / GRAPH / VEC / FT / GEO 命令） | 占位 | v0.4（v0.11 加 GRAPH / v1.0 加 VEC / v1.3 加 FT / v1.4 加 GEO） |
 | CRC 查表 | `common/crc.c` | ✅ | v0.11 步骤 6 |
 | checkpoint + 日志截断 | `src/db_ckpt.c` | ✅ | v1.2 步骤 6 |
 | 页的 recLSN（ARIES） | `storage/pager.{h,c}`（`PageFrame.rec_lsn`） | ✅ | v1.2 步骤 6 |

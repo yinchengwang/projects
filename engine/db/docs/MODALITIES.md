@@ -1627,16 +1627,23 @@ float mbr_mindist(const Mbr *a, float x, float y); /* mindist（下界） */
 **删除 = 标记死条目**（不 rebalance，对齐 B+tree 的先例）+ `reindex` 重建。
 死条目留在树上但被跳过 —— 见坑 M5-5。
 
+> ⚠️ **步骤 5 落地时没有 WAL**：meta 页与树页都不进 WAL（坑 M4-38），
+> 断电可能留下半截的树。A7（崩溃恢复）属步骤 6，**本轮没做**。
+
 ### 7.7 SPI 落地三件
 
 | 项 | 内容 |
 |---|---|
-| **虚拟表** | `geo_points`（一行 = 一个几何对象，列含 row_id / x / y / minx / miny / maxx / maxy） |
+| **虚拟表** | `geo_points`（一行 = 一个几何对象；**步骤 5 实做的列**：`row_id` INT8 / `x` REAL / `y` REAL / `deleted` BOOL）—— ⚠️ 原计划里的 `minx/miny/maxx/maxy` 四列**未做**（本轮只支持点，不支持矩形对象） |
 | **能力位** | `AM_CAP_SCAN \| PUSHDOWN \| INDEX`；删除走专用 API，`REMOVE` 不给 → `E_NOTSUP` |
-| **下推** | 标量列（x / y / minx …）等值与范围 → 下推（超集语义）。**窗口与 KNN 不下推**（见下） |
+| **下推** | 标量列（x / y）等值与范围 → 下推（超集语义）。**窗口与 KNN 不下推**（见下） |
 
 **窗口与 KNN 走专用 API**：`db_geo_window(conn, rect)` / `db_geo_knn(conn, x, y, k)`。
 理由同 v1.3 §1.2 —— 几何语义不进标量谓词系统。
+
+> ⚠️ **步骤 5 的落地形态与本节的计划描述有出入**（以 §7.11 为准）：
+> 适配器放在 `modalities/geo/geo_am.c`（**不是** `spi/geo_am.c` —— 分层门禁不允许 L3 依赖 L4），
+> `geo_points` 只有 4 列（没有矩形四列），且**没有 WAL**（A7 属步骤 6）。
 
 ### 7.8 本版范围与不做项
 
@@ -1774,6 +1781,76 @@ R-tree 的 MBR 是 float，Z-order 的坐标是量化的 u32。
 全文检索在 v1.3 欠账 3 里已经用"双根页交替"解决过同一个问题，
 本轮**没有**照抄那套（那是 FT 专用的目录链机制），先用扫页空间把链路跑通，
 把代价如实记下来（步骤 6 或 v1.5 再收拾）。
+⚠️ **更贵的一点**：这次扫描发生在"这个库有没有几何存储"这个判断**之前**，
+所以**每个库**（哪怕根本没有几何数据）都要付一次 O(npages) 的扫页。
+
+**坑 M5-10 · 页号 0 是 catalog 的，不许被模态占了**
+`PAGE_ID_META = 0` 固定是 catalog 的根指针页（`catalog.c` 的 bootstrap 断言
+"pager_alloc 给出的第一个页就是 0"）。地理模态要是占了页 0，
+catalog 之后 bootstrap 就会因为"文件不空却要走 bootstrap"报 `E_CORRUPT` —— 整库开不起来。
+防线：`geo_state_create` 拿到页 0 时**主动避开**（再要一页，把第一页留成闲页）。
+⚠️ **这条只能保证"地理模态不占页 0"，救不了更大的次序问题** ——
+db 层必须**先开 catalog、再开 geo**（接线时的硬次序）。
+
+**坑 M5-11 · KNN 的"装不下"前置检查会保守误报**
+`rtree_knn` 原先用 `nres = min(k, npoints)`（`npoints` 是**总**点数，含死条目）
+跟前置检查比 `nres > max_out` ⇒ 在"活点数 ≤ max_out < 总点数"时**误报** `E_NOSPACE`。
+场景很现实：删掉一批点之后，用"实际活点数"当 `max_out` 查一次。
+防线：改成**事后精确判** —— 先把活点全找出来（`nhit = min(k, 活点数)`），
+再判 `nhit > max_out` 才报错。
+**教训**：拿"含废弃项的总数"做容量判据，报出来的错是**假的**；
+宁可多算一遍也不要拿不准的数去判"装不下"。
+
+**坑 M5-12 · 死标记位要由 API 层负责过滤（跨文件的"新旧不一致"）**
+删除的实现是给叶子条目的 row_id 打最高位（bit31）当作"死"标记。
+而 `rtree.c` / `rtree_knn.c` 写于 `rtree_scan.c` **之前**，**不认**这一位 ⇒
+死条目会被窗口 / KNN 照常吐出来。
+防线：过滤落在 `db_geo.c` / `db_geo_query.c` 这一层（API 层），
+`rtree_scan.c` 提供"全树遍历 + 标死 + 数活点"三件套给上层用。
+**教训**：同一个语义（"这条是不是死的"）在几个文件里各写一遍，
+必然有一个忘了改 —— 语义要**只有一个主人**，别的文件来问。
+
+**坑 M5-13 · KNN 只返回 row_id，不返回距离**
+`rtree_knn` 的结果集里只有 row_id，而公开 API 的 `db_geo_hit` 要**平方距离**。
+于是 API 层只能**再扫一遍整棵树**把坐标捞回来，自己算 `geo_dist2`。
+这是本轮**真实存在的额外成本**（多一次全树遍历），没有回避、也没有假装不存在。
+更彻底的做法是让 `rtree_knn` 直接把距离带出来（改返回结构）——
+本轮没改，因为那会动到步骤 3 已经验收过的接口。
+
+**坑 M5-14 · reindex 之后 row_id 可能被复用一次**
+reindex 会**物理丢弃**死条目，而 meta 页只存**根页号**、不存"曾经用掉多少 id"。
+开库时按 `max_row_id + 1` 修正分配上界，但若被删掉的**正是最大 id 那条**，
+这个计数会被重算 ⇒ 理论上仍有复用一次的可能。
+已挡住的：会话内保留旧 `n_total` 作分配上界；开库时按 `max_row_id + 1` 修正。
+**残留的这一种留给步骤 6**（正解是 meta 页里多记一个"历史最大 row_id"）。
+
+### 7.11 步骤 5 的落地形态（公开 API / SPI / REPL）
+
+**公开 API**（`include/db.h`）：
+
+| 函数 | 语义 |
+|---|---|
+| `db_geo_create` / `db_geo_exists` | 建几何存储（一个库只能建一次）/ 有没有几何存储 |
+| `db_geo_insert` | 插一个点（坐标必须有限值，NaN / Inf → `DB_E_INVAL`），返回单调递增的 row_id |
+| `db_geo_window` | 窗口查询（**闭区间**），装不下 → `DB_E_NOSPACE`，**不静默截断** |
+| `db_geo_knn` | 精确 KNN，排序 =（距离升序，row_id 升序） |
+| `db_geo_delete` / `db_geo_reindex` | 标记删除 / 重建索引 |
+| `db_geo_count` / `db_geo_page_reads` | 活点数 / 累计逻辑页读（诊断） |
+
+**SPI 接线**：`geo_points` 虚拟表，4 列
+（`row_id` INT8 / `x` REAL / `y` REAL / `deleted` BOOL），**只读** ——
+写入一律 `E_NOTSUP`（写路径要同时更新索引，与向量 / FT 模态同款理由）。
+⚠️ 每次扫描**全量物化**、无缓存（缓存会把"新插入的点"和"树里的旧点"混起来），
+所以 `get()` 是 O(n)，**RID = 输出序号**而不是物理行号。
+
+**REPL**：`GEO CREATE / EXISTS / INSERT / WINDOW / KNN / DELETE / COUNT / REINDEX / READS`
+（`GEO` 前缀，与 `VEC` / `FT` 同款 —— 几何谓词和距离排序都不进 SQL 谓词系统）。
+
+**行数纪律**：`db_geo.c` 一度 842 行（超 800 行硬限制）⇒
+拆成 `db_geo.c`（公开 API + 实例接线，579 行）+ `db_geo_query.c`（窗口 / KNN，253 行）。
+
+**没有 WAL**：meta 页与树页都不进 WAL（坑 M4-38），
+断电可能留下半截的树 —— A7（崩溃恢复）属步骤 6，**本轮没做**。
 
 ---
 
