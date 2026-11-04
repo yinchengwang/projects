@@ -205,6 +205,64 @@ void pager_pool_unlock(Pager *pg)
 
 /* 帧哈希表（pager_hash_init / pager_hash_find）在 pager_frame.c 里 */
 
+/* ---------------- 度量计数器（v1.3 欠账 6） ---------------- */
+
+/*
+ * 保证 phys_epoch 装得下 page_id。
+ *
+ * 必须在**持有池级写锁**时调用 —— 唯一的调用方（读盘路径）本来就持着。
+ * 扩不动时返回错误：调用方要能容忍（计数照记，只是这一页去重不上）。
+ */
+static int pager_phys_epoch_grow(Pager *pg, u32 page_id)
+{
+    u32 need = page_id + 1u;
+    u32 cap = pg->phys_epoch_cap;
+    u32 *p;
+
+    if (need <= cap)
+        return OK;
+    if (cap == 0)
+        cap = 1024u;                    /* 先给 1024 页（4 KB 表） */
+    while (cap < need) {
+        if (cap > 0x20000000u)          /* 8 亿页 = 3 TB，别再扩了 */
+            return E_NOSPACE;
+        cap *= 2u;
+    }
+    p = (u32 *)realloc(pg->phys_epoch, (size_t)cap * sizeof(u32));
+    if (p == NULL)
+        return E_IO;
+    /* 新扩出来的部分是 0 = "从没被读盘过" */
+    memset(p + pg->phys_epoch_cap, 0,
+           (size_t)(cap - pg->phys_epoch_cap) * sizeof(u32));
+    pg->phys_epoch = p;
+    pg->phys_epoch_cap = cap;
+    return OK;
+}
+
+/*
+ * 记一次"真正从文件读回了一页"。
+ *
+ * 调用点：pager_read_page 里 fread 读满 PAGE_SIZE 的那一条分支。
+ * 必须在持有池级写锁时调用（唯一的调用方 pager_fetch_frame 就持着）。
+ */
+static void pager_note_physical_read(Pager *pg, u32 page_id)
+{
+    u32 prev;
+
+    atomic_fetch_add(&pg->physical_reads, 1);
+
+    if (pager_phys_epoch_grow(pg, page_id) != OK)
+        return;     /* 扩不动：物理读盘照记，只是这一页去重不上 */
+
+    prev = pg->phys_epoch[page_id];
+    if (prev == 0)
+        pg->unique_total++;        /* 这一页有史以来第一次被读盘 */
+    if (prev != pg->epoch) {
+        pg->phys_epoch[page_id] = pg->epoch;
+        pg->unique_window++;       /* 这一页在本窗口里第一次被读盘 */
+    }
+}
+
 /* ---------------- 文件读写 ---------------- */
 
 static int file_size(FILE *f, u64 *out)
@@ -224,11 +282,25 @@ int pager_read_page(Pager *pg, u32 page_id, u8 *buf)
     if (FSEEK(pg->f, off, SEEK_SET) != 0)
         return E_IO;
     size_t n = fread(buf, 1, PAGE_SIZE, pg->f);
-    if (n == PAGE_SIZE)
+    if (n == PAGE_SIZE) {
+        /*
+         * 真的从文件读回了一页 —— 这才是一次**物理读盘**（v1.3 欠账 6）。
+         *
+         * 这里是全库唯一一处"数据真的从盘上来了"的地方，
+         * 所以物理读盘的计数点就放在这里（而不是 pager_get ——
+         * 那里数的是逻辑访问，帧池命中时根本没碰盘）。
+         */
+        pager_note_physical_read(pg, page_id);
         return OK;
+    }
     if (n == 0) {
         /* 读到 EOF：分配过但还没刷盘的新页，逻辑上是全零页 */
         memset(buf, 0, PAGE_SIZE);
+        /*
+         * 不计入物理读盘：文件里根本还没有这一页，
+         * 这一次没有从盘上取回任何数据。
+         * （否则"分配页"会被算成读盘，把物理 IO 的数字凭空抬高。）
+         */
         return OK;
     }
     return E_CORRUPT;   /* 半页：文件被外部动过 */
@@ -298,6 +370,7 @@ int pager_open(const char *path, u32 nframes, Pager **out)
     }
     pg->f = f;
     pg->nframes = nframes;
+    pg->epoch = 1u;      /* 测量窗口从 1 开始；0 保留作"这页从没被读盘过" */
 
     db_rwlock_init(&pg->mu);
 
@@ -376,6 +449,7 @@ int pager_close(Pager *pg)
     free(pg->frames);
     free(pg->hash_keys);
     free(pg->hash_vals);
+    free(pg->phys_epoch);
     db_rwlock_destroy(&pg->mu);
     free(pg);
     return rc;
@@ -389,7 +463,18 @@ int pager_get(Pager *pg, u32 page_id, PageFrame **out)
     u64 np = atomic_load(&pg->npages);
     if (page_id >= (u32)np)
         return E_NOTFOUND;
-    return pager_fetch_frame(pg, page_id, out);
+    int rc = pager_fetch_frame(pg, page_id, out);
+    if (rc == OK) {
+        /*
+         * 逻辑页读 +1（v1.3 欠账 6）。
+         *
+         * **帧池命中也计数** —— 这正是"逻辑读"与"物理读盘"的区别：
+         * 命中时这次取页照样是一次逻辑访问，但它没碰盘，
+         * 所以不会进物理读盘的计数。
+         */
+        atomic_fetch_add(&pg->logical_reads, 1);
+    }
+    return rc;
 }
 
 int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
@@ -411,6 +496,8 @@ int pager_alloc(Pager *pg, u32 *page_id, PageFrame **out)
         atomic_fetch_sub(&pg->npages, 1);
         return rc;
     }
+    /* 分配也是一次"取页" —— 逻辑页读要算它（v1.3 欠账 6） */
+    atomic_fetch_add(&pg->logical_reads, 1);
 
     memset((*out)->data, 0, PAGE_SIZE);
     (*out)->dirty = true;    /* 新页视为已改，close 时落盘 */
@@ -566,6 +653,7 @@ void pager_abandon(Pager *pg)
     free(pg->frames);
     free(pg->hash_keys);
     free(pg->hash_vals);
+    free(pg->phys_epoch);
     db_rwlock_destroy(&pg->mu);
     free(pg);
 }
@@ -606,4 +694,81 @@ u32 pager_frames_used(const Pager *pg)
             n++;
     pager_pool_rdunlock(m);
     return n;
+}
+
+/* ---------------- 度量计数器（v1.3 欠账 6）的公开 API ---------------- */
+
+u64 pager_logical_reads(const Pager *pg)
+{
+    if (!pg)
+        return 0;
+    /* 原子量 → 读它不需要锁 */
+    return atomic_load(&pg->logical_reads);
+}
+
+u64 pager_physical_reads(const Pager *pg)
+{
+    if (!pg)
+        return 0;
+    return atomic_load(&pg->physical_reads);
+}
+
+u64 pager_unique_pages(const Pager *pg)
+{
+    if (!pg)
+        return 0;
+    /* unique_window 由读盘路径在**写锁**下改 → 这里取读锁读它才一致 */
+    Pager *m = (Pager *)pg;
+    pager_pool_rdlock(m);
+    u64 n = m->unique_window;
+    pager_pool_rdunlock(m);
+    return n;
+}
+
+u64 pager_unique_pages_total(const Pager *pg)
+{
+    if (!pg)
+        return 0;
+    Pager *m = (Pager *)pg;
+    pager_pool_rdlock(m);
+    u64 n = m->unique_total;
+    pager_pool_rdunlock(m);
+    return n;
+}
+
+void pager_stats_reset(Pager *pg)
+{
+    if (!pg)
+        return;
+
+    /*
+     * 写锁：要把"本窗口去重"的计数清掉，并把窗口号加一。
+     *
+     * 【为什么窗口号加一而不是清表】
+     *
+     * 清表会把"全程去重"也一起清掉 —— 那个数是**数据足迹**，
+     * 跨窗口累加才有意义。清表等于把它抹了。
+     * 加窗口号则两全其美：
+     *   - 旧窗口读过的页，phys_epoch[pid] != 新窗口号 → 不算进新窗口
+     *   - 但它们 phys_epoch[pid] != 0 → 仍然算在"全程去重"里 ✓
+     */
+    pager_pool_wrlock(pg);
+    atomic_store(&pg->logical_reads, 0);
+    atomic_store(&pg->physical_reads, 0);
+    pg->unique_window = 0;
+    if (pg->epoch == 0xFFFFFFFFu) {
+        /*
+         * 窗口号用完了（4 亿次重置才会到这里）：清表重来。
+         * 表一清，"全程去重"的信息也就没了 —— 只好一起归零。
+         */
+        if (pg->phys_epoch != NULL) {
+            memset(pg->phys_epoch, 0,
+                   (size_t)pg->phys_epoch_cap * sizeof(u32));
+        }
+        pg->epoch = 1u;
+        pg->unique_total = 0;
+    } else {
+        pg->epoch++;
+    }
+    pager_pool_wrunlock(pg);
 }

@@ -90,6 +90,39 @@ struct Pager {
                                 hash_find 就死循环了 —— 写 1 万页必触发 */
     PagerFlushLogFn wal_flush;   /* WAL 规则：刷页前保证日志落盘 */
     void          *wal_ctx;
+
+    /*
+     * ---------------- 度量计数器（v1.3 欠账 6） ----------------
+     *
+     * 以前 pager 只有"取页次数"这一个隐含口径，而且它只活在 ft 模态的
+     * 计数器里（ft_index_page_reads）。把它当磁盘 IO 是错的 ——
+     * 帧池命中时根本没碰盘。现在把三个口径摆在 pager 层，
+     * 谁用都量得到同一套数。
+     */
+    atomic_uint_least64_t logical_reads;   /* 取页次数（缓存命中也计） */
+    atomic_uint_least64_t physical_reads;  /* 真正从文件读回一页的次数 */
+
+    /*
+     * phys_epoch[page_id] —— 这一页是在**哪个测量窗口**里被真正读盘的。
+     *
+     * 【为什么用"窗口号"而不是位图】
+     *
+     * 位图只能记"读过 / 没读过"，答不了"本次窗口里读了几页"。
+     * 用窗口号（每次 pager_stats_reset 加一）就能同时回答两个问题：
+     *   - 本窗口去重：phys_epoch[pid] == epoch
+     *   - 全程去重：phys_epoch[pid] != 0（0 = 从没被读盘过）
+     *
+     * 【并发】
+     *
+     * 这张表只在**读盘路径**上被改 —— 那条路径（pager_read_page）
+     * 本来就持有池级**写锁**，所以改它不需要额外的锁。
+     * 读的时候取读锁即可（与 pager_frames_used 同一个套路）。
+     */
+    u32  *phys_epoch;
+    u32   phys_epoch_cap;   /* phys_epoch 能装下多少个页号 */
+    u32   epoch;            /* 当前窗口号（从 1 开始；0 保留作"没读过"） */
+    u64   unique_window;    /* 本窗口内读盘过的不重复页数 */
+    u64   unique_total;     /* 全程读盘过的不重复页数（数据足迹） */
 };
 
 /* ---------------- 池级锁（pager.c 实现，两边共用） ---------------- */

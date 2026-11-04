@@ -34,7 +34,10 @@
 #include <string.h>
 
 #include "common/latch.h"
+#include "common/loghook.h"
 #include "common/types.h"
+#include "modalities/ft/ft_tomb.h"
+#include "storage/page.h"
 
 /* ---------------- 小工具 ---------------- */
 
@@ -89,22 +92,49 @@ void db_ft_replay_free(FtReplaySet *set)
  * 两者必须分开：最终集合 = 页里的内容 ∪ (redo − undo)。
  * 只看 redo 的话，未提交事务的删除会"诈尸"（页被恢复了，集合却还删着）。
  *
- * 【只看 WAL_FT_TOMB】
+ * ==================== 两种 tombstone 记录（v1.3 欠账 1 · 坑 M4-24） ====================
  *
- * 其它类型的记录（BEGIN / COMMIT / ABORT……）不是 FT 的事，直接忽略。
+ *   WAL_FT_TOMB        —— 旧的逻辑记录："这篇文档被删了"（v1.3 步骤 5）。
+ *                        **已经退役**（不再写），留着只为读懂旧日志：
+ *                        旧日志里 tombstone 页走的是整页镜像，
+ *                        撤不回来的时候靠这条记录告诉上层"这次删除没发生过"。
+ *
+ *   WAL_FT_TOMB_APPEND —— 新的逻辑记录："这条删除标记追加到了这一页"。
+ *                        它能**精确撤销**（只撤自己那一条），
+ *                        所以重放/回滚都直接改 tombstone 页。
+ *
+ * 【为什么新的记录不再进 redo/undo 集合】
+ *
+ * 新的记录直接落到**页**上了，而页就是权威存储 ——
+ * 再往集合里抄一份是多余的（集合最后是"页 ∪ (redo − undo)"，
+ * 页里已经有了，抄一遍不改变结果）。
  */
-int db_ft_recovery_hook(void *ctx, u8 type, u32 xid,
+int db_ft_recovery_hook(void *ctx, u8 type, u32 xid, u32 page_id, u32 lsn,
                         const u8 *payload, u16 payload_len, RecHookPhase phase)
 {
     DbInstance *inst = (DbInstance *)ctx;
     u32 doc_id;
     int rc;
 
-    (void)xid;   /* FT 的删除一律记在系统事务（xid=0）下，见 db_ft_delete */
-
     if (inst == NULL) {
         return E_INVAL;
     }
+
+    if (type == (u8)WAL_FT_TOMB_APPEND) {
+        /* 载荷必须是 u32 doc_id */
+        if (payload_len != 4 || payload == NULL) {
+            return E_CORRUPT;
+        }
+        doc_id = get_u32(payload);
+
+        if (phase == REC_HOOK_UNDO) {
+            /* 撤销：只把**那一条**从那一页里拿掉（同页其它删除毫发无损） */
+            return ft_tomb_page_remove(inst->pager, page_id, doc_id, lsn);
+        }
+        /* 重放：追加到那一页（幂等） */
+        return ft_tomb_page_append(inst->pager, page_id, doc_id, lsn);
+    }
+
     if (type != (u8)WAL_FT_TOMB) {
         return OK;       /* 不是 FT 的记录：不管 */
     }
@@ -113,12 +143,187 @@ int db_ft_recovery_hook(void *ctx, u8 type, u32 xid,
     }
     doc_id = get_u32(payload);
 
+    (void)xid;   /* FT 的删除一律记在系统事务（xid=0）下，见 db_ft_delete */
+
     if (phase == REC_HOOK_UNDO) {
         rc = db_ft_replay_add(&inst->ft_replay_undo, doc_id);
     } else {
         rc = db_ft_replay_add(&inst->ft_replay_redo, doc_id);
     }
     return rc;
+}
+
+/* ---------------- 写 tombstone 追加记录 ---------------- */
+
+/*
+ * 写一条 WAL_FT_TOMB_APPEND 记录（载荷 = u32 doc_id，页号放在记录头里）。
+ *
+ * 【为什么由这一层直接写】
+ *
+ * WAL 层不认识 FT 语义（分层铁律），而 common/loghook.h 的日志类型
+ * 是封闭的（db_wal_hook 遇到不认识的类型会**默默丢掉**）——
+ * 所以这条逻辑记录只能由 db 层直接调 wal_append_xid 写。
+ *
+ * 【顺序：日志先落，页后改】
+ *
+ * ft_tomb_append 先调这里拿到 LSN，再改页，并把页的 LSN 设成这个 LSN。
+ * 刷盘时 pager 会检查"页 LSN <= 已落盘的日志 LSN"（WAL 规则），
+ * 靠的就是这个值。
+ */
+static int dft_tomb_log(void *ctx, u32 xid, u32 page_id, u32 doc_id, u32 *lsn_out)
+{
+    DbInstance *inst = (DbInstance *)ctx;
+    u8 payload[4];
+    u32 lsn;
+
+    if (inst == NULL || lsn_out == NULL) {
+        return E_INVAL;
+    }
+    put_u32(payload, doc_id);
+    lsn = wal_append_xid(inst->wal, (u8)WAL_FT_TOMB_APPEND, xid, page_id, 0, 0,
+                          NULL, 0, payload, 4);
+    if (!lsn) {
+        return E_IO;
+    }
+    *lsn_out = lsn;
+    return OK;
+}
+
+/* ---------------- 根页页号的落盘（meta 页的两个通用槽位） ---------------- */
+
+/*
+ * 根页的页号存在**库的 meta 页**里（catalog 的两个通用槽位 M_SLOT0 / M_SLOT1）。
+ *
+ * 【为什么是 meta 页】
+ *
+ *   - meta 页本来就是"整个库的根指针"（第 0 页，开机就能读）；
+ *   - catalog 不知道槽位里是什么（它只原样存取）→ 不用改 catalog 的代码，
+ *     也不用让 modalities/ 依赖 catalog/（分层铁律）；
+ *   - 落盘走整页镜像进 WAL —— 与 catalog 写 meta 页是同一套做法
+ *     （meta 页是根指针，必须能撤销/重放）。
+ *
+ * 【为什么槽位用 0 当"没设"】
+ *
+ * meta 页自己就是第 0 页，根页永远不会是第 0 页 → 0 可以安全地当空哨兵。
+ *
+ * 【老库怎么办】
+ *
+ * 老库的槽位是 0（没设）→ 恢复走"扫页空间"的回退路径（ft_catalog.c），
+ * 扫完就把根页建出来 → **本次开库结束时**把页号写回 meta 页，
+ * 下次开库就走目录了（不再扫页空间）。
+ */
+
+/*
+ * meta 页（**第 0 页**）在不在？
+ *
+ * 【为什么 FT 层要关心这个】
+ *
+ * 页 0 是 catalog 的 meta 页（整个库的根指针），
+ * 而 catalog 的 bootstrap（建这个页）在 db_open 里排在 **db_ft_open 之后**。
+ *
+ * 所以**新库**开库时，第 0 页还不存在 ——
+ * 这时候任何"分配一个新页"的动作都会拿到 **页 0**（pager 是顺序追加的），
+ * 把根页写进页 0 → catalog 之后 bootstrap 时发现文件不空 →
+ * 整个库开不了（E_CORRUPT）。
+ *
+ * 这个判断只有 db 层能做（FT 层不知道页 0 被谁占了），
+ * 所以由本层在 db_ft_open 里问一句。
+ */
+static bool dft_meta_exists(DbInstance *inst)
+{
+    PageFrame *fr = NULL;
+
+    if (inst == NULL || inst->pager == NULL)
+        return false;
+    if (pager_get(inst->pager, PAGE_ID_META, &fr) != OK)
+        return false;        /* 页 0 还不存在（新库） */
+    pager_unpin(inst->pager, PAGE_ID_META, false);
+    return true;
+}
+
+/* 读出根页页号（meta 页还没有 → 当成"没有根页"，两个都填 0） */
+static void dft_root_read(Pager *pg, u32 *root_a, u32 *root_b)
+{
+    PageFrame *fr = NULL;
+
+    *root_a = 0;
+    *root_b = 0;
+
+    if (pg == NULL)
+        return;
+    if (pager_get(pg, PAGE_ID_META, &fr) != OK)
+        return;             /* meta 页还不存在（新库）：当成没有根页 */
+
+    *root_a = get_u32(fr->data + M_SLOT0);
+    *root_b = get_u32(fr->data + M_SLOT1);
+    pager_unpin(pg, PAGE_ID_META, false);
+}
+
+/* 把根页页号写进 meta 页（整页镜像进 WAL；meta 页还没有就存不进去） */
+static int dft_root_write(DbInstance *inst, u32 root_a, u32 root_b)
+{
+    PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
+    u8 after[PAGE_SIZE];
+    u32 lsn = 0;
+    int rc;
+
+    if (inst == NULL)
+        return E_INVAL;
+
+    rc = pager_get(inst->pager, PAGE_ID_META, &fr);
+    if (rc != OK)
+        return OK;         /* meta 页还不存在（新库）：存不进去，下次再说 */
+
+    memcpy(before, fr->data, PAGE_SIZE);
+    put_u32(fr->data + M_SLOT0, root_a);
+    put_u32(fr->data + M_SLOT1, root_b);
+    memcpy(after, fr->data, PAGE_SIZE);
+
+    /*
+     * 整页镜像进 WAL（xid = 0：系统事务 = 永远视为已提交）。
+     *
+     * 根页的页号是"去哪里找目录"的唯一线索 —— 它要是丢了，
+     * 库就退回到"扫页空间"（能开，但慢）。
+     */
+    rc = db_wal_hook(inst, 0u, LOG_PAGEDATA, PAGE_ID_META, 0, LOG_NO_SLOT_OFF,
+                     before, (u16)PAGE_SIZE, after, (u16)PAGE_SIZE, &lsn);
+    if (rc != OK) {
+        memcpy(fr->data, before, PAGE_SIZE);   /* 日志没写好 → 这一页不许改 */
+        pager_unpin(inst->pager, PAGE_ID_META, false);
+        return rc;
+    }
+    if (lsn)
+        page_set_lsn(fr->data, lsn);
+    page_set_checksum(fr->data);
+
+    return pager_unpin(inst->pager, PAGE_ID_META, true);
+}
+
+/*
+ * 把索引当前的根页页号写进 meta 页（已经一致就不写）。
+ *
+ * 调用时机：开库之后（根页可能是这次刚建的）与关库之前。
+ */
+static void dft_root_sync(DbInstance *inst)
+{
+    u32 have_a = 0;
+    u32 have_b = 0;
+    u32 root_a = 0;
+    u32 root_b = 0;
+
+    if (inst == NULL || inst->ft == NULL)
+        return;
+    if (ft_index_root_pages(inst->ft, &root_a, &root_b) != OK)
+        return;
+    if (root_a == 0 || root_b == 0)
+        return;             /* 还没有根页（不该发生：恢复之后一定有） */
+
+    dft_root_read(inst->pager, &have_a, &have_b);
+    if (have_a == root_a && have_b == root_b)
+        return;             /* 已经一致 → 不用写 */
+
+    (void)dft_root_write(inst, root_a, root_b);
 }
 
 /* ---------------- 注册表接入 ---------------- */
@@ -177,6 +382,51 @@ int db_ft_open(DbInstance *inst)
     }
     inst->ft = ix;
 
+    /*
+     * 把 meta 页里的根页页号交给索引。
+     *
+     * 两个都是 0 → 这是个**老库**（没有根页）→ 恢复走"扫页空间"的回退路径，
+     * 扫完就在 FT 层把根页建出来（ft_catalog.c），页号由本层落盘。
+     */
+    {
+        u32 root_a = 0;
+        u32 root_b = 0;
+
+        dft_root_read(inst->pager, &root_a, &root_b);
+        if (root_a != 0 && root_b != 0) {
+            (void)ft_index_set_root(ix, root_a, root_b);
+        }
+    }
+
+    /*
+     * 注册"写 tombstone 追加记录"的回调。
+     *
+     * 注册的是**函数**不是"函数 + 上下文"：上下文由调用方
+     * （ft_tomb.c）每次传 ix->wal_ctx 下来 —— 见 ft_tomb.h 里的坑 M4-28。
+     */
+    ft_tomb_set_log_hook(dft_tomb_log);
+
+    /*
+     * 【新库：这一轮不做恢复，也不建根页】
+     *
+     * 页 0 是 catalog 的 meta 页，而 catalog 的 bootstrap 在 db_ft_open
+     * **之后**才做 —— 新库开库时页 0 还不存在。
+     *
+     * 这时 FT 侧**不能分配任何页**（第一个分配到的就是页 0）：
+     * 一旦把根页写进页 0，catalog 之后 bootstrap 时会拿到垃圾，
+     * 整个库开不了（E_CORRUPT）。
+     *
+     * 新库本来也没东西可恢复（FT 数据只可能在 meta 页存在之后才有），
+     * 所以这里直接跳过；根页推迟到**第一次写目录**时再建
+     * （那时页 0 已经是 meta 页了，分配到的页号 ≥ 1）。
+     */
+    if (!dft_meta_exists(inst)) {
+        db_ft_replay_free(&inst->ft_replay_redo);
+        db_ft_replay_free(&inst->ft_replay_undo);
+        inst->ft_ready = true;
+        return OK;
+    }
+
     /* 从磁盘恢复：段目录 + tombstone 集合 */
     rc = ft_index_recover(ix,
                            inst->ft_replay_redo.ids, inst->ft_replay_redo.n,
@@ -191,6 +441,17 @@ int db_ft_open(DbInstance *inst)
         return rc;
     }
     inst->ft_ready = true;
+
+    /*
+     * 根页页号落盘。
+     *
+     * 老库首次打开时根页是**这次刚建的** → 页号要写回 meta 页，
+     * 下次开库就走目录（不用再扫页空间）。
+     *
+     * 新库这时还没有 meta 页（catalog 的 bootstrap 在后面）→ 写不进去，
+     * 关库时（db_ft_close）会再写一次。
+     */
+    dft_root_sync(inst);
     return OK;
 }
 
@@ -205,6 +466,15 @@ void db_ft_close(DbInstance *inst)
     if (!inst || !inst->ft) {
         return;
     }
+    /*
+     * 根页页号落盘（关库前最后一道保险）。
+     *
+     * 新库在开库时还没有 meta 页（catalog 的 bootstrap 在后面），
+     * 那时写不进去 —— 关库时 meta 页已经在了，这时候写才写得进去。
+     */
+    dft_root_sync(inst);
+    /* 注销日志回调（进程级的那一份） */
+    ft_tomb_set_log_hook(NULL);
     ft_index_close(inst->ft);
     inst->ft = NULL;
     inst->ft_ready = false;
@@ -324,29 +594,6 @@ db_err db_ft_search(DB *db, const char *query, uint32_t top_k,
 }
 
 /*
- * 写一条 WAL_FT_TOMB 记录（载荷 = u32 doc_id）。
- *
- * 【为什么要这条逻辑记录】
- *
- * tombstone 的**权威存储**是 tombstone 页（整页镜像进 WAL）。
- * 但"这篇文档被删了"这件事本身，用一条 4 字节的逻辑记录表达更直接：
- *   - 重放时不必依赖"页镜像在不在"；
- *   - 未提交事务的删除可以被**撤销**（语义：这次删除没发生过）。
- *
- * WAL 层不认识 FT 语义（分层铁律），所以由**这一层**直接写记录。
- */
-static int dft_write_tomb_wal(DbInstance *inst, u32 xid, u32 doc_id)
-{
-    u8 payload[4];
-
-    put_u32(payload, doc_id);
-    /* page_id = PAGE_ID_NIL：这条记录不落在任何一页上 */
-    (void)wal_append_xid(inst->wal, (u8)WAL_FT_TOMB, xid, PAGE_ID_NIL, 0, 0,
-                          NULL, 0, payload, 4);
-    return OK;
-}
-
-/*
  * 删一篇文档（打 tombstone）。
  *
  * 立刻生效：之后的检索不再返回它；ft_docs 里它的 sealed = 1。
@@ -358,8 +605,11 @@ static int dft_write_tomb_wal(DbInstance *inst, u32 xid, u32 doc_id)
  *     这样崩溃恢复时，**未提交**事务的删除会被撤销（"这个删除没发生过"）；
  *   - 不在事务里 → 用系统事务（xid = 0，永远视为已提交）。
  *
- * tombstone 页的整页镜像与这条逻辑记录用的是**同一个 xid** ——
- * 两边必须一致，否则会出现"页被撤销了、日志说删了"这种自相矛盾。
+ * 【日志谁写】
+ *
+ * 不再由这一层写逻辑记录 —— 追加记录是 FT 层内部的动作，
+ * 由 FT 层通过日志回调（ft_tomb_set_log_hook）写，
+ * 页号、页内位置、LSN 都在那一层拿得到（见坑 M4-24）。
  */
 db_err db_ft_delete(DB *db, uint32_t doc_id)
 {
@@ -380,9 +630,6 @@ db_err db_ft_delete(DB *db, uint32_t doc_id)
 
     latch_lock();
     rc = ft_index_delete(inst->ft, xid, doc_id);
-    if (rc == OK) {
-        rc = dft_write_tomb_wal(inst, xid, doc_id);
-    }
     latch_unlock();
 
     if (rc != OK) {

@@ -52,6 +52,31 @@
 #define M_CRC      (HDR_SIZE + 20u)   /* u32：页校验和（由 page_set_checksum 管） */
 #define M_CKPT_LSN (HDR_SIZE + 24u)   /* u32：最近一次 checkpoint 的 LSN */
 
+/*
+ * ==================== 通用槽位 ====================
+ *
+ * meta 页上还给**模态**留了两个 u32 槽位。
+ *
+ * 【为什么 catalog 不解释它们】
+ *
+ * 槽位里放什么由用它的模态自己决定（现在是全文检索的"两张根页的页号"），
+ * catalog 只负责**原样存取** —— 它不知道那是根页页号，
+ * 也不会去改它。这样加一个新模态不需要改 catalog 的任何代码，
+ * 也不用把 modalities/ 引进来（分层铁律：catalog 是 L2，禁依赖 L4）。
+ *
+ * 【为什么落在 meta 页上】
+ *
+ * meta 页本来就是"整个库的根指针"，第 0 页、开机就能读。
+ * 根页页号放这里，重开库时读一次 meta 页就知道去哪找根页。
+ *
+ * 【值 0 表示"没设"】
+ *
+ * meta 页自己就是第 0 页，所以根页的页号永远不会是 0 ——
+ * 0 可以安全地当"空槽"的哨兵。
+ */
+#define M_SLOT0    (HDR_SIZE + 28u)   /* u32：通用槽位 0（FT：根页 A 的页号） */
+#define M_SLOT1    (HDR_SIZE + 32u)   /* u32：通用槽位 1（FT：根页 B 的页号） */
+
 typedef struct {
     u32  table_id;
     char name[TABLE_NAME_MAX];

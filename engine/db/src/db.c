@@ -204,6 +204,24 @@ db_err db_open(const char *path, DB **out)
         }
     }
 
+    /*
+     * 【失败清理路径的顺序铁律（坑 M4-48）】
+     *
+     * 下面每一条失败路径都必须 **先 pager_close、再 wal_close**。
+     *
+     * 反过来会踩 use-after-free：
+     *   pager_close → 刷脏页 → 触发 WAL 的刷页钩子 wal_flush_before_page
+     *              → wal_fsync(inst->wal)
+     * 而 wal_close 已经把 Wal 结构体 free 掉、互斥量 destroy 了
+     * → 在**已销毁**的互斥量上 fflush
+     * → 表现随机：有时段错误，有时**挂死**在 `RtlEnterCriticalSection`。
+     *
+     * 为什么以前没炸：正常关闭路径（db_instance.c）本来就是 pager → wal，
+     * 写反的只有失败路径；而 db_open 长期几乎不会失败 → 这颗雷一直埋着。
+     * 是"开库必失败"把它引爆的 —— 失败路径一被走到，全套 db 层测试一起崩。
+     *
+     * 【教训】异常路径的代码没人跑，就更要把顺序写成**惯例**而不是"每次想一下"。
+     */
     Pager *pg = NULL;
     int rc = pager_open(path, bp_frames(), &pg);
     if (rc != OK)
@@ -278,8 +296,8 @@ db_err db_open(const char *path, DB **out)
     if (!datafile_exists && wal_nrecords(inst->wal) > 0) {
         rc = wal_reset(inst->wal);
         if (rc != OK) {
-            wal_close(inst->wal);
             pager_close(pg);
+            wal_close(inst->wal);
             free(inst->walpath);
             free(inst);
             free(db);
@@ -321,8 +339,8 @@ db_err db_open(const char *path, DB **out)
     inst->clogpath = malloc(plen + 10);
     if (!inst->clogpath) {
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -336,8 +354,8 @@ db_err db_open(const char *path, DB **out)
 
     rc = txn_clog_open(&inst->txns, inst->clogpath);
     if (rc != OK) {
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -372,8 +390,8 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         recovered_state_free(&xs);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -453,8 +471,8 @@ db_err db_open(const char *path, DB **out)
         db_ft_replay_free(&inst->ft_replay_redo);
         db_ft_replay_free(&inst->ft_replay_undo);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -475,8 +493,8 @@ db_err db_open(const char *path, DB **out)
     rc = db_ft_open(inst);
     if (rc != OK) {
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -489,8 +507,8 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         db_ft_close(inst);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -515,8 +533,8 @@ db_err db_open(const char *path, DB **out)
         catalog_close(cat);
         db_ft_close(inst);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -543,8 +561,8 @@ db_err db_open(const char *path, DB **out)
         catalog_close(cat);
         db_ft_close(inst);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -567,8 +585,8 @@ db_err db_open(const char *path, DB **out)
         catalog_close(cat);
         db_ft_close(inst);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);
@@ -657,8 +675,8 @@ db_err db_open(const char *path, DB **out)
         blob_store_destroy(inst->blobs);
         catalog_close(cat);
         txn_clog_close(&inst->txns);
-        wal_close(inst->wal);
         pager_close(pg);
+        wal_close(inst->wal);
         free(inst->clogpath);
         free(inst->walpath);
         free(inst);

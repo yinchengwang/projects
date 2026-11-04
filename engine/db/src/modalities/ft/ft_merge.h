@@ -78,9 +78,51 @@ void ft_merge_pick_window(u32 n_segs, FtSegment *const *segs,
  *
  * 返回值：OK / E_INVAL / E_NOSPACE / E_CORRUPT。
  */
-int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+/*
+ * ==================== 合并与"旧段失效"的时序（v1.3 欠账 2） ====================
+ *
+ * 【为什么时序要写在这里】
+ *
+ * 合并要把旧段的页**回收**（还给空闲页池），而"旧段什么时候算死"
+ * 是一件不能含糊的事 —— 含糊了就等于把还在用的页发出去，
+ * 老段的数据被新段踩掉，而且**不报错**（读出来像是对的）。
+ *
+ * 完整时序（ft_index.c 的 ft_index_merge 负责推进）：
+ *
+ *   1. 标 MERGING（老段指向新段号）—— 必须在写新段**之前**（坑 M4-21）；
+ *   2. 写新段（新段的页可以来自空闲页池）；
+ *   3. 标 DEAD（老段算死，磁盘状态与恢复时的判定一致）；
+ *   4. **回收老段的页** —— 把老段的页区间登记进空闲页池。
+ *
+ * 【为什么第 4 步必须在第 3 步之后】
+ *
+ * 第 3 步之前，老段还**可能被回滚**：合并失败时
+ * ft_catalog_abort_merge 把老段改回 LIVE，老段必须还能用。
+ * 如果第 4 步提前了，那些页就被发给了新段 —— 老段的数据没了。
+ *
+ * 【合并失败时新段的页怎么办】
+ *
+ * **不回收**（只浪费，不污染）：
+ *
+ *   - 新段的页在失败时可能已经写了一部分，是**半成品**；
+ *   - 半成品页不是"干净的空闲页"（页头、run 链都是断的），
+ *     直接发给别的段就等于把垃圾当成好页用；
+ *   - 所以失败时**不把新段的页交给空闲页池** ——
+ *     它们还在文件里，但没人引用（浪费空间，不影响正确性）。
+ *     这与"旧段的页不回收"是同一类欠账，
+ *     等下一组的"开机回收"（段目录页）一起解决。
+ *
+ * 【回滚安全的底线】
+ *
+ *   - 失败 → 老段仍然是 LIVE、内容不变（ft_catalog_abort_merge）；
+ *   - 失败 → 空闲页池**一个页都不许多**（老段的页不能提前进池）；
+ *   - 成功 → 老段的页一次性进池，且此后不再被任何段引用。
+ */
+int ft_merge_segments(Pager *pg, FtPagePool *pool,
+                      LogHookFn wal, void *wal_ctx, u32 xid,
                       FtSegment *const *segs, u32 n_segs,
                       const u32 *tomb_doc_ids, u32 n_tombs,
                       u32 new_seg_id, FtMergeResult *out);
+
 
 #endif /* DB_MODALITIES_FT_MERGE_H */

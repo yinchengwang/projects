@@ -38,6 +38,13 @@
 typedef struct FtPostWriter FtPostWriter;
 typedef struct FtDictWriter FtDictWriter;
 
+/* ---------------- 连续页块（v1.3 欠账 2） ---------------- */
+
+/*
+ * FtBlock（一个段的连续页块）的定义与实现都在 **ft_segment.h / ft_segment.c**
+ * —— 它是"段怎么占页"的概念，属于段层；写入器只是**用**它。
+ */
+
 /* ---------------- 倒排页写入器 ---------------- */
 
 /*
@@ -45,8 +52,12 @@ typedef struct FtDictWriter FtDictWriter;
  *
  * 页是**按需分配**的：第一次写 posting 时才分配第一页，
  * 所以"一个词都没写"的段不占倒排页。
+ *
+ * block —— 段的连续页块（见上面的说明）：倒排页与字典页都从它里面顺序取，
+ * 保证"段头页 → 倒排页 → 字典页"三者连号。
  */
-FtPostWriter *ft_post_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid);
+FtPostWriter *ft_post_writer_new(Pager *pg, FtBlock *block,
+                                 LogHookFn wal, void *wal_ctx, u32 xid);
 void ft_post_writer_free(FtPostWriter *w);
 
 /*
@@ -73,7 +84,9 @@ u32 ft_post_writer_last_lsn(const FtPostWriter *w);
 
 /* ---------------- 字典页写入器 ---------------- */
 
-FtDictWriter *ft_dict_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid);
+/* 字典写入器与倒排写入器共用同一个块（见上面的说明） */
+FtDictWriter *ft_dict_writer_new(Pager *pg, FtBlock *block,
+                                 LogHookFn wal, void *wal_ctx, u32 xid);
 void ft_dict_writer_free(FtDictWriter *w);
 
 /*

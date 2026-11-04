@@ -70,7 +70,7 @@ static int recovery_call_hook(Wal *w, const WalRec *r, RecHookPhase phase)
         if (rc != OK)
             return rc;
     }
-    return g_hook(g_hook_ctx, r->type, r->xid, payload, len, phase);
+    return g_hook(g_hook_ctx, r->type, r->xid, r->page_id, r->lsn, payload, len, phase);
 }
 
 typedef struct {
@@ -486,10 +486,25 @@ int recovery_run(Pager *pg, Wal *w, u32 checkpoint_lsn, bool *did_recover)
      *
      * 只重放 lsn > checkpoint_lsn 的记录 ——
      * 它之前的记录造成的效果已经在数据文件里了（checkpoint 时刷过页）。
+     *
+     * ==================== 坑 M4-27：跳过"已经回滚完"的事务 ====================
+     *
+     * 上一轮恢复已经给回滚完的事务记过 WAL_ABORT_DONE（见阶段 4）。
+     * 这一轮如果又把它的记录重放一遍，而回滚阶段又会跳过它
+     * （xid_abort_done），那就等于"只重放、不回滚" ——
+     * 上一轮撤掉的东西又回来了。
+     *
+     * 以前页类记录靠 page_lsn 挡着（回滚时把页 LSN 抬到那条记录的 LSN，
+     * 重放时 page_lsn >= lsn 就跳过），但**逻辑记录没有这个保护**：
+     * 它改的是"页内的一条"，页 LSN 挡不住它被重新追加一次。
+     *
+     * 所以这里显式跳过：已经回滚完的事务，它的记录这一轮**不再重放**。
      */
     for (int i = 0; i < vec.n; i++) {
         if (vec.v[i].rec.lsn <= checkpoint_lsn)
             continue;
+        if (xid_abort_done(&vec, vec.v[i].rec.xid))
+            continue;           /* 坑 M4-27：上一轮已经回滚完，别再重放 */
         rc = redo_one(pg, w, &vec.v[i].rec);
         if (rc != OK) {
             free(vec.v);

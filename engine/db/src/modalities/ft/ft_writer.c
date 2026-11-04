@@ -48,38 +48,21 @@
 
 /*
  * 把 buf 的内容写进 pid 这一页（写日志 → 填 LSN → 算校验和 → 标脏放开）。
- * before 镜像用全 0：这些页刚 pager_alloc 出来，写之前没人碰过。
+ *
+ * 【前像 = 这一页现在的内容，而不是全 0】
+ *
+ * 早先这里写死"前像 = 全 0"，理由是"这些页刚 pager_alloc 出来"。
+ * 有了空闲页池（v1.3 欠账 2）这个前提**不成立了**：
+ * 复用的页上还有旧段的字节，前像必须是"改之前的内容"，
+ * 否则未提交事务的修改撤不回去（undo 拿到的是垃圾）。
+ *
+ * 所以这里直接走 ft_page_write：它的前像就是"这一页现在的内容"。
+ * 对刚分配的新页来说，那也正好是全 0 —— 语义不变。
  */
 static int ft_write_page(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
                          u32 pid, PageFrame *fr, const u8 *buf, u32 *lsn_out)
 {
-    static const u8 zeros[PAGE_SIZE] = { 0 };
-    u32 lsn = 0;
-    int rc;
-
-    memcpy(fr->data, buf, PAGE_SIZE);
-
-    if (wal) {
-        rc = wal(wal_ctx, xid, LOG_PAGEDATA, pid, PAGE_SLOT_NONE, LOG_NO_SLOT_OFF,
-                 zeros, (u16)PAGE_SIZE, fr->data, (u16)PAGE_SIZE, &lsn);
-        if (rc != OK) {
-            /* 日志没写好 → 这一页不许改 */
-            memset(fr->data, 0, PAGE_SIZE);
-            pager_unpin(pg, pid, false);
-            return rc;
-        }
-    }
-
-    page_set_lsn(fr->data, lsn);
-    page_set_checksum(fr->data);
-
-    rc = pager_unpin(pg, pid, true);
-    if (rc != OK)
-        return rc;
-
-    if (lsn_out)
-        *lsn_out = lsn;
-    return OK;
+    return ft_page_write(pg, wal, wal_ctx, xid, pid, fr, buf, lsn_out);
 }
 
 /* ---------------- 通用整页写（v1.3 步骤 5） ---------------- */
@@ -188,6 +171,8 @@ int ft_write_segment_state(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
 
 struct FtPostWriter {
     Pager    *pg;
+    FtBlock  *block;    /* 段的连续页块（v1.3 欠账 2）：页从这里顺序取 */
+    FtBlock   own_block;/* block == NULL 时用的"无界块"（向文件尾追加） */
     LogHookFn wal;
     void     *wal_ctx;
     u32       xid;
@@ -203,7 +188,8 @@ struct FtPostWriter {
     u32        last_lsn;   /* 最后一次成功写日志的 LSN */
 };
 
-FtPostWriter *ft_post_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid)
+FtPostWriter *ft_post_writer_new(Pager *pg, FtBlock *block,
+                                 LogHookFn wal, void *wal_ctx, u32 xid)
 {
     FtPostWriter *w = (FtPostWriter *)calloc(1, sizeof(FtPostWriter));
 
@@ -211,6 +197,15 @@ FtPostWriter *ft_post_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xi
         return NULL;
 
     w->pg = pg;
+    /*
+     * block == NULL → 用内部的无界块（end = PAGE_ID_NIL），
+     * 行为与"不复用页"的老口径一致（单测走的正是这条路）。
+     */
+    if (!block) {
+        ft_block_init(&w->own_block, pg, 0u, 0xFFFFFFFFu);
+        block = &w->own_block;
+    }
+    w->block = block;
     w->wal = wal;
     w->wal_ctx = wal_ctx;
     w->xid = xid;
@@ -275,12 +270,27 @@ int ft_post_writer_flush(FtPostWriter *w)
     return OK;
 }
 
-/* 分配一个新页（页号从文件尾往后排，所以连续分配就是连续页号） */
+/*
+ * 分配一个新页。
+ *
+ * 页号来源：**段的连续页块**（FtBlock）。
+ *
+ * 【为什么必须走"块"而不是直接向文件尾追加】
+ *
+ * 段头只记**连续区间**（post_start + post_count），
+ * 读侧按连续区间读页 —— 页号不连号就会读到别的页（坑 M4-23）。
+ * 而"复用旧段腾出来的页"（空闲页池）天然是零散的，
+ * 所以复用的粒度必须是"一段连号的页"：由块一次给足，
+ * 这里只管顺序取用。
+ *
+ * 块用完就报 E_NOSPACE（ft_block_alloc 里），绝不越界取页 ——
+ * 越界的页可能属于别的段，写进去等于两个段共用一页。
+ */
 static int ft_post_writer_alloc(FtPostWriter *w, u32 *pid_out, PageFrame **fr_out)
 {
     u32 pid = PAGE_ID_NIL;
     PageFrame *fr = NULL;
-    int rc = pager_alloc(w->pg, &pid, &fr);
+    int rc = ft_block_alloc(w->block, &pid, &fr);
 
     if (rc != OK)
         return rc;
@@ -473,6 +483,8 @@ u32 ft_post_writer_last_lsn(const FtPostWriter *w)
  */
 struct FtDictWriter {
     Pager    *pg;
+    FtBlock  *block;    /* 段的连续页块：字典页接在倒排页之后取 */
+    FtBlock   own_block;/* block == NULL 时用的"无界块"（向文件尾追加） */
     LogHookFn wal;
     void     *wal_ctx;
     u32       xid;
@@ -488,7 +500,8 @@ struct FtDictWriter {
     u32        last_lsn;
 };
 
-FtDictWriter *ft_dict_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid)
+FtDictWriter *ft_dict_writer_new(Pager *pg, FtBlock *block,
+                                 LogHookFn wal, void *wal_ctx, u32 xid)
 {
     FtDictWriter *w = (FtDictWriter *)calloc(1, sizeof(FtDictWriter));
 
@@ -496,6 +509,12 @@ FtDictWriter *ft_dict_writer_new(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xi
         return NULL;
 
     w->pg = pg;
+    /* block == NULL → 内部无界块（规则同倒排写入器） */
+    if (!block) {
+        ft_block_init(&w->own_block, pg, 0u, 0xFFFFFFFFu);
+        block = &w->own_block;
+    }
+    w->block = block;
     w->wal = wal;
     w->wal_ctx = wal_ctx;
     w->xid = xid;
@@ -549,12 +568,12 @@ int ft_dict_writer_flush(FtDictWriter *w)
     return OK;
 }
 
-/* 开一个新字典页 */
+/* 开一个新字典页（页从段的连续页块里顺序取 —— 字典页必须连号） */
 static int ft_dict_writer_new_page(FtDictWriter *w)
 {
     u32 pid = PAGE_ID_NIL;
     PageFrame *fr = NULL;
-    int rc = pager_alloc(w->pg, &pid, &fr);
+    int rc = ft_block_alloc(w->block, &pid, &fr);
 
     if (rc != OK)
         return rc;

@@ -188,13 +188,17 @@ void db_ft_replay_free(FtReplaySet *set);
  * 恢复钩子（WAL 层不认识 FT 语义，由这一层解释）。
  *
  * WAL 层在重放/回滚时遇到**非页类**记录就调这个钩子，
- * 把 (type, xid, payload, payload_len, phase) 原样转交过来。
+ * 把 (type, xid, page_id, lsn, payload, payload_len, phase) 原样转交过来。
  *
- * 这里只认 WAL_FT_TOMB（载荷 = u32 doc_id）：
- *   - phase = REC_HOOK_REDO → 收进 redo 集合（这个删除生效了）；
- *   - phase = REC_HOOK_UNDO → 收进 undo 集合（未提交事务 → 这个删除没发生过）。
+ * 这里认两种记录：
+ *   - WAL_FT_TOMB（旧的，已退役）：载荷 = u32 doc_id。
+ *       phase = REC_HOOK_REDO → 收进 redo 集合（这个删除生效了）；
+ *       phase = REC_HOOK_UNDO → 收进 undo 集合（未提交事务 → 这个删除没发生过）。
+ *   - WAL_FT_TOMB_APPEND（v1.3 欠账 1）：载荷 = u32 doc_id，
+ *     page_id = 落在哪张 tombstone 页上。
+ *       直接改页：重放 = 追加（幂等），回滚 = 只移除那一条。
  */
-int db_ft_recovery_hook(void *ctx, u8 type, u32 xid,
+int db_ft_recovery_hook(void *ctx, u8 type, u32 xid, u32 page_id, u32 lsn,
                         const u8 *payload, u16 payload_len, RecHookPhase phase);
 
 /*

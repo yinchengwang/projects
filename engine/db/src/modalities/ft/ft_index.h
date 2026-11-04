@@ -152,6 +152,22 @@ u64 ft_index_page_reads(const FtIndex *ix);
 u64 ft_index_merge_page_reads(const FtIndex *ix);
 
 /*
+ * ---------------- 空闲页池（v1.3 欠账 2） ----------------
+ *
+ * 合并把旧段合掉之后，旧段的页没人引用了 —— 它们被记进"段级空闲页池"，
+ * 以后建段/合并就优先从这里取页（磁盘文件不再随合并次数线性增长）。
+ *
+ * 这两个函数是**只读诊断**用的：
+ *   - ft_index_free_pages()     —— 池里现在有多少空闲页；
+ *   - ft_index_recycled_pages() —— 累计回收过多少页。
+ *
+ * ⚠️ 空闲页池是**内存态**的：进程重启后表是空的，
+ * 那些"没人引用的页"就白占着位置（开机回收要等下一组的"段目录页"）。
+ */
+u32 ft_index_free_pages(const FtIndex *ix);
+u64 ft_index_recycled_pages(const FtIndex *ix);
+
+/*
  * ---------------- 只读访问器（v1.3 步骤 4 给 ft_docs 虚拟表用） ----------------
  *
  * 【为什么需要它们】
@@ -174,6 +190,33 @@ int ft_index_seg_at(const FtIndex *ix, u32 i, const FtSegment **out);
 
 /* doc_id 是否已被删除（tombstone）。返回 1 = 已删，0 = 没删。 */
 int ft_index_is_tomb(const FtIndex *ix, u32 doc_id);
+
+/*
+ * ==================== 根页（v1.3 欠账 3 / 7 的接线口） ====================
+ *
+ * 【为什么要这两个函数】
+ *
+ * 根页的页号存在**库的 meta 页**里（catalog 的两个通用槽位）。
+ * 但 meta 页是 db 层的东西，而根页机制是 FT 层的东西 ——
+ * 中间需要一个"谁存页号"的接缝：
+ *
+ *   - db 层读出 meta 页里的两个页号 → ft_index_set_root() 交给索引；
+ *   - 索引建好根页之后 → ft_index_root_pages() 把页号报回给 db 层落盘。
+ *
+ * 这样 FT 层完全不需要知道 meta 页的存在（分层铁律：
+ * modalities/ 不许碰 catalog/db 的内部布局）。
+ */
+
+/*
+ * 绑定一对已有的根页（重开库时调）。
+ *
+ * 传 0（两个都传 0）表示"这个库还没有根页"（老库格式）：
+ * 恢复时走"扫页空间"的回退路径，并在恢复之后把根页建出来。
+ */
+int ft_index_set_root(FtIndex *ix, u32 root_a, u32 root_b);
+
+/* 取当前的根页页号（没建过 → 两个都填 0） */
+int ft_index_root_pages(const FtIndex *ix, u32 *root_a, u32 *root_b);
 
 #ifdef __cplusplus
 }

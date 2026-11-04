@@ -78,17 +78,25 @@ typedef struct {
     u64   dict_pages;    /* 字典页数 */
     u64   post_pages;    /* 倒排页数 */
     u32   df;            /* 查询词的 df（实测） */
-    u64   reads;         /* 单 term 检索的页读（检索前后差值） */
+    u64   reads;         /* 单 term 检索的页读（检索前后差值，ft 索引级） */
     double ms;           /* 检索耗时 */
     u32   n_hit;         /* 命中条数 */
+    /*
+     * pager 层的三个口径（v1.3 欠账 6），量的是**这一次检索**：
+     *   pg_logical     —— 逻辑页读：取页次数（缓存命中也计）
+     *   pg_physical    —— 物理读盘：真正从文件读回一页的次数
+     *   pg_unique      —— 唯一页数：本次窗口里读盘过的不重复页号个数
+     *   pg_unique_tot  —— 全程去重的物理页数（建段 + 检索；数据足迹）
+     */
+    u64   pg_logical;
+    u64   pg_physical;
+    u64   pg_unique;
+    u64   pg_unique_tot;
 } A5Row;
 
 static void a5_remove_db(void)
 {
-    remove(DB_PATH_A5);
-    remove("test/tmp/ft_bench_a5.db-wal");
-    remove("test/tmp/ft_bench_a5.db-clog");
-    remove("test/tmp/ft_bench_a5.db-shm");
+    ft_bench_remove_db(DB_PATH_A5);
 }
 
 /*
@@ -178,11 +186,21 @@ static int a5_run_one(u32 n_docs, int fixed_df, u32 query_idx, A5Row *row)
     rc = 0;
 
     /* 页读：取检索前后的差值（坑 M4-16：索引级累计） */
+    /*
+     * 开一个新的测量窗口（v1.3 欠账 6）：
+     * 之后到检索返回之间，pager 的三个计数器只统计**这一次检索**。
+     * 必须在检索**之前**开窗口，取数必须在检索返回后**立刻**取。
+     */
+    pager_stats_reset(pg);
     pr_before = ft_index_page_reads(ix);
     t0 = ft_bench_now_ms();
     rc = ft_index_search(ix, term, (u32)strlen(term), A5_TOPK, A5_MAXOUT, hits, &n_hit);
     row->ms = ft_bench_now_ms() - t0;
     pr_after = ft_index_page_reads(ix);
+    /* 立刻取 pager 层的三个数字（此时还没有别的读页操作） */
+    row->pg_logical = pager_logical_reads(pg);
+    row->pg_physical = pager_physical_reads(pg);
+    row->pg_unique = pager_unique_pages(pg);
     if (rc != OK) {
         rc = 2;
         goto done;
@@ -190,7 +208,7 @@ static int a5_run_one(u32 n_docs, int fixed_df, u32 query_idx, A5Row *row)
 
     row->n_docs = n_docs;
     row->nsegs = ft_index_nsegs(ix);
-    row->seg_pages = 1ull + (u64)seg->dict_count + (u64)seg->post_count;
+    row->seg_pages = ft_bench_seg_pages_of(seg);
     row->dict_pages = (u64)seg->dict_count;
     row->post_pages = (u64)seg->post_count;
     row->df = df;
@@ -203,6 +221,8 @@ done:
         ft_index_close(ix);
     }
     if (pg != NULL) {
+        /* 全程去重的物理页数（数据足迹）—— 必须在 pager_close 之前读 */
+        row->pg_unique_tot = pager_unique_pages_total(pg);
         pager_close(pg);
     }
     ft_bench_corpus_free(&corpus);
@@ -215,22 +235,46 @@ static void a5_print_rows(const char *title, const A5Row *rows, u32 n)
     u32 i;
 
     printf("--- %s ---\n", title);
-    printf("%9s %6s %10s %9s %9s %8s %10s %8s %9s\n",
-           "文档数", "段数", "段总页数", "字典页", "倒排页", "df", "页读", "占段页", "耗时ms");
+    printf("%9s %6s %10s %9s %9s %8s %10s %7s %10s %10s %9s %8s\n",
+           "文档数", "段数", "段总页数", "字典页", "倒排页", "df",
+           "页读(ft)", "占段页", "逻辑页读", "物理读盘", "唯一页数", "耗时ms");
     for (i = 0; i < n; i++) {
         double ratio = (rows[i].seg_pages > 0)
                        ? (100.0 * (double)rows[i].reads / (double)rows[i].seg_pages)
                        : 0.0;
 
-        printf("%9u %6u %10llu %9llu %9llu %8u %10llu %7.2f%% %9.3f\n",
+        printf("%9u %6u %10llu %9llu %9llu %8u %10llu %7.2f%% %10llu %10llu %9llu %8.3f\n",
                rows[i].n_docs, rows[i].nsegs,
                (unsigned long long)rows[i].seg_pages,
                (unsigned long long)rows[i].dict_pages,
                (unsigned long long)rows[i].post_pages,
                rows[i].df, (unsigned long long)rows[i].reads,
-               ratio, rows[i].ms);
+               ratio,
+               (unsigned long long)rows[i].pg_logical,
+               (unsigned long long)rows[i].pg_physical,
+               (unsigned long long)rows[i].pg_unique,
+               rows[i].ms);
     }
     printf("\n");
+}
+
+/*
+ * 把四个口径摆出来，每个数字后面一句话说清它是什么（v1.3 欠账 6）。
+ *
+ * 打印在 ft_bench.h 的 ft_bench_print_io 里（A4 / A5 共用）。
+ *
+ * 返回 0 = 自检通过；1 = 自检失败（物理读盘 > 逻辑页读 ⇒ 计数器坏了）。
+ */
+static int a5_print_metrics(const char *title, const A5Row *r)
+{
+    FtBenchIo m;
+
+    m.logical = r->pg_logical;
+    m.physical = r->pg_physical;
+    m.unique = r->pg_unique;
+    m.unique_total = r->pg_unique_tot;
+    m.seg_pages = r->seg_pages;
+    return ft_bench_print_io(title, &m);
 }
 
 int ft_bench_run_a5(void)
@@ -247,9 +291,12 @@ int ft_bench_run_a5(void)
     double r_min;
     double r_max;
     u32 j;
+    char title[64];
 
     printf("=== A5 · IO 可证：单 term 检索的页读 ===\n");
-    printf("口径：一个段装下全部语料；页读 = 检索前后 ft_index_page_reads() 的差值\n\n");
+    printf("口径：一个段装下全部语料；页读 = 检索前后 ft_index_page_reads() 的差值\n");
+    printf("      另给 pager 层的三个口径（v1.3 欠账 6）：逻辑页读 / 物理读盘 / 唯一页数\n");
+    printf("      ——「取页次数」不是磁盘 IO，帧池命中时根本没碰盘。\n\n");
 
     /* ---- 组一：df 固定 ---- */
     for (i = 0; i < n_sizes; i++) {
@@ -262,6 +309,11 @@ int ft_bench_run_a5(void)
         }
     }
     a5_print_rows("组一 · df 固定（每个词恰好出现在固定数量的文档里）", g1, n_sizes);
+    /* 四个 IO 口径：取最大语料那一行来说明（最坏情况） */
+    snprintf(title, sizeof(title), "组一（%u 文档）", g1[n_sizes - 1u].n_docs);
+    if (a5_print_metrics(title, &g1[n_sizes - 1u]) != 0) {
+        ok = 0;
+    }
 
     /* ---- 组二：df 随语料线性放大 ---- */
     for (i = 0; i < n_sizes; i++) {
@@ -273,8 +325,15 @@ int ft_bench_run_a5(void)
         }
     }
     a5_print_rows("组二 · df 随语料线性放大（同一个词，词表固定）", g2, n_sizes);
+    snprintf(title, sizeof(title), "组二（%u 文档）", g2[n_sizes - 1u].n_docs);
+    if (a5_print_metrics(title, &g2[n_sizes - 1u]) != 0) {
+        ok = 0;
+    }
     printf("  ⚠️ 组二里 df 很小的时候，页读会被「页粒度」压平：几十个 posting 装不满一页，\n");
-    printf("     所以头几行的页读增长远慢于 df；df 到几千以后，页读才严格随 df 线性增长。\n\n");
+    printf("     所以头几行的页读增长远慢于 df；df 到几千以后，页读才严格随 df 线性增长。\n");
+    printf("  ⚠️ 「物理读盘」那一列在小语料时接近 0：段刚建好还在帧池里（%u 帧 ≈ %u KB），\n",
+           A5_BP_FRAMES, A5_BP_FRAMES * 4u);
+    printf("     检索要的那几页直接命中，不用回盘。语料大到帧池装不下时，才必须回盘。\n\n");
 
     /* ---- 判据 ---- */
     printf("--- A5 判据 ---\n");
@@ -399,11 +458,19 @@ int ft_bench_run_a5(void)
 
     printf("\nRESULT a5 g1_reads_first=%llu g1_reads_last=%llu g1_growth=%.2f "
            "g2_df_first=%u g2_df_last=%u g2_reads_first=%llu g2_reads_last=%llu "
-           "g2_growth=%.2f verdict=%s\n",
+           "g2_growth=%.2f g1_pg_logical=%llu g1_pg_physical=%llu g1_pg_unique=%llu "
+           "g2_pg_logical=%llu g2_pg_physical=%llu g2_pg_unique=%llu verdict=%s\n",
            (unsigned long long)g1[0].reads, (unsigned long long)g1[n_sizes - 1u].reads,
            g1_growth,
            g2[0].df, g2[n_sizes - 1u].df,
            (unsigned long long)g2[0].reads, (unsigned long long)g2[n_sizes - 1u].reads,
-           g2_growth, ok ? "PASS" : "FAIL");
+           g2_growth,
+           (unsigned long long)g1[n_sizes - 1u].pg_logical,
+           (unsigned long long)g1[n_sizes - 1u].pg_physical,
+           (unsigned long long)g1[n_sizes - 1u].pg_unique,
+           (unsigned long long)g2[n_sizes - 1u].pg_logical,
+           (unsigned long long)g2[n_sizes - 1u].pg_physical,
+           (unsigned long long)g2[n_sizes - 1u].pg_unique,
+           ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

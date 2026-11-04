@@ -352,9 +352,52 @@ static int ft_build_pass2(void *vctx, const FtBuildPost *grp, u32 n, u32 term_le
 
 /* ---------------- 建段 ---------------- */
 
-int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
-                     const FtDocText *docs, u32 n_docs, u32 seg_id,
-                     u32 *head_page_out)
+/*
+ * 算出这个段要占的页数上界（建段用）。
+ *
+ * posting 全在内存里，所以能算得**很准**：
+ *
+ *   倒排字节 = 12 × (词数 + posting 条数)（run 头 + posting 都是定长 12 字节）；
+ *   字典字节 = Σ (词条字节 + 一个 slot)。
+ *
+ * 页数上界：每页最多浪费"页尾放不下下一个东西"的那点空间
+ * （倒排页：放不下 run 头 + 一条 posting = 24 字节，再加一个 run 头 12 字节；
+ *   字典页：放不下最大词条 + slot）→ 上界 = 总字节 ÷ (容量 − 浪费) + 余量。
+ */
+static void ft_build_page_bound(const FtBuildPost *posts, u32 n_posts,
+                                u32 *post_pages_out, u32 *dict_pages_out)
+{
+    u64 post_bytes = 0;
+    u64 dict_bytes = 0;
+    u32 n_terms = 0;
+    u32 i = 0;
+    u32 post_cap = PAGE_SIZE - FPH_DATA;
+    u32 dict_cap = FT_DICT_CAPACITY;
+    u32 dict_max_need = ft_dict_entry_bytes(FT_MAX_TOKEN_LEN) + SLOT_SIZE;
+
+    /* 按词分组：同一词的 posting 连续（排序保证的） */
+    while (i < n_posts) {
+        u32 j = i + 1;
+
+        while (j < n_posts &&
+               ft_term_cmp(posts[j].term, posts[j].tlen,
+                           posts[i].term, posts[i].tlen) == 0) {
+            j++;
+        }
+        n_terms++;
+        dict_bytes += (u64)ft_dict_entry_bytes(posts[i].tlen) + (u64)SLOT_SIZE;
+        i = j;
+    }
+    post_bytes = (u64)n_terms * FT_RUN_HDR_BYTES + (u64)n_posts * FT_POSTING_BYTES;
+
+    *post_pages_out = (u32)(post_bytes / (u64)(post_cap - 35u)) + 1u;
+    *dict_pages_out = (u32)(dict_bytes / (u64)(dict_cap - dict_max_need)) + 1u;
+}
+
+int ft_segment_build_ex(Pager *pg, FtPagePool *pool,
+                        LogHookFn wal, void *wal_ctx, u32 xid,
+                        const FtDocText *docs, u32 n_docs, u32 seg_id,
+                        u32 *head_page_out)
 {
     FtBuildPost *posts = NULL;
     u32 n_posts = 0;
@@ -367,6 +410,13 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     u32 n_terms = 0;
     u32 d;      /* 文档下标 */
     int rc = OK;
+    FtBlock head_blk;
+    FtBlock post_blk;
+    FtBlock dict_blk;
+
+    memset(&head_blk, 0, sizeof(head_blk));
+    memset(&post_blk, 0, sizeof(post_blk));
+    memset(&dict_blk, 0, sizeof(dict_blk));
 
     if (!pg || !head_page_out)
         return E_INVAL;
@@ -376,13 +426,6 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     for (d = 0; d < n_docs; d++) {
         if (!docs[d].text && docs[d].text_len > 0)
             return E_INVAL;
-    }
-
-    pw = ft_post_writer_new(pg, wal, wal_ctx, xid);
-    dw = ft_dict_writer_new(pg, wal, wal_ctx, xid);
-    if (!pw || !dw) {
-        rc = E_IO;
-        goto done;
     }
 
     /* 第一步：切词 + 文档内去重计数 */
@@ -395,16 +438,71 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         qsort(posts, (size_t)n_posts, sizeof(FtBuildPost), ft_build_post_cmp);
 
     /*
-     * 段头页**先分配**（页号最小、最好记），内容最后写。
-     * 分配完立刻放开这一帧：内容由 ft_write_segment_head 通过 pager_get 取。
+     * 第三步：算出页数上界，从空闲页池里取页（坑 M4-23）。
+     *
+     * 池里没有够长的连号段 → 向文件尾追加（老口径，正确性不受影响）。
+     *
+     * ---- 坑 M4-50：分三块要，不要一次要一整块 ----
+     *
+     * 段的格式只要求**字典区自己连号**、**倒排区自己连号**，
+     * 段头页是另外单独一页（不要求紧挨着任何一个区）。
+     * 所以这里分三次要：倒排 P 页、字典 D 页、段头 1 页，
+     * 三块可以来自**不同的**回收段；一次要一整块（1+P+D）的话，
+     * 池里凑不出那么长的连号段 → 每建一段都往文件尾追加，文件只涨不缩。
+     *
+     * 取用顺序"大的先要"：池里取的是**最长**的连号段，
+     * 先要大的才不会把长段浪费在 1 页的段头上。
+     */
+    {
+        u32 post_pages = 0;
+        u32 dict_pages = 0;
+        u32 start = 0;
+
+        ft_build_page_bound(posts, n_posts, &post_pages, &dict_pages);
+
+        if (pool != NULL && ft_pool_take_run(pool, post_pages, &start) == OK) {
+            ft_block_init(&post_blk, pg, start, post_pages);       /* 有界块（复用旧页） */
+        } else {
+            ft_block_init(&post_blk, pg, 0u, 0xFFFFFFFFu);          /* 无界块（向文件尾追加） */
+        }
+        if (pool != NULL && ft_pool_take_run(pool, dict_pages, &start) == OK) {
+            ft_block_init(&dict_blk, pg, start, dict_pages);
+        } else {
+            ft_block_init(&dict_blk, pg, 0u, 0xFFFFFFFFu);
+        }
+        if (pool != NULL && ft_pool_take_run(pool, 1u, &start) == OK) {
+            ft_block_init(&head_blk, pg, start, 1u);
+        } else {
+            ft_block_init(&head_blk, pg, 0u, 0xFFFFFFFFu);
+        }
+    }
+
+    /*
+     * 第四步：段头页**先取**（内容最后写：段头要记字典/倒排的页区间）。
+     *
+     * 有界块时这一页是**旧段腾出来的页**：取用时整页清零
+     * （旧段的页头 / 私有区残留会被读侧当成新段的格式 —— 坑 M4-31）。
      */
     {
         PageFrame *head_fr = NULL;
 
-        rc = pager_alloc(pg, &head_pid, &head_fr);
+        rc = ft_block_alloc(&head_blk, &head_pid, &head_fr);
         if (rc != OK)
             goto done;
-        pager_unpin(pg, head_pid, false);
+        pager_unpin(pg, head_pid, true);
+    }
+
+    /*
+     * 写入器（倒排一块页、字典另一块页 → 两个区各自连号）
+     *
+     * 两个写入器**不能**共用一块页：交替分配会让页号交错，
+     * 读侧按连续区间读页就会读到另一种页（坑 M4-23）。
+     */
+    pw = ft_post_writer_new(pg, &post_blk, wal, wal_ctx, xid);
+    dw = ft_dict_writer_new(pg, &dict_blk, wal, wal_ctx, xid);
+    if (!pw || !dw) {
+        rc = E_IO;
+        goto done;
     }
 
     /* 一个词的 posting 条数不会超过文档数（doc_id 互不相同），暂存区够用 */
@@ -485,6 +583,24 @@ int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     if (rc != OK)
         goto done;
 
+    /*
+     * 块里没用完的尾巴**还给空闲页池**（那些页一个字节都没写过，是干净的）。
+     *
+     * 三块（头/倒排/字典）各自的尾巴都要还 —— 少还一块，
+     * 那块就等于从池里消失了（页被占着又不写内容，白白浪费）。
+     */
+    if (pool != NULL) {
+        if (head_blk.end != PAGE_ID_NIL && head_blk.next < head_blk.end) {
+            (void)ft_pool_add_range(pool, head_blk.next, head_blk.end - head_blk.next);
+        }
+        if (post_blk.end != PAGE_ID_NIL && post_blk.next < post_blk.end) {
+            (void)ft_pool_add_range(pool, post_blk.next, post_blk.end - post_blk.next);
+        }
+        if (dict_blk.end != PAGE_ID_NIL && dict_blk.next < dict_blk.end) {
+            (void)ft_pool_add_range(pool, dict_blk.next, dict_blk.end - dict_blk.next);
+        }
+    }
+
     *head_page_out = head_pid;
     head_pid = PAGE_ID_NIL;
 
@@ -496,4 +612,17 @@ done:
     free(posts);
     free(scratch);
     return rc;
+}
+
+/*
+ * 老入口：不回收页，直接向文件尾追加（pool = NULL 的薄壳）。
+ *
+ * 签名被单测固定住了，所以保留它 —— 语义与从前完全一致。
+ */
+int ft_segment_build(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+                     const FtDocText *docs, u32 n_docs, u32 seg_id,
+                     u32 *head_page_out)
+{
+    return ft_segment_build_ex(pg, NULL, wal, wal_ctx, xid,
+                               docs, n_docs, seg_id, head_page_out);
 }

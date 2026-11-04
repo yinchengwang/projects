@@ -334,45 +334,79 @@ static int ft_cursors_reset(FtTermCursor *cursors, u32 n_segs, FtSegment *const 
     return OK;
 }
 
-/* ---------------- 归并记录表 ---------------- */
+/* ---------------- 页数上界：先数清楚（坑 M4-51） ---------------- */
 
 /*
- * 每个词一条记录：df（留在新段里的 posting 数）、倒排链头、是否保留。
+ * 走一遍源段的字典，把新段要写的**字节数**数清楚，换算成页数。
  *
- * 【为什么要记这张表】
+ * 【为什么要专门数一遍】
  *
- * 因为写入必须分两趟（坑 M4-23）：字典页要连号，
- * 所以不能"写一个词的倒排就写它的字典"。
+ * 老的做法（ft_seg_bound_merge）：上界 = Σ 源段的页数 × 每页容量。
+ * 它把"源段的总容量"当成了"新段的总字节" —— 只有在**两个段的词完全不重叠**
+ * 时才准。词表重叠时（比如两段都是那 2000 个常用词），新段其实只比
+ * 一个段大一点点，上界却翻了一倍。
  *
- * 第一趟把词序走完、只写倒排，把每个词的 (df, ptr) 记在这张表里；
- * 第二趟重走同一个词序，按表里记的 (df, ptr) 写字典。
+ * 上界翻倍的直接后果：空闲页池里根本没有那么长的连号段可借 →
+ * 每次合并都向文件尾追加 → 文件**每轮都在长**（页回收等于白做）。
  *
- * 表的大小 = O(词数)（每个词 16 字节）——
- * 比"把词本身也存下来"省得多（词序可以从游标重走）。
+ * 【这一趟读什么】
+ *
+ * 只读源段的**字典页**（不读 posting）：字典条目里有 df，
+ * df 加上"词长"就够算出新段的字节数了。
+ *
+ * ⚠️ 数出来的 df 是**归并前**的（还没扣 tombstone 删掉的文档），
+ * 所以算出来的字节数是上界（可能偏大，不会偏小）✓ 安全。
+ *
+ * 【页数公式】
+ *
+ * 和建段那条路（ft_build_page_bound）**同一个公式**：
+ *   倒排页 = 倒排字节 ÷ (每页容量 − 每页最多浪费的字节) + 1
+ *   字典页 = 字典字节 ÷ (每页容量 − 每页最多浪费的字节) + 1
  */
-typedef struct {
-    u32 df;      /* 留在新段里的 posting 数 */
-    u32 kept;    /* 1 = 这个词进了新段，0 = posting 全被删光 */
-    u64 ptr;     /* 倒排链头 */
-} FtMergeRec;
-
-static int ft_merge_rec_push(FtMergeRec **recs, u32 *n, u32 *cap,
-                             u32 df, u32 kept, u64 ptr)
+static int ft_merge_count_pages(FtTermCursor *cursors, u32 n_segs,
+                                u32 *post_pages_out, u32 *dict_pages_out)
 {
-    if (*n == *cap) {
-        u32 ncap = (*cap == 0) ? 256u : *cap * 2u;
-        FtMergeRec *nr = (FtMergeRec *)realloc(*recs, sizeof(FtMergeRec) * (size_t)ncap);
+    u64 post_bytes = 0;
+    u64 dict_bytes = 0;
+    u32 post_cap = PAGE_SIZE - FPH_DATA;
+    u32 dict_cap = FT_DICT_CAPACITY;
+    u32 dict_max_need = ft_dict_entry_bytes(FT_MAX_TOKEN_LEN) + SLOT_SIZE;
+    char term[FT_MAX_TOKEN_LEN];
+    u32 term_len = 0;
 
-        if (nr == NULL) {
-            return E_NOSPACE;
+    for (;;) {
+        u32 merged_df = 0;
+        int rc;
+
+        /* 找各段当前词里的最小者（拷一份词出来：游标一推进就没了） */
+        if (!ft_cursors_pick(cursors, n_segs, term, &term_len)) {
+            break;      /* 所有段都读完了 */
         }
-        *recs = nr;
-        *cap = ncap;
+
+        /* 这个词在**所有**段里的 df 之和 = 归并后这个词的 posting 数 */
+        for (u32 i = 0; i < n_segs; i++) {
+            if (!cursors[i].have) {
+                continue;
+            }
+            if (ft_term_cmp(cursors[i].term, cursors[i].term_len, term, term_len) != 0) {
+                continue;
+            }
+            merged_df += cursors[i].df;
+        }
+
+        /* 倒排：一个 run 头 + df 条 posting */
+        post_bytes += (u64)FT_RUN_HDR_BYTES + (u64)merged_df * (u64)FT_POSTING_BYTES;
+        /* 字典：一个词条 + 一个 slot */
+        dict_bytes += (u64)ft_dict_entry_bytes(term_len) + (u64)SLOT_SIZE;
+
+        rc = ft_cursors_advance(cursors, n_segs, term, term_len);
+        if (rc != OK) {
+            return rc;
+        }
     }
-    (*recs)[*n].df = df;
-    (*recs)[*n].kept = kept;
-    (*recs)[*n].ptr = ptr;
-    (*n)++;
+
+    *post_pages_out = (u32)(post_bytes / (u64)(post_cap - 35u)) + 1u;
+    *dict_pages_out = (u32)(dict_bytes / (u64)(dict_cap - dict_max_need)) + 1u;
     return OK;
 }
 
@@ -428,7 +462,8 @@ void ft_merge_pick_window(u32 n_segs, FtSegment *const *segs,
 /*
  * 把 segs[0..n_segs) 合并成一个新段（新段直接写到 pg 里）。
  */
-int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
+int ft_merge_segments(Pager *pg, FtPagePool *pool,
+                      LogHookFn wal, void *wal_ctx, u32 xid,
                       FtSegment *const *segs, u32 n_segs,
                       const u32 *tomb_doc_ids, u32 n_tombs,
                       u32 new_seg_id, FtMergeResult *out)
@@ -438,9 +473,6 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     FtPostBuf merged;
     FtPostWriter *pw = NULL;
     FtDictWriter *dw = NULL;
-    FtMergeRec *recs = NULL;     /* 每个词的 (df, ptr, kept)：两趟之间传话 */
-    u32 n_recs = 0;
-    u32 cap_recs = 0;
     u8 *tomb_done = NULL;
     u32 head_pid = PAGE_ID_NIL;
     PageFrame *head_fr = NULL;
@@ -449,12 +481,20 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     u32 max_doc_id = 0;
     u32 n_terms = 0;
     u32 create_lsn = 0;
+    u32 post_pages = 0;   /* 倒排页数上界（数页数那一趟算出来的） */
     char term[FT_MAX_TOKEN_LEN];
     u32 term_len = 0;
     u32 i;
     int rc = OK;
+    FtBlock head_blk;
+    FtBlock post_blk;
+    FtBlock dict_blk;
+    FtPostCache *pcache = NULL;   /* 每段一个 posting 页缓存（v1.3 欠账 4） */
 
     memset(&merged, 0, sizeof(merged));
+    memset(&head_blk, 0, sizeof(head_blk));
+    memset(&post_blk, 0, sizeof(post_blk));
+    memset(&dict_blk, 0, sizeof(dict_blk));
 
     /* ---- 参数检查 ---- */
     if (pg == NULL || out == NULL || segs == NULL || n_segs == 0) {
@@ -483,21 +523,7 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         }
     }
 
-    /*
-     * 段头页**先分配**（页号最小、最好记），内容最后写：
-     * 段头要记字典/倒排的页区间，那些要等页都分配完才知道。
-     *
-     * 这里分配完就立刻放开：ft_write_segment_head 的签名里没有帧参数，
-     * 它自己会 pager_get 这一页来写。
-     */
-    rc = pager_alloc(pg, &head_pid, &head_fr);
-    if (rc != OK) {
-        goto done;
-    }
-    pager_unpin(pg, head_pid, false);
-    head_fr = NULL;
-
-    /* ---- 初始化各段的游标与统计量 ---- */
+    /* ---- 初始化各段的游标与统计量（游标要先定位到第一个词条） ---- */
     for (i = 0; i < n_segs; i++) {
         rc = ft_cursor_init(&cursors[i], segs[i]);
         if (rc != OK) {
@@ -507,23 +533,125 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         total_len += segs[i]->total_len;
     }
 
-    /* ---- 写入器 ---- */
-    pw = ft_post_writer_new(pg, wal, wal_ctx, xid);
-    dw = ft_dict_writer_new(pg, wal, wal_ctx, xid);
+    /*
+     * ---- 页数上界：**先数清楚**再要页（坑 M4-51）----
+     *
+     * 老的做法（ft_seg_bound_merge）：上界 = Σ 源段的页数 × 每页容量。
+     * 它把"源段的总容量"当成了"新段的总字节" —— 只有在**两个段的词完全不重叠**
+     * 时才准。词表重叠时（比如两段都是那 2000 个常用词），新段其实只比
+     * 一个段大一点点，上界却翻了一倍。
+     *
+     * 上界翻倍的直接后果：空闲页池里根本没有那么长的连号段可借 →
+     * 每次合并都向文件尾追加 → 文件**每轮都在长**（页回收等于白做）。
+     *
+     * 这里改成：先走一遍字典（只数不写），把新段要写的字节数数清楚，
+     * 再换算成页数 —— 和建段那条路（ft_build_page_bound）同一个公式，
+     * 上界贴得很紧（词表完全重叠时也只多算一点点）。
+     *
+     * ⚠️ 这一趟数出来的 df 是**归并前**的（还没扣 tombstone 删掉的文档），
+     * 所以算出来的字节数是上界（可能偏大，不会偏小）✓ 安全。
+     *
+     * 代价：字典页多读一遍？—— **没有**。数完这一趟之后，写那一趟
+     * 把倒排和字典**交替写**（两个写入器各用各的页块，页各自连号，
+     * 坑 M4-23 的约束依然满足），不用再单独走第二趟写字典 → 总页读不增加。
+     */
+    {
+        u32 dict_pages = 0;
+
+        rc = ft_merge_count_pages(cursors, n_segs, &post_pages, &dict_pages);
+        if (rc != OK) {
+            goto done;
+        }
+        /* 数完要复位：写那一趟要重走同一个词序 */
+        rc = ft_cursors_reset(cursors, n_segs, segs);
+        if (rc != OK) {
+            goto done;
+        }
+
+        /*
+         * ---- 页块：字典区**必须连号**，倒排区**不必**（坑 M4-52）----
+         *
+         * 字典区：读侧按"连续区间"（dict_start + i）二分查词 →
+         *   页号不连号就会读到别的页（查不到 / 命中 0 / 静默丢词）。
+         *   所以字典区**先占好一整段**（池里有就借池里的，
+         *   池里凑不出就在文件尾预留一段）→ 之后两个写入器交替写也顶不掉它。
+         *
+         * 倒排区：读侧顺着 posting 的链走，页与页之间靠页链（H_NEXT）串着 →
+         *   页号**不必连号** → 用"池模式"：从池里按整段连号一段一段取，
+         *   段与段之间由写入器用页链串起来。
+         *
+         * ---- 坑 M4-50：一次要三块，不要一次要一整块 ----
+         *
+         * 段的**格式**只要求字典区自己连号（倒排区现在也不要求了）。
+         * 以前这里一次要 bound.total（头+倒排+字典）页的**一整段连号**，
+         * 池里凑不齐 → 每轮合并都往文件尾追加，文件**每轮都在长**
+         * （这就是 test_ft_reclaim 红了的原因）。
+         */
+        rc = ft_seg_block_reserve_strict(pool, pg, dict_pages, &dict_blk);
+        if (rc != OK) {
+            goto done;
+        }
+        ft_seg_block_reserve(pool, pg, 1u, &head_blk);
+        ft_block_init_pool(&post_blk, pg, pool);
+    }
+
+    /*
+     * 段头页**先取**（内容最后写：段头要记字典/倒排的页区间，
+     * 那些要等页都分配完才知道）。
+     *
+     * 有界块时这一页是**旧段腾出来的页**：取用时整页清零
+     * （旧段的页头 / 私有区残留会被读侧当成新段的格式 —— 坑 M4-31）。
+     */
+    rc = ft_block_alloc(&head_blk, &head_pid, &head_fr);
+    if (rc != OK) {
+        goto done;
+    }
+    pager_unpin(pg, head_pid, true);
+    head_fr = NULL;
+
+    /*
+     * ---- 写入器（倒排一块页、字典另一块页 → 两个区各自连号） ----
+     *
+     * 两个写入器**不能**共用一块页：交替分配会让页号交错，
+     * 读侧按连续区间读页就会读到另一种页（坑 M4-23）。
+     *
+     * 各自一块页之后，写入就可以**交替**进行了：
+     * 倒排页从 post_blk 里连续取、字典页从 dict_blk 里连续取，
+     * 两个区各自连号 ✓ —— 坑 M4-23 的约束依然满足。
+     */
+    pw = ft_post_writer_new(pg, &post_blk, wal, wal_ctx, xid);
+    dw = ft_dict_writer_new(pg, &dict_blk, wal, wal_ctx, xid);
     if (pw == NULL || dw == NULL) {
         rc = E_NOSPACE;
         goto done;
     }
 
     /*
-     * ---- 第一趟：k 路归并，**只写倒排**（坑 M4-23）----
-     *
-     * 字典页必须连号（段头只记连续区间），所以不能"写一个词的倒排
-     * 就写它的字典" —— 两个写入器交替分配页，页号就不连号了，
-     * 读侧按连续区间读会读到倒排页（查不到 / 命中 0 / 静默丢词）。
-     *
-     * 第一趟把词序走完，只写倒排，把每个词的 (df, ptr) 记进 recs[]。
+     * 每个源段一个 posting 页缓存（v1.3 欠账 4）：
+     * 合并按**字典序**读 posting，倒排页也是按这个词序写的 ——
+     * 相邻两个词的 posting 往往在同一张页上，命中缓存就省一次逻辑页读。
      */
+    pcache = (FtPostCache *)calloc((size_t)n_segs, sizeof(FtPostCache));
+    if (pcache == NULL) {
+        rc = E_NOSPACE;
+        goto done;
+    }
+    for (i = 0; i < n_segs; i++) {
+        ft_post_cache_init(&pcache[i], pg);
+    }
+
+    /*
+     * ---- 写入这一趟：k 路归并，倒排与字典**交替**写 ----
+     *
+     * 字典页必须连号（段头只记连续区间）—— 但两个写入器**各用各的页块**
+     * （post_blk / dict_blk），所以交替写不会让页号交错：
+     * 倒排页从 post_blk 连续取、字典页从 dict_blk 连续取，两个区各自连号 ✓。
+     *
+     * 【为什么可以省掉"第二趟写字典"】
+     * 以前要分两趟，是因为两个写入器共用一块页（交替分配 → 页号交错）。
+     * 现在各用各的块，一趟就够 —— 字典页读的总次数不变（省一趟）✓。
+     *
+     * */
     for (;;) {
         u32 merged_n = 0;
         u64 ptr = FT_PTR_NIL;
@@ -544,13 +672,19 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
                 continue;
             }
 
-            /* 读这个段里该词的 posting（缓冲按 df 预留，装不下就是格式坏了） */
+            /*
+             * 读这个段里该词的 posting（缓冲按 df 预留，装不下就是格式坏了）。
+             * 用**带缓存**的那一版：相邻词的 posting 多半在同一张页上，
+             * 命中缓存就省一次逻辑页读（v1.3 欠账 4）。
+             * ⚠️ 口径：逻辑页读（pager_get 次数），不是物理磁盘 IO。
+             */
             rc = ft_postbuf_reserve(&src_bufs[i], cursors[i].df);
             if (rc != OK) {
                 goto done;
             }
-            rc = ft_segment_postings(segs[i], cursors[i].ptr, cursors[i].df,
-                                     src_bufs[i].buf, src_bufs[i].cap, &pn);
+            rc = ft_segment_postings_cached(segs[i], &pcache[i],
+                                            cursors[i].ptr, cursors[i].df,
+                                            src_bufs[i].buf, src_bufs[i].cap, &pn);
             if (rc != OK) {
                 goto done;
             }
@@ -565,6 +699,8 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
          * 这个词的游标推进一步。
          *
          * 第二趟用**同样的推进方式** → 同样的词序 → 才能按顺序取 recs[]。
+     * ⚠️ 现在的写法：数页数那一趟与写入那一趟用的是**同一个**推进方式，
+     * 词序一致 ✓（数出来的字节数与实际写出来的对得上）。
          */
         rc = ft_cursors_advance(cursors, n_segs, term, term_len);
         if (rc != OK) {
@@ -606,26 +742,23 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
             merged_n = w;
         }
 
-        /* 全部 posting 都被删掉了 → 这个词不进新段 */
+        /* 全部 posting 都被删光了 → 这个词不进新段（字典也不写） */
         if (merged_n == 0) {
-            /* 第二趟也要跳过它 → 记一条"不保留" */
-            rc = ft_merge_rec_push(&recs, &n_recs, &cap_recs, 0, 0, FT_PTR_NIL);
-            if (rc != OK) {
-                goto done;
-            }
             continue;
         }
 
         /*
-         * 只写倒排（拿到链头），字典留到第二趟写。
+         * 先写倒排（拿到链头），紧接着写这个词的字典条目。
          *
          * 写入器收的是**绝对 doc_id**，delta 由它算（坑 M4-2）。
+         *
+         * ⚠️ 顺序有讲究：字典条目里记的是倒排链头，所以必须**先写倒排**。
          */
         rc = ft_post_writer_put(pw, merged.buf, merged_n, &ptr);
         if (rc != OK) {
             goto done;
         }
-        rc = ft_merge_rec_push(&recs, &n_recs, &cap_recs, merged_n, 1, ptr);
+        rc = ft_dict_writer_put(dw, term, term_len, merged_n, ptr);
         if (rc != OK) {
             goto done;
         }
@@ -639,46 +772,15 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
     }
 
     /*
-     * ---- 第二趟：重走同一个词序，写字典页（坑 M4-23）----
+     * 倒排页数不该超过上界（数页数那一趟算出来的）。
      *
-     * 游标复位后再走一遍：同样的输入 → 同样的词序，
-     * 于是可以按顺序取 recs[] 里记好的 (df, ptr)。
-     *
-     * 这一趟不读 posting（词序与 posting 无关）。
+     * 超过就说明那一趟算错了（页数预算与实际写入对不上）——
+     * 宁可报错，也不要写出一个"与预算不符"的段（页数对不上时，
+     * 后面按页数算的东西（回收、回收判定）全会偏）。
      */
-    rc = ft_cursors_reset(cursors, n_segs, segs);
-    if (rc != OK) {
+    if (ft_post_writer_count(pw) > post_pages) {
+        rc = E_CORRUPT;
         goto done;
-    }
-    {
-        u32 idx = 0;
-
-        for (;;) {
-            if (!ft_cursors_pick(cursors, n_segs, term, &term_len)) {
-                break;
-            }
-            rc = ft_cursors_advance(cursors, n_segs, term, term_len);
-            if (rc != OK) {
-                goto done;
-            }
-            if (idx >= n_recs) {
-                rc = E_CORRUPT;     /* 两趟的词数对不上（不该发生） */
-                goto done;
-            }
-            if (!recs[idx].kept) {
-                idx++;      /* 这个词的 posting 全被删光了 → 不进新段 */
-                continue;
-            }
-            rc = ft_dict_writer_put(dw, term, term_len, recs[idx].df, recs[idx].ptr);
-            if (rc != OK) {
-                goto done;
-            }
-            idx++;
-        }
-        if (idx != n_recs) {
-            rc = E_CORRUPT;         /* 两趟的词数对不上（不该发生） */
-            goto done;
-        }
     }
 
     /* ---- 收尾：字典页也要 flush（漏一个最后一页就不落盘） ---- */
@@ -703,6 +805,26 @@ int ft_merge_segments(Pager *pg, LogHookFn wal, void *wal_ctx, u32 xid,
         goto done;
     }
 
+    /*
+     * 块里没用完的尾巴**还给空闲页池**（那些页一个字节都没写过）。
+     * ⚠️ 只有**成功**时才还：失败时新段的页是半成品，发出去就是发垃圾。
+     *
+     * 三块（头/倒排/字典）各自的尾巴都要还 —— 少还一块，
+     * 那块就等于从池里消失了（页被占着又不写内容，白白浪费）。
+     */
+    if (pool != NULL) {
+        if (head_blk.end != PAGE_ID_NIL && head_blk.next < head_blk.end) {
+            (void)ft_pool_add_range(pool, head_blk.next, head_blk.end - head_blk.next);
+        }
+        /*
+         * 倒排块是**池模式**：它的"尾巴"是"最后取的那一段没用完的部分" ——
+         * 那一段是连号的，还回去池里仍然是一段连号页 ✓（坑 M4-52）。
+         */
+        (void)ft_block_pool_release_tail(&post_blk, pool);
+        if (dict_blk.end != PAGE_ID_NIL && dict_blk.next < dict_blk.end) {
+            (void)ft_pool_add_range(pool, dict_blk.next, dict_blk.end - dict_blk.next);
+        }
+    }
     /* ---- 填结果 ---- */
     out->head_page = head_pid;
     out->doc_count = doc_count;
@@ -727,6 +849,12 @@ done:
     if (dw != NULL) {
         ft_dict_writer_free(dw);
     }
+    if (pcache != NULL) {
+        for (i = 0; i < n_segs; i++) {
+            ft_post_cache_release(&pcache[i]);
+        }
+        free(pcache);
+    }
     if (cursors != NULL) {
         for (i = 0; i < n_segs; i++) {
             ft_cursor_free(&cursors[i]);
@@ -741,7 +869,6 @@ done:
     }
     ft_postbuf_free(&merged);
     free(tomb_done);
-    free(recs);
     if (head_fr != NULL) {
         pager_unpin(pg, head_pid, false);
     }

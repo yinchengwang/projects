@@ -22,9 +22,20 @@
  * 1) **结构口径**（主口径）：读 = 参与合并的旧段的页数（假设每页只读一遍），
  *    写 = 新写出来的那个段的页数。
  * 2) **实测取页次数**（ft_index_merge_page_reads）：合并路径真正取了几次页。
- *    它跟结构口径差得很远 —— 倒排是**按 term 分散**存放的，合并时每个 term
- *    都要单独取一次页，同一页会被反复取 ⇒ 取页次数 ≈ 老段的**词数**之和
- *    （判据 C6）。真实的磁盘 IO 落在两者之间（取决于缓冲池命中率）。
+ *
+ * 【v1.3 欠账 4 修复之后，第 2 项与第 1 项已经基本对齐】
+ *
+ * 修复前：倒排**按 term 分散**存放，合并时每个 term 都要单独取一次页，
+ * 同一页被反复取 ⇒ 取页次数 ≈ 老段的**词数**之和（O(词数)）。
+ * 修复后：合并按字典序遍历词条，相邻词落在同一页时**复用已读入的页**
+ * ⇒ 取页次数 ≈ 老段的**页数**之和（O(页数)）。
+ *
+ * ⚠️ 注意还有第三个口径：**pager 的"逻辑页读"**（pager_get 与 pager_alloc 各算一次），
+ * 它比上面的"实测取页次数"多两笔 —— 合并前的**数页那一趟**
+ * （ft_merge_count_pages 读一遍源段字典页）和**新段页的分配**。
+ * 判据 C6 的模型统一用这个口径：**2 × 老段页数 + 新写页数**（详见判据处注释）。
+ *
+ * 另外还有两个 pager 层的口径（逻辑页读 / 物理读盘），见 ft_bench.h 顶部。
  *
  * ==================== 退出码 ====================
  *
@@ -63,157 +74,12 @@
 #define A4_BP_FRAMES  4096u
 
 /* ---------------- 段的页数 ---------------- */
-
-/* 一个段的页数 = 段头 1 页 + 字典页 + 倒排页 */
-static u64 seg_pages_of(const FtSegment *s)
-{
-    return 1ull + (u64)s->dict_count + (u64)s->post_count;
-}
-
-/* 索引里所有"活着的"段的总页数 */
-static u64 index_live_pages(const FtIndex *ix)
-{
-    u64 total = 0;
-    u32 n = ft_index_nsegs(ix);
-    u32 i;
-
-    for (i = 0; i < n; i++) {
-        const FtSegment *s = NULL;
-
-        if (ft_index_seg_at(ix, i, &s) == OK && s != NULL) {
-            total += seg_pages_of(s);
-        }
-    }
-    return total;
-}
-
-/* 段的快照（用来做合并前后的差分） */
-typedef struct {
-    u32 head;    /* 段头页号（段的唯一标识） */
-    u32 docs;    /* 段里的文档数 */
-    u32 terms;   /* 段里的词数 */
-    u64 pages;   /* 段的页数 */
-    u32 dict;    /* 字典页数 */
-    u32 post;    /* 倒排页数 */
-} SegSnap;
-
-static u32 snap_segs(const FtIndex *ix, SegSnap *buf, u32 cap)
-{
-    u32 n = ft_index_nsegs(ix);
-    u32 i;
-
-    if (n > cap) {
-        n = cap;
-    }
-    for (i = 0; i < n; i++) {
-        const FtSegment *s = NULL;
-
-        if (ft_index_seg_at(ix, i, &s) != OK || s == NULL) {
-            buf[i].head = 0xFFFFFFFFu;
-            buf[i].docs = 0;
-            buf[i].terms = 0;
-            buf[i].pages = 0;
-            buf[i].dict = 0;
-            buf[i].post = 0;
-            continue;
-        }
-        buf[i].head = s->head_page;
-        buf[i].docs = s->doc_count;
-        buf[i].terms = s->n_terms;
-        buf[i].pages = seg_pages_of(s);
-        buf[i].dict = s->dict_count;
-        buf[i].post = s->post_count;
-    }
-    return n;
-}
-
-static int snap_has(const SegSnap *buf, u32 n, u32 head)
-{
-    u32 i;
-
-    for (i = 0; i < n; i++) {
-        if (buf[i].head == head) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /*
- * 合并前后的差分：谁没了（被合并掉的旧段）、谁来了（新写的段）。
- * 差分按**段头页号**做 —— 段头页号是段的唯一标识。
+ * ft_bench_seg_pages_of / ft_bench_index_live_pages（段的页数）
+ * ft_bench_snap_segs / ft_bench_snap_has / ft_bench_diff_snaps（段快照与差分）
+ * ft_bench_time_search（一次检索只测耗时）
+ * —— 全在 ft_bench.h 里：A4 / A5 共用，也为了让本文件守住 800 行上限。
  */
-static void diff_snaps(const SegSnap *before, u32 nb, const SegSnap *after, u32 na,
-                       u64 *removed_pages, u32 *removed_n, u64 *removed_docs,
-                       u64 *removed_terms, u32 *removed_start,
-                       u64 *added_pages, u32 *added_n, u32 *added_docs,
-                       u32 *added_terms, u32 *max_removed_terms)
-{
-    u32 i;
-    u32 first = 0xFFFFFFFFu;
-
-    *removed_pages = 0;
-    *removed_n = 0;
-    *removed_docs = 0;
-    *removed_terms = 0;
-    *removed_start = 0;
-    *added_pages = 0;
-    *added_n = 0;
-    *added_docs = 0;
-    *added_terms = 0;
-    *max_removed_terms = 0;
-
-    for (i = 0; i < nb; i++) {
-        if (!snap_has(after, na, before[i].head)) {
-            *removed_pages += before[i].pages;
-            *removed_docs += before[i].docs;
-            *removed_terms += before[i].terms;
-            (*removed_n)++;
-            if (i < first) {
-                first = i;
-            }
-            if (before[i].terms > *max_removed_terms) {
-                *max_removed_terms = before[i].terms;
-            }
-        }
-    }
-    /*
-     * 被合并掉的旧段是**相邻**的一段（合并窗口的定义就是相邻），
-     * 所以 removed_start 就是窗口的起点下标。
-     */
-    *removed_start = (first == 0xFFFFFFFFu) ? 0 : first;
-    for (i = 0; i < na; i++) {
-        if (!snap_has(before, nb, after[i].head)) {
-            *added_pages += after[i].pages;
-            (*added_n)++;
-            *added_docs += after[i].docs;
-            *added_terms += after[i].terms;
-        }
-    }
-}
-
-/* ---------------- 一次检索（只测耗时） ---------------- */
-
-typedef struct {
-    double ms;
-    u32   n_hit;
-    int   rc;
-} QueryStat;
-
-static QueryStat time_search(const FtIndex *ix, const char *q, u32 qlen)
-{
-    QueryStat st;
-    FtHit hits[A4_MAXOUT];
-    u32 n = 0;
-    double t0;
-
-    memset(&st, 0, sizeof(st));
-    t0 = ft_bench_now_ms();
-    st.rc = ft_index_search(ix, q, qlen, A4_TOPK, A4_MAXOUT, hits, &n);
-    st.ms = ft_bench_now_ms() - t0;
-    st.n_hit = n;
-    return st;
-}
 
 /* ================================================================
  * A4 · 合并代价
@@ -233,14 +99,6 @@ typedef struct {
     u32    n_small_after;/* 合并后仍是"一个批大小"的段数（从没被合并过的小段） */
     u64    mr_pages;     /* 本次合并的**实测**页读（ft_index_merge_page_reads 增量） */
 } MergeRec;
-
-static void remove_db(const char *path)
-{
-    remove(path);
-    remove("test/tmp/ft_bench_a4.db-wal");
-    remove("test/tmp/ft_bench_a4.db-clog");
-    remove("test/tmp/ft_bench_a4.db-shm");
-}
 
 int ft_bench_run_a4(u32 n_docs, u32 batch)
 {
@@ -262,6 +120,12 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     u64 sum_rm_docs = 0;   /* Σ 每次合并的窗口文档数 = 文档被重写的总次数 */
     u64 sum_rm_terms = 0;  /* Σ 每次合并的老段词数 = 合并路径要处理的词次 */
     u64 total_mr = 0;      /* Σ 每次合并的实测页读（ft_index_merge_page_reads） */
+    u64 sum_pg_logical = 0;   /* Σ 每次合并的逻辑页读（pager 级） */
+    u64 sum_pg_physical = 0;  /* Σ 每次合并的物理读盘（pager 级） */
+    u64 sum_pg_unique = 0;    /* Σ 每次合并的去重页数（同一页跨合并会重复计） */
+    u64 pg_unique_total = 0;  /* 全程去重的物理页数（数据足迹，跨合并累计） */
+    /* 每次合并的 pager 层 IO 明细（打印用；与 MergeRec 并行存一份） */
+    FtBenchMergeIo *mio = NULL;
     u64 max_merged_docs = 0;
     u64 sum_w = 0;
     u32 n_lossy = 0;
@@ -314,7 +178,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
         return 2;
     }
 
-    remove_db(DB_PATH_A4);
+    ft_bench_remove_db(DB_PATH_A4);
     if (pager_open(DB_PATH_A4, A4_BP_FRAMES, &pg) != OK) {
         printf("  开库失败\n");
         ft_bench_corpus_free(&corpus);
@@ -330,14 +194,15 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     cap_rec = n_docs / batch + 64u;
     docs  = (FtDocText *)calloc(batch, sizeof(FtDocText));
     recs  = (MergeRec *)calloc(cap_rec, sizeof(MergeRec));
+    mio   = (FtBenchMergeIo *)calloc(cap_rec, sizeof(FtBenchMergeIo));
     snap_a = (SegSnap *)calloc(cap_rec + 16u, sizeof(SegSnap));
     snap_b = (SegSnap *)calloc(cap_rec + 16u, sizeof(SegSnap));
     eff = (double *)calloc(cap_rec + 16u, sizeof(double));
     qb  = (double *)calloc(cap_rec + 16u, sizeof(double));
     qa  = (double *)calloc(cap_rec + 16u, sizeof(double));
     ms_all = (double *)calloc(cap_rec + 16u, sizeof(double));
-    if (docs == NULL || recs == NULL || snap_a == NULL || snap_b == NULL ||
-        eff == NULL || qb == NULL || qa == NULL || ms_all == NULL) {
+    if (docs == NULL || recs == NULL || mio == NULL || snap_a == NULL ||
+        snap_b == NULL || eff == NULL || qb == NULL || qa == NULL || ms_all == NULL) {
         printf("  内存不足\n");
         failed = 1;
         goto done;
@@ -385,26 +250,42 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
             u32 k;
             u64 mpr_before = 0;
             u64 mpr_after = 0;
-            QueryStat q1;
-            QueryStat q2;
+            u64 pg_logical = 0;
+            u64 pg_physical = 0;
+            u64 pg_unique = 0;
+            FtBenchQueryStat q1;
+            FtBenchQueryStat q2;
             double t0;
             double t1;
 
-            q1 = time_search(ix, A4_QUERY, (u32)strlen(A4_QUERY));
+            q1 = ft_bench_time_search(ix, A4_QUERY, (u32)strlen(A4_QUERY), A4_TOPK, A4_MAXOUT);
 
-            na = snap_segs(ix, snap_a, cap_rec + 16u);
+            na = ft_bench_snap_segs(ix, snap_a, cap_rec + 16u);
             mpr_before = ft_index_merge_page_reads(ix);
+            /*
+             * 开一个新的测量窗口（v1.3 欠账 6）。
+             *
+             * 之后到 merge 返回之间，pager 的三个计数器只统计**这次合并**。
+             * 位置很讲究：必须在 snap_segs（它也读页）之后开窗口，
+             * 而且取数必须在 merge 返回后**立刻**取 ——
+             * 后面的 ft_bench_snap_segs( snap_b ) 也会读页，夹进来就脏了。
+             */
+            pager_stats_reset(pg);
             t0 = ft_bench_now_ms();
             rc = ft_index_merge(ix, 0, &merged);
             t1 = ft_bench_now_ms();
+            /* 立刻取窗口内的三个数字（此时还没有别的读页操作） */
+            pg_logical = pager_logical_reads(pg);
+            pg_physical = pager_physical_reads(pg);
+            pg_unique = pager_unique_pages(pg);
             mpr_after = ft_index_merge_page_reads(ix);
             if (rc != OK) {
                 printf("  合并失败（rc=%d）\n", rc);
                 failed = 1;
                 goto done;
             }
-            nb = snap_segs(ix, snap_b, cap_rec + 16u);
-            diff_snaps(snap_a, na, snap_b, nb,
+            nb = ft_bench_snap_segs(ix, snap_b, cap_rec + 16u);
+            ft_bench_diff_snaps(snap_a, na, snap_b, nb,
                        &rm_pages, &rm_n, &rm_docs, &rm_terms, &rm_start,
                        &ad_pages, &ad_n, &ad_docs,
                        &ad_terms, &max_rm_terms);
@@ -432,7 +313,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
                 }
             }
 
-            q2 = time_search(ix, A4_QUERY, (u32)strlen(A4_QUERY));
+            q2 = ft_bench_time_search(ix, A4_QUERY, (u32)strlen(A4_QUERY), A4_TOPK, A4_MAXOUT);
 
             if (n_rec < cap_rec) {
                 recs[n_rec].w = merged;
@@ -447,6 +328,11 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
                 recs[n_rec].nsegs_before = na;
                 recs[n_rec].n_small_after = n_small;
                 recs[n_rec].mr_pages = mpr_after - mpr_before;
+                /* 这次合并的 pager 层 IO（打印用） */
+                mio[n_rec].old_pages = rm_pages;
+                mio[n_rec].logical = pg_logical;
+                mio[n_rec].physical = pg_physical;
+                mio[n_rec].unique = pg_unique;
             }
             if (n_rec < cap_rec + 16u) {
                 /* 效率 = 读掉的旧页数 ÷ 写出的新页数（密度相近时应 ≈ 1） */
@@ -460,6 +346,9 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
             sum_rm_docs += rm_docs;
             sum_rm_terms += rm_terms;
             total_mr += (mpr_after - mpr_before);
+            sum_pg_logical += pg_logical;
+            sum_pg_physical += pg_physical;
+            sum_pg_unique += pg_unique;
             total_merge_ms += (t1 - t0);
             sum_w += merged;
             if ((u64)ad_docs > max_merged_docs) {
@@ -470,6 +359,14 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     }
 
     /* ---- 统计 ---- */
+    /*
+     * 全程去重的物理页数（数据足迹）——
+     * 它**不随测量窗口重置**，所以这里读到的就是"整个 A4 跑下来
+     * 真正从盘上读回过多少个不重复的页"。
+     * 必须在 pager_close 之前读（pg 在 done: 段才关）。
+     */
+    pg_unique_total = pager_unique_pages_total(pg);
+
     f_avg = (n_rec > 0) ? ((double)sum_w / (double)n_rec) : 2.0;
     if (f_avg < 2.0) {
         f_avg = 2.0;
@@ -492,7 +389,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
      * 因此"实测层数比理想少"是正常的，少的量级就是 log_f(阈值)。
      */
     l_gap_max = log((double)FT_MERGE_THRESHOLD) / log(f_avg) + 1.0;
-    ppd = (double)index_live_pages(ix) / (double)n_docs;
+    ppd = (double)ft_bench_index_live_pages(ix) / (double)n_docs;
     /*
      * ---- 两套口径的 c ----
      *
@@ -566,6 +463,19 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     }
 
     /*
+     * ---- 每次合并的 IO 口径（pager 层，v1.3 欠账 6） ----
+     *
+     * 四个口径各说各的，**不能互相换算**：
+     *   逻辑页读 —— 取页次数，缓存命中也计数（逻辑访问量）
+     *   物理读盘 —— 真正从文件读回一页的次数（真实磁盘 IO）
+     *   唯一页数 —— 本次窗口里读盘过的不重复页号（帧池无限大时的下界）
+     *   段页数   —— 参与合并的旧段的页数之和（结构口径）
+     *
+     * 打印在 ft_bench.h 的 ft_bench_print_merge_io 里（A4 / A5 共用）。
+     */
+    ft_bench_print_merge_io(mio, n_rec);
+
+    /*
      * ---- 合并窗口的实际行为（如实量化） ----
      *
      * 合并规则（实现里的原话）：段数 > FT_MERGE_THRESHOLD 时，
@@ -593,7 +503,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
             sum_start += recs[base].start_idx;
             last_small = recs[base].n_small_after;
         }
-        fin_n = snap_segs(ix, snap_a, cap_rec + 16u);
+        fin_n = ft_bench_snap_segs(ix, snap_a, cap_rec + 16u);
         for (k = 0; k < fin_n; k++) {
             if (k == 0 || snap_a[k].docs > fin_max_docs) {
                 fin_max_docs = snap_a[k].docs;
@@ -640,20 +550,68 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     if (total_read > 0) {
         printf("     实测取页次数 / 结构口径读页数 = %.2f\n",
                (double)total_mr / (double)total_read);
-        printf("     ⚠️ 两者不是一回事：结构口径假设「每页只读一遍」，\n");
-        printf("        实测是**取页次数** —— 倒排按 term 分散存放，合并时每个 term\n");
-        printf("        都要单独取一次页，所以同一页会被反复取。\n");
-        printf("        真实的磁盘 IO 取决于缓冲池命中率（缓冲池 %u 帧 ≈ %u KB，\n",
-               A4_BP_FRAMES, A4_BP_FRAMES * 4u);
-        printf("        而段的总页数只有 %llu 页 ≈ %llu KB），落在两者之间。\n",
-               (unsigned long long)index_live_pages(ix),
-               (unsigned long long)(index_live_pages(ix) * 4u));
+        printf("     同页复用之后这个比值接近 1：合并时按字典序遍历词条，\n");
+        printf("        相邻词落在同一页时复用已读入的页 —— 代价从 O(词数)\n");
+        printf("        降到了 O(页数)（两趟写 ⇒ 约 2 倍）。\n");
+        printf("        真实的磁盘 IO 见下面 pager 层的「物理读盘」一行。\n");
     }
-    printf("  取页次数模型        : Σ(每次合并的老段词数) = %llu 词次"
-           "（每个 term 一次取页）\n",
+
+    /*
+     * ---- 四个口径（v1.3 欠账 6） ----
+     *
+     * 这是本次要定死的度量口径，每个数字后面一句话说清它是什么。
+     * 打印在 ft_bench.h 的 ft_bench_print_io 里（A4 / A5 共用）。
+     */
+    {
+        FtBenchIo m;
+
+        m.logical = sum_pg_logical;
+        m.physical = sum_pg_physical;
+        m.unique = sum_pg_unique;
+        m.unique_total = pg_unique_total;
+        m.seg_pages = ft_bench_index_live_pages(ix);
+        if (ft_bench_print_io("A4 合并阶段", &m) != 0) {
+            ok = 0;
+        }
+    }
+    printf("  Σ 各次合并窗口内的去重页数 = %llu 页（同一页被多次合并触及会重复计，"
+           "是上界）\n", (unsigned long long)sum_pg_unique);
+    printf("  参与合并的旧段页数之和   = %llu 页（结构口径）\n",
+           (unsigned long long)total_read);
+    if (sum_pg_logical > 0) {
+        printf("  --- 口径之间的关系 ---\n");
+        printf("  逻辑页读 / 物理读盘 = %.2f（**真实磁盘 IO 比逻辑页读小 %.2f 倍**）\n",
+               (double)sum_pg_logical / (double)sum_pg_physical,
+               (double)sum_pg_logical / (double)sum_pg_physical);
+        printf("  物理读盘 / 唯一页数 = %.2f（> 1 说明同一页被逐出后又读回了 —— "
+               "帧池不够大）\n",
+               (pg_unique_total > 0)
+                   ? ((double)sum_pg_physical / (double)pg_unique_total) : 0.0);
+        printf("  物理读盘 / 旧段页数 = %.2f（**全部合并**的平均 —— 大部分合并"
+               "根本没碰盘，平均进去就压小了；\n",
+               (total_read > 0)
+                   ? ((double)sum_pg_physical / (double)total_read) : 0.0);
+        printf("     只看真正碰了盘的那几次，每个旧页**最多**真正读盘一次"
+               "⇒ 真实 IO 是 O(页数)）\n");
+    }
+    /*
+     * 【只看真正碰了盘的那几次合并】
+     *
+     * 大部分合并的物理读盘是 0 —— 因为被合并的段是刚写的，还留在帧池里。
+     * 只有少数几次（合并的是很老、早已被逐出并落盘的段）真的要回盘。
+     *
+     * 对这几次单独看：**物理读盘 ≈ 旧段页数**（每个旧页只真正读盘一次）
+     * ⇒ 真实 IO 的代价是 **O(页数)**；
+     * 而逻辑页读在同页复用之后也是 **O(页数)**（约 2 倍 —— 两趟写）。
+     * 这两个数必须分开报 —— 混在一起会得出"物理 IO 远大于实际"的错觉。
+     *
+     * （逐次明细与这个小结在 ft_bench.h 的 ft_bench_print_merge_io 里。）
+     */
+    printf("  旧口径（优化前）    : Σ(每次合并的老段词数) = %llu 词次"
+           "（那时每个 term 一次取页；现在是**上界**，不再是模型）\n",
            (unsigned long long)sum_rm_terms);
     printf("  段总页数（结束时）  : %llu（每文档 %.4f 页）\n",
-           (unsigned long long)index_live_pages(ix), ppd);
+           (unsigned long long)ft_bench_index_live_pages(ix), ppd);
     printf("  层数：实测 %.2f / 模型 log_f(N/b) = %.2f\n", l_meas, l_model);
     printf("  拟合 c（题目口径）  = 总IO/(N·log_f N) = %.4f 页/文档\n", c_fit);
     if (log_f_n > 0.0) {
@@ -716,35 +674,125 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
         ok = 0;
     }
     /*
-     * C6：合并路径的**取页次数**模型。
-     * 倒排是按 term 分散存的，合并时每个 term 都要单独取一次页 ——
-     * 所以取页次数 ≈ 老段的词数之和，而不是老段的页数之和。
-     * 这个模型能解释"为什么实测取页次数比结构口径大几十倍"。
+     * C6：合并路径的**页读模型**（v1.3 欠账 4 修好之后重新定义）。
+     *
+     * 【旧判据为什么废了 —— 这一条必须写进代码里】
+     *
+     * 旧判据是"取页次数 ≈ 老段**词数**之和"：
+     * 它描述的是**同页复用之前**的实现 —— 倒排按 term 分散存放，
+     * 合并时每个 term 单独取一次页，同一页被反复取，所以取页次数 ∝ 词数。
+     *
+     * 修复之后（合并时按字典序遍历、相邻词落在同一页就复用已读入的页），
+     * 取页次数从 O(词数) 降到 **O(页数)** ——
+     * 旧判据自然不再成立。
+     * **判据失效是优化生效的证据，不是回归**：
+     * 旧模型对应的实测值（老段词数之和）现在只是**上界**，不再是模型。
+     *
+     * 【中间版本（"2.0 × 老段页数 ± 0.6"）为什么也废了 —— 2026-11-04 实测发现】
+     *
+     * 换成 pager 的"逻辑页读"口径之后，判据曾写成
+     * "逻辑页读 ≈ 2 × 老段页数（容差 ±0.6）"。实测 2.95 倍，**打红**。
+     * 查下来是**判据自己写错了**，不是实现退化：
+     *
+     *   ① **口径混用**：模型 2.0 是照着"合并实测取页次数"
+     *      （ft_index_merge_page_reads，实测 ≈ 1.0 × 老段页数）推出来的，
+     *      判定用的却是 pager 的**逻辑页读**
+     *      （pager_get 与 pager_alloc **各算一次**，见 pager.h 顶部口径说明）。
+     *      分母相同、分子差一笔"写入也算取页"，
+     *      拿一个口径的模型去卡另一个口径，必然对不上。
+     *   ② **模型漏了两笔**：
+     *      - 合并前还有**数页那一趟**（ft_merge_count_pages：
+     *        读一遍源段的字典页，把新段的字节数数清楚）
+     *        ⇒ 老段的页被读**两趟**，不是一趟；
+     *      - 新段的页是 pager_alloc 出来的，而 **pager_alloc 也计一次逻辑页读**。
+     *
+     * 【新判据】（口径统一到 pager 的"逻辑页读"）
+     *
+     *   模型：逻辑页读 ≈ 2 × 老段页数 + 新写页数
+     *        （老段：数页一趟 + 合并一趟；新段：alloc 算一次取页）
+     *   容差：每次合并 ±64 页（每轮固定开销：根页双写 + 目录页 + 墓碑页）
+     *
+     * 实测（100000 文档 / 批 1000 / 92 次合并）：
+     *   逻辑页读 75135 次，模型 2×25483 + 21718 = 72684 次，偏差 +2451
+     *   （每次合并 +26.6 页，在 ±64 的容差内），
+     *   比值 75135 / 25483 = **2.95 倍**，且与段大小无关（92 次合并都在 2.49~3.01 之间）。
+     *
+     * 【这个判据能打红】
+     * 若哪天同页复用坏掉、退回"每词一次取页"，
+     * 老段词数之和是 849596 词次 ⇒ 逻辑页读会变成老段页数的 **33 倍**，
+     * 远超模型 —— 直接变红。
      */
-    if (sum_rm_terms > 0) {
-        double mr_err = fabs((double)total_mr / (double)sum_rm_terms - 1.0);
+    if (total_read > 0) {
+        double model = (double)(2u * total_read + total_write);
+        double diff = (double)sum_pg_logical - model;
+        double tol = 64.0 * (double)n_rec;
+        double ratio = (double)sum_pg_logical / (double)total_read;
 
-        if (mr_err <= 0.3) {
-            printf("  [PASS] C6 取页次数模型：实测 %llu 次取页 vs 模型"
-                   "（老段词数之和 %llu 词次），相对误差 %.1f%%（≤ 30%%）\n",
-                   (unsigned long long)total_mr, (unsigned long long)sum_rm_terms,
-                   mr_err * 100.0);
+        if (fabs(diff) <= tol) {
+            printf("  [PASS] C6 页读模型：合并的逻辑页读 %llu 次，模型"
+                   " 2×老段页数 + 新写页数 = %.0f 次，偏差 %+.0f（容差 ±%.0f）；"
+                   "比值 = 老段页数的 %.2f 倍（与段大小无关 ⇒ 代价是 O(页数)，"
+                   "不是 O(词数)）\n",
+                   (unsigned long long)sum_pg_logical, model, diff, tol, ratio);
         } else {
-            printf("  [FAIL] C6 取页次数模型：实测 %llu 次取页 vs 模型 %llu 词次，"
-                   "相对误差 %.1f%%（> 30%%）\n",
-                   (unsigned long long)total_mr, (unsigned long long)sum_rm_terms,
-                   mr_err * 100.0);
+            printf("  [FAIL] C6 页读模型：合并的逻辑页读 %llu 次，模型"
+                   " 2×老段页数 + 新写页数 = %.0f 次，偏差 %+.0f（超出容差 ±%.0f）；"
+                   "比值 = 老段页数的 %.2f 倍\n",
+                   (unsigned long long)sum_pg_logical, model, diff, tol, ratio);
             ok = 0;
         }
     }
 
+    /*
+     * C7：真实磁盘 IO 是 **O(页数)**，不是 O(词数)。
+     *
+     * 物理读盘次数 ≤ 被读盘过的唯一页数 —— 即"每个真正读过的页，
+     * 最多真正读盘一次"（超过就说明帧池不够、同一页被逐出后又读回）。
+     */
+    if (pg_unique_total > 0) {
+        if (sum_pg_physical <= pg_unique_total) {
+            printf("  [PASS] C7 真实 IO 是 O(页数)：物理读盘 %llu 次 ≤ 唯一页数 %llu"
+                   "（每页最多读盘一次）；同期老段词数之和为 %llu 词次 —— "
+                   "两者差 %.1f 倍\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)pg_unique_total,
+                   (unsigned long long)sum_rm_terms,
+                   (sum_rm_terms > 0)
+                       ? ((double)sum_rm_terms / (double)sum_pg_physical) : 0.0);
+        } else {
+            printf("  [FAIL] C7 真实 IO 是 O(页数)：物理读盘 %llu 次 > 唯一页数 %llu"
+                   "（同一页被逐出后又读回了 —— 帧池不够）\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)pg_unique_total);
+            ok = 0;
+        }
+    } else {
+        /*
+         * ⚠️ C7 本次**测不出差别**，如实记录而不是当成通过：
+         * 全程一次物理读盘都没有发生（帧池 4096 帧装得下整个库，
+         * 合并时要的页全在内存里）⇒ "物理读盘 ≤ 唯一页数"这个判据
+         * 在当前规模下是**空判据**（两边都是 0）。
+         * 想让这个口径有区分力，必须把帧池调小到装不下库 —— 见 PLAN-v1.3.md
+         * 「仍然欠着的」第 5 条。
+         */
+        printf("  [SKIP] C7 真实 IO 是 O(页数)：本次全程物理读盘 %llu 次、"
+               "唯一页数 %llu —— 帧池装得下整个库，这个口径**测不出差别**"
+               "（空判据，不计入达标）\n",
+               (unsigned long long)sum_pg_physical,
+               (unsigned long long)pg_unique_total);
+    }
+
     printf("\nRESULT a4 n_docs=%u batch=%u merges=%u f=%.2f total_io_pages=%llu "
-           "merge_reads_measured=%llu c_pages_per_doc=%.4f c_layer=%.4f c_model=%.4f "
+           "merge_reads_measured=%llu pg_logical_reads=%llu pg_physical_reads=%llu "
+           "pg_unique_pages=%llu c_pages_per_doc=%.4f c_layer=%.4f c_model=%.4f "
            "c_measured=%.4f l_eff=%.3f l_meas=%.2f l_model=%.2f eff=%.3f "
            "q_before_ms=%.3f q_after_ms=%.3f verdict=%s\n",
            n_docs, batch, n_rec, f_avg,
            (unsigned long long)(total_read + total_write),
            (unsigned long long)total_mr,
+           (unsigned long long)sum_pg_logical,
+           (unsigned long long)sum_pg_physical,
+           (unsigned long long)pg_unique_total,
            c_fit, c_layer_fit, c_model,
            (log_f_n > 0.0) ? ((double)total_mr / ((double)n_docs * log_f_n)) : 0.0,
            l_eff,
@@ -753,6 +801,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
 done:
     free(docs);
     free(recs);
+    free(mio);
     free(snap_a);
     free(snap_b);
     free(eff);
@@ -766,7 +815,7 @@ done:
         pager_close(pg);
     }
     ft_bench_corpus_free(&corpus);
-    remove_db(DB_PATH_A4);
+    ft_bench_remove_db(DB_PATH_A4);
     if (failed) {
         return 2;
     }

@@ -69,8 +69,17 @@ typedef enum {
  *
  * payload 是载荷（before + after 拼起来的字节）；对 WAL_FT_TOMB 来说
  * 就是那 4 字节的 doc_id（blen = 0，所以 payload 全是 after）。
+ *
+ * page_id —— 记录头里的页号。
+ *   逻辑记录以前一律写 PAGE_ID_NIL（"不落在任何一页上"），
+ *   但 tombstone 的追加记录必须知道**落在哪一页** ——
+ *   否则撤销时找不到该改哪一页（v1.3 欠账 1 · 坑 M4-24）。
+ *
+ * lsn —— 这条记录的 LSN。
+ *   上层改页时要把自己的页 LSN 设成它：
+ *   刷盘前的 WAL 规则检查（页 LSN <= 已落盘的日志 LSN）靠的就是这个值。
  */
-typedef int (*RecoveryHookFn)(void *ctx, u8 type, u32 xid,
+typedef int (*RecoveryHookFn)(void *ctx, u8 type, u32 xid, u32 page_id, u32 lsn,
                                const u8 *payload, u16 payload_len,
                                RecHookPhase phase);
 

@@ -34,6 +34,80 @@
  * 这**不是**数据损坏，所以不报 E_CORRUPT。
  * 口径：**段号大者胜**（后加入的段是更新的那份），
  * 旧段里同一个 doc_id 的 posting 直接忽略。
+ *
+ * ==================== 物化缓存（v1.3 欠账 5） ====================
+ *
+ * 【为什么要缓存】
+ *
+ * ft_docs 每次扫描都要把**整个索引**物化一遍：
+ * 逐段 → 逐词 → 逐 posting → 按 doc_id 聚合。
+ * 那是 O(文档数) 的内存 + 读**全部**倒排页 ——
+ * 连续扫两次就是白扫两遍。索引没变时，第二遍完全可以复用第一遍的行。
+ *
+ * 【失效判据：索引签名】
+ *
+ * 签名 = (ft_index_nsegs(), ft_index_ndocs(), ft_index_ntombstones())。
+ * 缓存命中条件 = "缓存里的签名 == 现在的签名"。
+ *
+ * 【签名为什么足够：写路径覆盖性论证】
+ *
+ * 要证明两件事：
+ *   (A) 任何会改变 ft_docs 行内容的写路径，都**必然**改变签名；
+ *   (B) 签名不变的写路径**一定不改行内容**（否则就是脏读）。
+ * (A) 与 (B) 合起来 ⇒ 签名是**充分**的失效判据。
+ *
+ * 逐条看索引的写路径（src/modalities/ft/ft_index.c）：
+ *
+ * 1) **新增文档** —— ft_index_add()
+ *    建一个新段并 push 进来 ⇒ 段数 +1，文档数之和 +N。
+ *    ⇒ 签名**必变**。
+ *    入口：db_ft_add()、REPL 的 `FT INDEX <doc_id> <text>`（都走 db_ft_add）。
+ *
+ * 2) **删除** —— ft_index_delete()
+ *    ft_tomb_append() + ft_tomb_insert() ⇒ tombstone 数 +1。
+ *    ⇒ 签名**必变**。
+ *    入口：db_ft_delete()。
+ *    ⚠️ 例外一：**重复删同一篇**是合法的空操作
+ *       （tombstone 已命中就直接返回 OK，tombstone 数不变 ⇒ 签名不变）。
+ *       但此时**行内容也不变**（sealed 本来就是 1）⇒ 缓存继续用是安全的。
+ *
+ * 3) **合并** —— ft_index_merge()
+ *    窗口里 w ≥ 2 个段换成 1 个段 ⇒ 段数减少 w-1 ≥ 1。
+ *    ⇒ 签名**必变**（合并还会物理丢弃 tombstone 的文档，文档数也会变）。
+ *    入口：db_ft_merge()。
+ *    ⚠️ 例外二：合并**失败回滚**时索引状态完全不变 ⇒ 签名不变，
+ *       而行内容也确实没变 ⇒ 缓存继续用是安全的。
+ *
+ * 4) **崩溃恢复** —— ft_catalog.c 里的 ft_index_push_seg()
+ *    把恢复出来的段 push 进来 ⇒ 段数 +1 ⇒ 签名**必变**。
+ *
+ * 5) **段是不可变的**：建好之后没有任何路径改段里的 posting
+ *    ⇒ doc_len / nterms 只能随 1) 和 3) 变，而那两条都改签名。
+ *    ⇒ (A) 成立。
+ *
+ * 【反方向（无害）】
+ *
+ * 签名变了但内容没变（例如删了一篇不存在的文档）⇒ 只是多物化一次，
+ * 结果一样 —— 不安全的方向只有"内容变了而签名没变"，上面已经排除。
+ *
+ * 【残余风险】
+ *
+ * 坑 M4-30：如果将来新增"原地改段"或"清空 tombstone 集合"的写路径，
+ * 签名可能不变而内容变了 —— 那时必须给索引加一个**变更代号**
+ * （单调递增的版本号），并把它并进签名。现在没有这样的路径。
+ *
+ * 【并发与锁序】
+ *
+ * 缓存由一把**叶子互斥量**保护（见 ft_am_cache.c）：
+ * 锁内只做"查缓存 / 换缓存"，**物化在锁外**做（物化要读页）。
+ * 叶子锁不会再去拿别的锁 ⇒ 不与
+ * CATALOG → TXN → BTREE → FRAME → WAL → FREELIST 的锁序冲突。
+ *
+ * 【生命周期】
+ *
+ * 缓存里的行是共享的（几个扫描可能同时在读）⇒ 引用计数（坑 M4-29）：
+ * 缓存持 1 份，每个在扫的扫描各持 1 份，最后一个走的负责释放。
+ * 索引/实例销毁时必须调 ft_am_ctx_release() 把缓存那份还掉。
  */
 
 #include "modalities/ft/ft_am.h"
@@ -62,15 +136,6 @@ static const ColDesc DOC_COLS[4] = {
     { "nterms",  T_INT4, false },
     { "sealed",  T_BOOL, false }
 };
-
-/* ---------------- 一行 ---------------- */
-
-typedef struct {
-    u32 doc_id;
-    u32 doc_len;   /* 词数 */
-    u32 nterms;    /* 命中的不同词数 */
-    u32 sealed;    /* 1 = 已被 tombstone */
-} FtDocRow;
 
 /* ---------------- 聚合用的哈希表 ---------------- */
 
@@ -266,7 +331,7 @@ static int ft_doc_row_cmp(const void *a, const void *b)
  * 内存开销 O(文档数) —— 这是**元数据路径**，不是热路径，
  * 物化一次换掉"每行都去翻倒排链"是对的取舍。
  */
-static int ft_am_materialize(FtIndex *ix, FtDocRow **rows_out, u32 *n_out)
+int ft_am_materialize_index(const FtIndex *ix, FtDocBuf **out)
 {
     FtDocMap map;
     FtTermCtx ctx;
@@ -274,8 +339,7 @@ static int ft_am_materialize(FtIndex *ix, FtDocRow **rows_out, u32 *n_out)
     u32 s;
     int rc = OK;
 
-    *rows_out = NULL;
-    *n_out = 0;
+    *out = NULL;
 
     ft_docmap_init(&map);
     memset(&ctx, 0, sizeof(ctx));
@@ -304,11 +368,12 @@ static int ft_am_materialize(FtIndex *ix, FtDocRow **rows_out, u32 *n_out)
         }
     }
 
-    if (map.count > 0) {
-        FtDocRow *rows = (FtDocRow *)malloc(sizeof(FtDocRow) * (size_t)map.count);
+    {
+        /* 即使没有文档也返回一个空缓冲：调用方不必区分 NULL 与空表 */
+        FtDocBuf *buf = ft_am_buf_new(map.count);
         u32 n = 0;
 
-        if (rows == NULL) {
+        if (buf == NULL) {
             rc = E_NOSPACE;
             goto done;
         }
@@ -316,15 +381,14 @@ static int ft_am_materialize(FtIndex *ix, FtDocRow **rows_out, u32 *n_out)
             if (!map.slots[s].used) {
                 continue;
             }
-            rows[n].doc_id = map.slots[s].doc_id;
-            rows[n].doc_len = map.slots[s].doc_len;
-            rows[n].nterms = map.slots[s].nterms;
-            rows[n].sealed = (u32)(ft_index_is_tomb(ix, map.slots[s].doc_id) ? 1 : 0);
+            buf->rows[n].doc_id = map.slots[s].doc_id;
+            buf->rows[n].doc_len = map.slots[s].doc_len;
+            buf->rows[n].nterms = map.slots[s].nterms;
+            buf->rows[n].sealed = (u32)(ft_index_is_tomb(ix, map.slots[s].doc_id) ? 1 : 0);
             n++;
         }
-        qsort(rows, n, sizeof(FtDocRow), ft_doc_row_cmp);
-        *rows_out = rows;
-        *n_out = n;
+        qsort(buf->rows, n, sizeof(FtDocRow), ft_doc_row_cmp);
+        *out = buf;
     }
 
 done:
@@ -332,12 +396,33 @@ done:
     return rc;
 }
 
+/*
+ * 拿到"可以用的行"。
+ *
+ * 命中缓存 → 直接借用缓存里的行（不重新物化）。
+ * 没命中   → 物化一遍，并把结果放进缓存。
+ *
+ * 返回的行是**借来的**：调用方必须在用完之后调 ft_am_rows_release()。
+ *
+ * 【为什么物化在锁外做】
+ *
+ * 物化要读全部倒排页（要走页锁）。拿着缓存锁读页 =
+ * 把一把叶子锁压在 I/O 上 —— 没必要，还容易让人以为有锁序问题。
+ * 所以：锁内只做"查缓存 / 换缓存"，物化在锁外。
+ *
+ * 【索引在物化期间变了怎么办】
+ *
+ * 物化前后的签名对不上 ⇒ 这份结果可能是"新旧混在一起"的，不能用。
+ * 于是重做（最多 3 次）；还不稳就最后一次的结果直接用（不入缓存）——
+ * 宁可多物化一次，也不能给出混着两个时刻的行。
+ */
 /* ---------------- 扫描状态 ---------------- */
 
 typedef struct {
     FtDocRow *rows;
     u32       nrows;
     u32       cur;
+    FtDocBuf *buf;      /* rows 是从它借来的（结束时要还） */
 
     /* 下推过滤：只枚举符合条件的文档 */
     bool  none;       /* 谓词不可能命中任何行 */
@@ -390,7 +475,7 @@ static int ft_am_scan_begin(StorageAM *am, AmScan **out)
     if (!st) {
         return E_IO;
     }
-    rc = ft_am_materialize(c->ix, &st->rows, &st->nrows);
+    rc = ft_am_rows_acquire(c, &st->buf, &st->rows, &st->nrows);
     if (rc != OK) {
         free(st);
         return rc;
@@ -448,7 +533,7 @@ static int ft_am_scan_end(StorageAM *am, AmScan *s)
     if (!st) {
         return OK;
     }
-    free(st->rows);
+    ft_am_rows_release(st->buf);
     free(st);
     return OK;
 }
@@ -459,6 +544,7 @@ static int ft_am_get(StorageAM *am, Rid rid, u8 *buf, u16 cap, u16 *len)
 {
     FtAmCtx *c = (FtAmCtx *)am->impl;
     FtDocRow *rows = NULL;
+    FtDocBuf *docbuf = NULL;
     u32 n = 0;
     int rc;
 
@@ -468,12 +554,12 @@ static int ft_am_get(StorageAM *am, Rid rid, u8 *buf, u16 cap, u16 *len)
     if (cap < FT_DOC_ROW_BYTES) {
         return E_NOSPACE;
     }
-    rc = ft_am_materialize(c->ix, &rows, &n);
+    rc = ft_am_rows_acquire(c, &docbuf, &rows, &n);
     if (rc != OK) {
         return rc;
     }
     if (rid.page >= n) {
-        free(rows);
+        ft_am_rows_release(docbuf);
         return E_NOTFOUND;
     }
     put_u32(buf, rows[rid.page].doc_id);
@@ -483,7 +569,7 @@ static int ft_am_get(StorageAM *am, Rid rid, u8 *buf, u16 cap, u16 *len)
     if (len) {
         *len = FT_DOC_ROW_BYTES;
     }
-    free(rows);
+    ft_am_rows_release(docbuf);
     return OK;
 }
 
@@ -631,7 +717,7 @@ static int ft_am_push(StorageAM *am, const Predicate *p, AmScan **out)
     if (!st) {
         return E_IO;
     }
-    rc = ft_am_materialize(c->ix, &st->rows, &st->nrows);
+    rc = ft_am_rows_acquire(c, &st->buf, &st->rows, &st->nrows);
     if (rc != OK) {
         free(st);
         return rc;
@@ -685,7 +771,7 @@ static int ft_am_push(StorageAM *am, const Predicate *p, AmScan **out)
         }
         break;
     default:
-        free(st->rows);
+        ft_am_rows_release(st->buf);
         free(st);
         return E_NOTSUP;
     }
@@ -702,7 +788,18 @@ int ft_am_build_docs(FtIndex *ix, StorageAM *out, FtAmCtx *ctx)
         return E_INVAL;
     }
 
+    /*
+     * 重新构造时先把旧缓存还掉 ——
+     * ctx 是**按值**嵌在 DbInstance 里的，重建实例时可能还带着上一轮的缓存。
+     * 不还掉的话，那份缓冲会一直挂在全局存活链表上（等 atexit 才释放）。
+     *
+     * 第一次构造时 ctx 是**零内存**（calloc 出来的）——
+     * 魔数对不上，ft_am_ctx_release() 会当"没有缓存"处理，不碰野指针。
+     */
+    ft_am_ctx_release(ctx);
+
     ctx->ix = ix;
+    ctx->magic = FT_AM_CTX_MAGIC;
 
     out->name = "ft_docs";
     /*

@@ -42,6 +42,7 @@
 
 #include "db.h"
 #include "db_internal.h"
+#include "modalities/ft/ft_am.h"
 #include "modalities/ft/ft_index.h"
 #include "spi/registry.h"
 #include "spi/storage_am.h"
@@ -301,6 +302,169 @@ static void t5_delete(DB *db)
     CHECK(am->scan_end(am, s) == OK);
 }
 
+/* ---------------- 6) 物化缓存 ---------------- */
+
+/*
+ * 【这一项验什么】
+ *
+ * ft_docs 每次扫描都要把整个索引物化一遍。
+ * 索引没变时，第二次扫描应该**复用**上次的行（不重新物化）。
+ *
+ * 三条断言线：
+ *
+ *   a) **命中**：连续两次扫描，第二次的物化次数**不增加**；
+ *   b) **失效**：插入 / 删除 / 合并之后，缓存必须失效（物化次数增加）；
+ *   c) **等价**：缓存里的行与"强制重新物化"的行**逐行逐列完全一致**
+ *      （内容一致 **且 行序一致** —— 行序是 ft_am.c 里 qsort 的输出，
+ *        缓存若打乱了顺序，那就是"看起来对"的错）。
+ */
+
+/* 一批行的快照：用于逐行逐列比较 */
+#define SNAP_MAX 64
+
+typedef struct {
+    int     n;
+    int64_t id[SNAP_MAX];
+    int64_t len[SNAP_MAX];
+    int64_t nterms[SNAP_MAX];
+    int64_t sealed[SNAP_MAX];
+} RowSnap;
+
+/* 扫一遍 ft_docs，把所有行抓成快照 */
+static void snapshot_rows(DB *db, RowSnap *snap)
+{
+    StorageAM *am = spi_registry_find(db->inst->reg, "ft_docs");
+    AmScan *s = NULL;
+    u8 buf[64];
+    u16 len = 0;
+    Rid rid;
+
+    memset(snap, 0, sizeof(*snap));
+    if (!am) {
+        return;
+    }
+    if (am->scan_begin(am, &s) != OK || !s) {
+        return;
+    }
+    for (;;) {
+        DbValue vals[4];
+        int rc = am->scan_next(am, s, &rid, buf, sizeof(buf), &len);
+
+        if (rc == E_EOF) {
+            break;
+        }
+        if (rc != OK) {
+            break;
+        }
+        if (am->decode(am, buf, len, vals) != OK) {
+            break;
+        }
+        if (snap->n >= SNAP_MAX) {
+            break;
+        }
+        snap->id[snap->n] = vals[0].i;
+        snap->len[snap->n] = vals[1].i;
+        snap->nterms[snap->n] = vals[2].i;
+        snap->sealed[snap->n] = vals[3].i;
+        snap->n++;
+    }
+    am->scan_end(am, s);
+}
+
+/* 两份快照完全一致？（行数、每行的四列、行序） */
+static int snap_equal(const RowSnap *a, const RowSnap *b)
+{
+    if (a->n != b->n) {
+        return 0;
+    }
+    for (int i = 0; i < a->n; i++) {
+        if (a->id[i] != b->id[i] ||
+            a->len[i] != b->len[i] ||
+            a->nterms[i] != b->nterms[i] ||
+            a->sealed[i] != b->sealed[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void t6_cache(DB *db)
+{
+    FtAmCtx *ctx = &db->inst->ft_ctx;
+    RowSnap a;
+    RowSnap b;
+    RowSnap c;
+    uint64_t m0;
+    uint64_t m1;
+    uint64_t m2;
+    uint32_t merged = 0;
+
+    /* ---- a) 命中：第二次扫描不再物化 ---- */
+    ft_am_cache_invalidate(ctx);       /* 从干净状态开始 */
+    m0 = ft_am_stat_materialize(ctx);
+    snapshot_rows(db, &a);             /* 第一次：必须物化 */
+    m1 = ft_am_stat_materialize(ctx);
+    CHECK(m1 == m0 + 1);
+
+    snapshot_rows(db, &b);             /* 第二次：命中缓存 */
+    m2 = ft_am_stat_materialize(ctx);
+    CHECK(m2 == m1);                   /* 物化次数**不增加** */
+    CHECK(ft_am_stat_cache_hit(ctx) >= 1);
+    CHECK(snap_equal(&a, &b));         /* 行内容与行序完全一致 */
+
+    /* ---- c) 等价：缓存里的行 == 强制重新物化的行 ---- */
+    ft_am_cache_invalidate(ctx);
+    snapshot_rows(db, &c);             /* 强制重新物化 */
+    CHECK(snap_equal(&a, &c));         /* 内容一致 + 行序一致 */
+
+    /* ---- b) 失效：插入 ---- */
+    m2 = ft_am_stat_materialize(ctx);
+    CHECK(db_ft_add(db, 20, "alpha beta", 10) == DB_OK);
+    snapshot_rows(db, &a);
+    CHECK(ft_am_stat_materialize(ctx) == m2 + 1);   /* 插入 ⇒ 缓存失效 */
+
+    /* 插入后的行 == 强制重新物化的行 */
+    ft_am_cache_invalidate(ctx);
+    snapshot_rows(db, &c);
+    CHECK(snap_equal(&a, &c));
+
+    /* ---- b) 失效：删除 ---- */
+    m2 = ft_am_stat_materialize(ctx);
+    CHECK(db_ft_delete(db, 20) == DB_OK);
+    snapshot_rows(db, &a);
+    CHECK(ft_am_stat_materialize(ctx) == m2 + 1);   /* 删除 ⇒ 缓存失效 */
+
+    ft_am_cache_invalidate(ctx);
+    snapshot_rows(db, &c);
+    CHECK(snap_equal(&a, &c));
+
+    /*
+     * ---- b) 失效：合并 ----
+     *
+     * 合并的触发条件是段数 > FT_MERGE_THRESHOLD（8）——
+     * 现在只有 5 段（4 篇 + 刚加的 1 篇），所以先灌到 9 段。
+     */
+    for (uint32_t i = 0; i < 5; i++) {
+        CHECK(db_ft_add(db, 30 + i, "gamma delta", 11) == DB_OK);
+    }
+    CHECK(db_ft_nsegs(db) > 8);
+
+    m2 = ft_am_stat_materialize(ctx);
+    CHECK(db_ft_merge(db, &merged) == DB_OK);
+    CHECK(merged > 0);                 /* 真的合并了 */
+    snapshot_rows(db, &a);
+    CHECK(ft_am_stat_materialize(ctx) == m2 + 1);   /* 合并 ⇒ 缓存失效 */
+
+    ft_am_cache_invalidate(ctx);
+    snapshot_rows(db, &c);
+    CHECK(snap_equal(&a, &c));
+
+    /* ---- 收尾：释放缓存（不释放也不影响正确性，但会占内存） ---- */
+    ft_am_ctx_release(ctx);
+    CHECK(ft_am_stat_materialize(ctx) == 0);
+    CHECK(ft_am_stat_cache_hit(ctx) == 0);
+}
+
 int main(void)
 {
     DB *db = NULL;
@@ -335,6 +499,7 @@ int main(void)
     t3_sql(db);
     t4_search(db);
     t5_delete(db);
+    t6_cache(db);
 
     db_close(db);
 
