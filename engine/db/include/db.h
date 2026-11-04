@@ -668,4 +668,82 @@ db_err db_geo_count(DB *db, uint64_t *n);
  */
 uint64_t db_geo_page_reads(DB *db);
 
+/* ---------------- 时序模态（v1.5） ---------------- */
+
+/*
+ * 时序 = 模态 6（时间分区 + 列级压缩）。
+ *
+ * 【两条路径，各管各的】
+ *
+ *   db_ts_insert / db_ts_retention        专用 API：写入与过期回收
+ *   ts_readings / ts_partitions 虚拟表   元数据路径：SELECT ... FROM ts_readings
+ *
+ * 为什么"读"走 SQL 而"写"走专用 API：
+ * 写入要**路由到分区**（按时间戳算分区），这条逻辑藏在 AM 内部；
+ * 而 SQL 的 INSERT 走的是执行器的写路径，要绕开它得再开一条路。
+ * ⇒ 写用专用 API（与 blob / graph / vector / geo 模态同一个口径）。
+ *
+ * 【时间戳的单位是毫秒（i64）】
+ *
+ * 【坐标系无关】
+ *
+ * 时序只跟时间有关，不涉及空间。
+ */
+
+/* 一条读数 */
+typedef struct {
+    int64_t time;    /* 毫秒时间戳 */
+    int64_t tag;     /* 标签（设备号 / 状态码） */
+    double  value;   /* 读数 */
+} db_ts_reading;
+
+/*
+ * 建时序存储（一个库只能建一次）。
+ *
+ * 建之前这个库没有时序存储 —— 此时查 ts_readings 会得到"表不存在"，
+ * 而不是"查出一张空表"（与图 / 地理模态同一个口径）。
+ *
+ * 第二次建 → DB_E_INVAL。
+ */
+db_err db_ts_create(DB *db);
+
+/* 这个库有没有时序存储 */
+int db_ts_exists(DB *db);
+
+/*
+ * 追加一条读数。
+ *
+ * 按时间戳路由到分区；分区不存在就建一个。
+ * ⚠️ 时间戳必须是**有限**的、且落在某个已封窗分区里时要**明确报错**
+ * （DB_E_NOTSUP）—— 不能悄悄跑到别处去。
+ *
+ * 坐标/数值不做有效性检查之外的处理（NaN 的 value 是允许的：
+ * 传感器读数就是会这样）。
+ */
+db_err db_ts_insert(DB *db, const db_ts_reading *r);
+
+/*
+ * TTL：把结束时间早于"当前时间 − 保留秒数"的分区整块回收。
+ *
+ * 回收 = 标记 DROPPED + 页归还在全局页分配器里（页号空间共享）。
+ * 幂等：已经过期回收过的分区不会被回收第二次。
+ *
+ * retention_sec = 0 ⇒ 保留 0 秒 ⇒ 除"正在写"的那个分区外全回收。
+ */
+db_err db_ts_retention(DB *db, uint32_t retention_sec);
+
+/* 时序存储里的读数总数 */
+db_err db_ts_count(DB *db, uint64_t *n);
+
+/* 分区个数 */
+db_err db_ts_part_count(DB *db, uint32_t *n);
+
+/*
+ * 诊断：累计读了多少页。
+ *
+ * 与 db_vec_page_reads / db_ft_page_reads / db_geo_page_reads 同一个口径：
+ * 数 pager_get 的次数（缓冲池命中也算）。
+ */
+uint64_t db_ts_page_reads(DB *db);
+
 #endif /* DB_DB_H */
