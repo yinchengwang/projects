@@ -156,6 +156,7 @@ docs/agent-wiki/
 .workbuddy-ai/
 
 # ---- AI 定时任务产出目录（日报/周报/数据库日报） ----
-# 属于 Agent 自动化产物而非工程源码；持续维护的副本在工作区层 C:\code\book\ai-timer，
-# 仓库内这份是 2026-10-25 的过期快照，故不入库。
+# 属于 Agent 自动化产物而非工程源码，不入库。
+# 2026-11-10 起：原工作区层副本 C:\code\book\ai-timer 已迁入本目录（随 book/ 目录退役），
+# 本目录即当前唯一副本，WorkBuddy 三个定时任务的 cwd 需指向此处。
 /ai-timer/
