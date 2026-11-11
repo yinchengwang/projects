@@ -25,10 +25,21 @@ const PANEL_TEXT_LIMIT = 400
 const state = {
   problemId: null,
   language: "cpp",
+  // 按题号存草稿：切页签、切题目再切回来，用户写的代码不能丢
+  draft: {},
+  // 按题号存上一次的判题响应：切页签回来还能看到结果面板
+  result: {},
 }
 
 /** 当前视图：today / bank / practice */
 let currentView = "today"
+
+/**
+ * 渲染序号。每次 render() 自增，用来挡掉异步竞态：
+ * 后发起的 render 序号更大，先发起的 await 回来后发现序号变了就直接放弃，
+ * 不会把过期的面板追加到已经切走的视图里。
+ */
+let renderSeq = 0
 
 /** 极简 DOM 构造器 */
 function el(tag, attrs, children) {
@@ -245,7 +256,7 @@ function renderVerdictPanel(result) {
   return el("section", { class: "panel" }, children)
 }
 
-/** 渲染作答页：题面 + 语言选择 + 代码框 + 提交按钮 + 结果面板 */
+/** 渲染作答页：题面 + 样例 + 语言选择 + 代码框 + 提交按钮 + 结果面板 */
 async function renderPractice() {
   const section = el("section", { class: "panel" })
 
@@ -258,6 +269,7 @@ async function renderPractice() {
   }
 
   const problem = await getJson("/api/problem/" + encodeURIComponent(state.problemId))
+  const samples = (problem.cases && problem.cases.sample) || []
   section.appendChild(el("h2", { text: problem.title + "（" + problem.id + "）" }))
   section.appendChild(el("pre", { class: "statement", text: problem.statement || "（题面为空）" }))
   section.appendChild(
@@ -267,10 +279,29 @@ async function renderPractice() {
         "共 " +
         problem.cases.total +
         " 个用例，界面只展示前 " +
-        problem.cases.sample.length +
+        samples.length +
         " 个样例（全部用例由服务端持有）。",
     })
   )
+
+  // 样例用例：接口只放行前 2 个，展示出来是给用户对答案用的
+  if (samples.length > 0) {
+    section.appendChild(el("h2", { text: "样例用例" }))
+    samples.forEach(function (c, i) {
+      section.appendChild(
+        el("pre", {
+          class: "raw",
+          text:
+            "用例 " +
+            (i + 1) +
+            "\n输入：" +
+            (c.input || "（空）") +
+            "\n期望：" +
+            (c.expect || "（空）"),
+        })
+      )
+    })
+  }
 
   const langSelect = el("select", { id: "judge-language" }, [
     el("option", { value: "cpp", text: "C++" }),
@@ -282,13 +313,24 @@ async function renderPractice() {
   })
 
   const editor = el("textarea", { id: "judge-code", rows: "18", spellcheck: "false" })
+  // 草稿按题号存：切页签、切题再切回来，用户写的代码还在
+  editor.value = state.draft[state.problemId] || ""
+  editor.addEventListener("input", function () {
+    state.draft[state.problemId] = editor.value
+  })
+
   const submit = el("button", { id: "judge-submit", text: "提交判题" })
   const resultBox = el("div", { id: "judge-result" })
+
+  // 上一次的结果面板：切页签回来还在
+  const lastResult = state.result[state.problemId]
+  if (lastResult) resultBox.appendChild(renderVerdictPanel(lastResult))
 
   submit.addEventListener("click", async function () {
     submit.disabled = true
     submit.textContent = "判题中…"
     resultBox.textContent = ""
+    state.draft[state.problemId] = editor.value
     try {
       const body = await postJson("/api/attempt", {
         problemId: state.problemId,
@@ -296,6 +338,7 @@ async function renderPractice() {
         language: state.language,
         mode: "solve",
       })
+      state.result[state.problemId] = body
       resultBox.appendChild(renderVerdictPanel(body))
     } catch (err) {
       resultBox.appendChild(
@@ -332,19 +375,29 @@ async function renderPractice() {
 
 /** 主渲染 */
 async function render() {
+  const seq = ++renderSeq
   const view = document.getElementById("view")
   view.textContent = ""
   renderTabs()
   try {
     if (currentView === "today") {
-      view.appendChild(renderHealth(await getJson("/api/health")))
-      view.appendChild(renderBank(await getJson("/api/bank")))
+      const health = await getJson("/api/health")
+      if (seq !== renderSeq) return
+      view.appendChild(renderHealth(health))
+      const bank = await getJson("/api/bank")
+      if (seq !== renderSeq) return
+      view.appendChild(renderBank(bank))
     } else if (currentView === "bank") {
-      view.appendChild(renderBank(await getJson("/api/bank")))
+      const bank = await getJson("/api/bank")
+      if (seq !== renderSeq) return
+      view.appendChild(renderBank(bank))
     } else {
-      view.appendChild(await renderPractice())
+      const practice = await renderPractice()
+      if (seq !== renderSeq) return
+      view.appendChild(practice)
     }
   } catch (err) {
+    if (seq !== renderSeq) return
     view.appendChild(
       el("section", { class: "panel" }, [
         el("h2", { text: "加载失败" }),
@@ -360,12 +413,26 @@ if (typeof document !== "undefined") {
   })
 }
 
-// Node 下（测试用）可以 require 本文件取纯函数；浏览器里不会执行这一段
+// Node 下（测试用）可以 require 本文件取纯函数与渲染函数；浏览器里不会执行这一段
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     describePanel: describePanel,
     truncate: truncate,
     TONE_BY_VERDICT: TONE_BY_VERDICT,
     PANEL_TEXT_LIMIT: PANEL_TEXT_LIMIT,
+    // 以下只给测试用：让 DOM 冒烟测试能驱动真实的渲染路径
+    __test: {
+      state: state,
+      render: render,
+      renderBank: renderBank,
+      renderPractice: renderPractice,
+      renderVerdictPanel: renderVerdictPanel,
+      setView: function (view) {
+        currentView = view
+      },
+      getView: function () {
+        return currentView
+      },
+    },
   }
 }
