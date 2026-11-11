@@ -9,6 +9,9 @@
 /** 请求体上限 1MB，防止本地误传超大 body 把内存吃满 */
 const MAX_BODY_BYTES = 1024 * 1024
 
+/** 超限后仍继续丢弃的字节上限：超过这个量就放弃收，直接断开连接 */
+const DRAIN_LIMIT_BYTES = MAX_BODY_BYTES * 8
+
 /** 带 HTTP 状态码的错误，供 handler 抛出 */
 class HttpError extends Error {
   constructor(status, message) {
@@ -90,36 +93,77 @@ function createRouter() {
 }
 
 /**
- * 读请求体并解析成 JSON。空 body 返回 {}，非法 JSON 抛 HttpError(400)。
+ * 读请求体并解析成 JSON。
+ * - 空 body 返回 {}
+ * - 非法 JSON 抛 HttpError(400)
+ * - body 超过 1MB 抛 HttpError(413)
+ * - body 解析出来不是 JSON 对象（数字/字符串/null/数组）抛 HttpError(400)
  * @param {import("node:http").IncomingMessage} req
- * @returns {Promise<object>}
+ * @returns {Promise<object>} 恒定 resolve 一个 JSON 对象
  */
 function readJsonBody(req) {
   return new Promise(function (resolve, reject) {
     let size = 0
-    const chunks = []
-    req.on("data", function (chunk) {
+    let chunks = []
+    let settled = false
+
+    /** 超限后用来丢弃剩余数据的回调：只算字节数，不缓存 */
+    function onDrain(chunk) {
+      size += chunk.length
+      if (size > DRAIN_LIMIT_BYTES) {
+        // 病态大 body：读得够多了，直接断连接（此时 413 响应早已写完）
+        req.destroy()
+      }
+    }
+
+    function onData(chunk) {
       size += chunk.length
       if (size > MAX_BODY_BYTES) {
+        // 超限：只 reject，**不要** req.destroy()。
+        // 销毁 socket 之后 app.js 的 413 响应就写不出去了，
+        // 客户端只会收到连接重置（UND_ERR_SOCKET），看不到这句中文提示。
+        settled = true
+        chunks = []
+        req.removeListener("data", onData)
+        // 把剩下的 body 读干净并丢弃：socket 收空，连接收尾时才不会回 RST 把 413 响应打掉
+        req.on("data", onDrain)
+        req.resume()
         reject(new HttpError(413, "请求体过大（上限 1MB）"))
-        req.destroy()
         return
       }
       chunks.push(chunk)
-    })
+    }
+
+    req.on("data", onData)
     req.on("end", function () {
+      if (settled) return
+      settled = true
       const raw = Buffer.concat(chunks).toString("utf8").trim()
       if (raw === "") {
         resolve({})
         return
       }
+      let value
       try {
-        resolve(JSON.parse(raw))
+        value = JSON.parse(raw)
       } catch (e) {
         reject(new HttpError(400, "请求体不是合法 JSON"))
+        return
       }
+      // 只接受 JSON 对象：数字、字符串、null、数组都不是对象。
+      // 悄悄当成空对象会把「客户端 body 传错了」变成「服务端字段缺失」，更难排查，
+      // 所以直接报 400，让调用方明确知道 body 的形状不对。
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        reject(new HttpError(400, "请求体必须是 JSON 对象"))
+        return
+      }
+      resolve(value)
     })
-    req.on("error", reject)
+    req.on("error", function (err) {
+      if (settled) return
+      settled = true
+      reject(err)
+    })
   })
 }
 

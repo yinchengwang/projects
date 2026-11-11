@@ -9,7 +9,7 @@ const http = require("node:http")
 const fs = require("node:fs")
 const path = require("node:path")
 
-const { createRouter } = require("./router.js")
+const { createRouter, HttpError } = require("./router.js")
 
 const ROOT = path.resolve(__dirname, "..")
 const WEB_DIR = path.join(ROOT, "web")
@@ -37,12 +37,22 @@ function sendJson(res, status, body) {
 }
 
 /**
+ * API 请求前缀判定：/api 与 /api/... 都算 API 请求。
+ * 统一成一个 helper，免得 /api 漏到静态分支去回 text/plain 的 404，
+ * 跟 /api/nope 的 JSON 404 对不上。
+ */
+function isApiPath(urlPath) {
+  return urlPath === "/api" || urlPath.indexOf("/api/") === 0
+}
+
+/**
  * 把 URL 路径映射到 web/ 内的文件；越界或编码非法一律拒绝（返回 null）。
+ * 入参是已经切掉查询串的路径。
  */
 function resolveStatic(urlPath) {
   let clean
   try {
-    clean = decodeURIComponent(urlPath.split("?")[0])
+    clean = decodeURIComponent(urlPath)
   } catch (e) {
     return null
   }
@@ -60,6 +70,8 @@ function createServer(opts) {
   const options = opts || {}
   const router = createRouter()
   const routes = options.routes || []
+  /** 常驻的 server 错误监听器只装一次，避免 listen 被调多次时重复挂 */
+  let runtimeErrorHandled = false
   routes.forEach(function (route) {
     router.add(route.method, route.pattern, route.handler)
   })
@@ -76,13 +88,22 @@ function createServer(opts) {
           return found.route.handler(req, res, found.params, query)
         })
         .catch(function (err) {
-          if (res.headersSent) {
-            res.end()
+          // 响应已经开始发出、或连接已经断了：不能再改状态码，只能收尾
+          if (res.headersSent || res.writableEnded || res.destroyed) {
+            if (!res.writableEnded && !res.destroyed) res.end()
             return
           }
-          const status = err && err.status ? err.status : 500
+          // 只有 HttpError 的文案是「我们自己写的中文」，可以直接透给浏览器；
+          // 其它异常（TypeError 之类）是原生英文报错，透出去既看不懂也暴露实现细节
+          const isHttpError = err instanceof HttpError
+          // 只认 4xx/5xx：非法状态码会让 res.writeHead 抛错，反而把服务带崩
+          const status = isHttpError && err.status >= 400 && err.status <= 599 ? err.status : 500
+          if (!isHttpError) {
+            // 服务端留一份完整堆栈，不然异常在终端里毫无痕迹
+            console.error("[algo-plan] 接口 " + req.method + " " + rawPath + " 处理异常：", err)
+          }
           sendJson(res, status, {
-            error: (err && err.message) || "服务端出错",
+            error: isHttpError ? err.message : "服务端出错",
           })
         })
       return
@@ -97,7 +118,7 @@ function createServer(opts) {
       return
     }
 
-    if (rawPath.indexOf("/api/") === 0) {
+    if (isApiPath(rawPath)) {
       sendJson(res, 404, { error: "接口不存在", path: rawPath })
       return
     }
@@ -108,12 +129,28 @@ function createServer(opts) {
       res.end("400 非法路径")
       return
     }
-    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
-      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
-      res.end("404 找不到")
+    let body
+    try {
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+        res.end("404 找不到")
+        return
+      }
+      body = fs.readFileSync(file)
+    } catch (err) {
+      // Windows 上文件被独占锁定（EPERM/EBUSY）时 statSync/readFileSync 会抛错。
+      // 不兜住的话异常会从请求回调逃出去，Node 没有 uncaughtException 处理，整个服务挂掉。
+      const code = err && err.code ? err.code : "未知错误"
+      console.error("[algo-plan] 读取静态文件失败：" + file + "（" + code + "）")
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
+        res.end("404 找不到")
+        return
+      }
+      res.writeHead(500, { "content-type": "text/plain; charset=utf-8" })
+      res.end("500 服务器内部错误")
       return
     }
-    const body = fs.readFileSync(file)
     res.writeHead(200, {
       "content-type": MIME[path.extname(file)] || "application/octet-stream",
       "content-length": body.length,
@@ -126,8 +163,24 @@ function createServer(opts) {
     server: server,
     listen: function (port) {
       return new Promise(function (resolve, reject) {
-        server.once("error", reject)
+        function onListenError(err) {
+          reject(err)
+        }
+        server.once("error", onListenError)
         server.listen(port, "127.0.0.1", function () {
+          // listen 成功后撤掉这个一次性监听器：它留在 server 上就是空转，
+          // 第一次 error 被已经 settle 的 reject 吞掉，第二次 error 就没人接（未捕获异常）。
+          server.removeListener("error", onListenError)
+          if (!runtimeErrorHandled) {
+            runtimeErrorHandled = true
+            // 常驻错误处理器：服务运行期的 socket 错误只记中文日志，不让进程崩掉
+            server.on("error", function (err) {
+              console.error(
+                "[algo-plan] 服务运行期错误：" + (err && err.code ? err.code : "未知错误"),
+                err
+              )
+            })
+          }
           resolve(server.address().port)
         })
       })

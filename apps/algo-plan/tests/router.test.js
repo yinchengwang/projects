@@ -7,7 +7,7 @@ const test = require("node:test")
 const assert = require("node:assert")
 const { Readable } = require("node:stream")
 
-const { compile, createRouter, readJsonBody } = require("../server/router.js")
+const { compile, createRouter, readJsonBody, MAX_BODY_BYTES } = require("../server/router.js")
 
 /** 造一个假的 IncomingMessage */
 function fakeReq(text) {
@@ -65,4 +65,33 @@ test("readJsonBody 非法 JSON 报 400", async function () {
       return err.status === 400
     }
   )
+})
+
+test("readJsonBody 请求体超限报 413", async function () {
+  const big = "x".repeat(MAX_BODY_BYTES + 1)
+  await assert.rejects(
+    function () {
+      return readJsonBody(fakeReq(big))
+    },
+    function (err) {
+      return err.status === 413
+    }
+  )
+})
+
+test("readJsonBody 解析结果不是对象时报 400", async function () {
+  // 数字、字符串、null、数组都不是 JSON 对象；当成空对象会把
+  // 「客户端 body 传错了」变成「服务端字段缺失」，所以直接报 400
+  const notObjects = ["123", '"abc"', "null", "[1,2]"]
+  for (const raw of notObjects) {
+    await assert.rejects(
+      function () {
+        return readJsonBody(fakeReq(raw))
+      },
+      function (err) {
+        return err.status === 400
+      },
+      "body 为 " + raw + " 时应报 400"
+    )
+  }
 })

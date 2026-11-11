@@ -74,3 +74,15 @@ test("静态资源根目录指向 web/", function () {
   const { WEB_DIR } = require("../server/app.js")
   assert.strictEqual(path.basename(WEB_DIR), "web")
 })
+
+test("静态资源带查询串仍能正常返回", async function () {
+  const app = createServer({ routes: [] })
+  const port = await app.listen(0)
+  try {
+    const res = await fetch("http://127.0.0.1:" + port + "/style.css?v=1")
+    assert.strictEqual(res.status, 200)
+    assert.strictEqual(res.headers.get("content-type"), "text/css; charset=utf-8")
+  } finally {
+    await app.close()
+  }
+})
