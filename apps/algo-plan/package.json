@@ -1,0 +1,11 @@
+{
+  "name": "algo-plan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "算法能力提升计划 App（本地 Web，零依赖零构建）",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/main.js",
+    "test": "node tests/run-all.js"
+  }
+}

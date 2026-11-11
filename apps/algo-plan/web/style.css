@@ -1,0 +1,66 @@
+:root {
+  --bg: #14161a;
+  --panel: #1d2026;
+  --line: #2c3038;
+  --fg: #e6e8ec;
+  --muted: #9aa1ad;
+  --accent: #5aa9ff;
+  --ok: #4ec9a0;
+  --bad: #e5675f;
+  --warn: #e0b341;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.6 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.topbar h1 { font-size: 17px; margin: 0; font-weight: 600; }
+nav button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 4px 2px;
+  margin-right: 16px;
+  cursor: pointer;
+}
+nav button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.panel h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+.kv { display: flex; flex-wrap: wrap; gap: 10px 28px; font-size: 14px; }
+.kv div { color: var(--muted); }
+.kv span { color: var(--fg); }
+.badge {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-right: 6px;
+}
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.bad { color: var(--bad); border-color: var(--bad); }
+.badge.warn { color: var(--warn); border-color: var(--warn); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+.error { color: var(--bad); }
+.muted { color: var(--muted); font-size: 13px; }
