@@ -1,9 +1,34 @@
 "use strict"
 /**
- * app.js —— 前端逻辑（M1：只渲染「今日」页的骨架与题库概览）
+ * app.js —— 前端逻辑（M3：今日页 + 题库页 + 作答页 + 判题结果面板）
  *
- * 原生 JS，无构建步骤。后续里程碑在这里接作答 / 复习 / 轮次 / 诊断页。
+ * 原生 JS，无构建步骤。后续里程碑在这里接复习 / 轮次 / 诊断页。
+ *
+ * 判题契约（要显示给用户看）：
+ *   提交的是完整的 stdin→stdout 程序，必须自己写 main()。
+ *   系统不会替你生成入口，也不会注入 Solution 包装。
  */
+
+/** verdict → 面板色调（与 judge/runner.js 的 VERDICT_PANEL.tone 对应） */
+const TONE_BY_VERDICT = {
+  pass: "ok",
+  wrong_answer: "bad",
+  timeout: "warn",
+  compile_error: "bad",
+  runtime_error: "bad",
+}
+
+/** 面板里期望/实际最多显示多少字符 */
+const PANEL_TEXT_LIMIT = 400
+
+/** 前端状态：当前正在作答的题目与语言 */
+const state = {
+  problemId: null,
+  language: "cpp",
+}
+
+/** 当前视图：today / bank / practice */
+let currentView = "today"
 
 /** 极简 DOM 构造器 */
 function el(tag, attrs, children) {
@@ -31,6 +56,79 @@ async function getJson(url) {
   return body
 }
 
+/** 提交 JSON，失败时抛出带中文说明的错误 */
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error((data && data.error) || "请求失败：" + res.status)
+  }
+  return data
+}
+
+/** 截断过长文本并注明被截了多少 */
+function truncate(text, limit) {
+  const s = String(text === null || text === undefined ? "" : text)
+  if (s.length <= limit) return s
+  return s.slice(0, limit) + "\n…（已截断，原文共 " + s.length + " 字符）"
+}
+
+/**
+ * 把判题结果整理成结果面板的数据（纯函数，不碰 DOM，便于单测）
+ * @param {object} result POST /api/attempt 的响应
+ */
+function describePanel(result) {
+  const r = result || {}
+  const verdict = String(r.verdict || "")
+  const failedCase = r.failedCase || null
+  return {
+    verdict: verdict,
+    tone: TONE_BY_VERDICT[verdict] || "",
+    title: String(r.message || ""),
+    rows: [
+      {
+        label: "用例",
+        value: String(r.passedCases || 0) + " / " + String(r.totalCases || 0) + " 通过",
+      },
+      { label: "耗时", value: String(r.durationMs || 0) + " ms" },
+    ],
+    failed: failedCase
+      ? {
+          index: failedCase.index,
+          input: truncate(failedCase.input, PANEL_TEXT_LIMIT),
+          expected: truncate(failedCase.expected, PANEL_TEXT_LIMIT),
+          actual: truncate(failedCase.actual, PANEL_TEXT_LIMIT),
+        }
+      : null,
+    compilerOutput: truncate(r.compilerOutput || "", PANEL_TEXT_LIMIT * 3),
+  }
+}
+
+/** 渲染顶栏页签 */
+function renderTabs() {
+  const nav = document.getElementById("tabs")
+  nav.textContent = ""
+  const views = [
+    { key: "today", label: "今日" },
+    { key: "bank", label: "题库" },
+    { key: "practice", label: "作答" },
+  ]
+  views.forEach(function (item) {
+    const btn = document.createElement("button")
+    btn.textContent = item.label
+    if (item.key === currentView) btn.className = "active"
+    btn.addEventListener("click", function () {
+      currentView = item.key
+      render()
+    })
+    nav.appendChild(btn)
+  })
+}
+
 /** 渲染健康状态面板 */
 function renderHealth(health) {
   const learning = health.learning || {}
@@ -52,12 +150,18 @@ function renderHealth(health) {
   ])
 }
 
-/** 渲染题库列表 */
+/** 渲染题库列表（每行带一个「作答」按钮） */
 function renderBank(bank) {
   const items = (bank && bank.items) || []
   const rows = items.map(function (item) {
     const topics = (item.topics || []).map(function (t) {
       return el("span", { class: "badge", text: t })
+    })
+    const go = el("button", { text: "作答" })
+    go.addEventListener("click", function () {
+      state.problemId = item.id
+      currentView = "practice"
+      render()
     })
     return el("tr", {}, [
       el("td", { text: item.id }),
@@ -65,14 +169,21 @@ function renderBank(bank) {
       el("td", { text: item.difficulty }),
       el("td", {}, topics),
       el("td", {}, [
-        el("span", { class: item.needsFill ? "badge warn" : "badge", text: item.needsFill ? "待补全" : item.status }),
+        el("span", {
+          class: item.needsFill ? "badge warn" : "badge",
+          text: item.needsFill ? "待补全" : item.status,
+        }),
       ]),
+      el("td", {}, [go]),
     ])
   })
   return el("section", { class: "panel" }, [
     el("h2", { text: "题库（" + (bank ? bank.total : 0) + "）" }),
     items.length === 0
-      ? el("p", { class: "muted", text: "题库还是空的。设置 ALGO_PLAN_LEARNING_ROOT 后运行 node tools/seed-bank.js 导入样板题。" })
+      ? el("p", {
+          class: "muted",
+          text: "题库还是空的。设置 ALGO_PLAN_LEARNING_ROOT 后运行 node tools/seed-bank.js 导入样板题。",
+        })
       : el("table", {}, [
           el("thead", {}, [
             el("tr", {}, [
@@ -81,6 +192,7 @@ function renderBank(bank) {
               el("th", { text: "难度" }),
               el("th", { text: "知识点" }),
               el("th", { text: "状态" }),
+              el("th", { text: "操作" }),
             ]),
           ]),
           el("tbody", {}, rows),
@@ -88,15 +200,150 @@ function renderBank(bank) {
   ])
 }
 
+/** 渲染判题结果面板 */
+function renderVerdictPanel(result) {
+  const p = describePanel(result)
+  const children = [
+    el("h2", { text: p.title || "判题结果" }),
+    el("div", { class: "kv" }, p.rows.map(function (row) {
+      return el("div", {}, [
+        document.createTextNode(row.label + "："),
+        el("span", { text: row.value }),
+      ])
+    })),
+  ]
+  if (p.verdict) {
+    children.push(el("span", { class: "badge " + (p.tone || ""), text: p.verdict }))
+  }
+  if (p.failed) {
+    children.push(el("h2", { text: "失败用例" }))
+    children.push(el("div", { class: "kv" }, [
+      el("div", {}, [
+        document.createTextNode("第 " + p.failed.index + " 个用例输入："),
+        el("span", { text: p.failed.input }),
+      ]),
+      el("div", {}, [
+        document.createTextNode("期望："),
+        el("span", { text: p.failed.expected }),
+      ]),
+      el("div", {}, [
+        document.createTextNode("实际："),
+        el("span", { text: p.failed.actual }),
+      ]),
+    ]))
+  }
+  if (p.compilerOutput) {
+    children.push(el("h2", { text: "编译 / 错误原文" }))
+    children.push(el("pre", { class: "raw", text: p.compilerOutput }))
+  }
+  children.push(
+    el("p", {
+      class: "muted",
+      text: "提示：判题不是安全沙箱，只防跑飞与死循环，不防恶意代码。",
+    })
+  )
+  return el("section", { class: "panel" }, children)
+}
+
+/** 渲染作答页：题面 + 语言选择 + 代码框 + 提交按钮 + 结果面板 */
+async function renderPractice() {
+  const section = el("section", { class: "panel" })
+
+  if (!state.problemId) {
+    section.appendChild(el("h2", { text: "作答" }))
+    section.appendChild(
+      el("p", { class: "muted", text: "先在「题库」里点一道题的「作答」按钮。" })
+    )
+    return section
+  }
+
+  const problem = await getJson("/api/problem/" + encodeURIComponent(state.problemId))
+  section.appendChild(el("h2", { text: problem.title + "（" + problem.id + "）" }))
+  section.appendChild(el("pre", { class: "statement", text: problem.statement || "（题面为空）" }))
+  section.appendChild(
+    el("p", {
+      class: "muted",
+      text:
+        "共 " +
+        problem.cases.total +
+        " 个用例，界面只展示前 " +
+        problem.cases.sample.length +
+        " 个样例（全部用例由服务端持有）。",
+    })
+  )
+
+  const langSelect = el("select", { id: "judge-language" }, [
+    el("option", { value: "cpp", text: "C++" }),
+    el("option", { value: "python", text: "Python" }),
+  ])
+  langSelect.value = state.language
+  langSelect.addEventListener("change", function () {
+    state.language = langSelect.value
+  })
+
+  const editor = el("textarea", { id: "judge-code", rows: "18", spellcheck: "false" })
+  const submit = el("button", { id: "judge-submit", text: "提交判题" })
+  const resultBox = el("div", { id: "judge-result" })
+
+  submit.addEventListener("click", async function () {
+    submit.disabled = true
+    submit.textContent = "判题中…"
+    resultBox.textContent = ""
+    try {
+      const body = await postJson("/api/attempt", {
+        problemId: state.problemId,
+        code: editor.value,
+        language: state.language,
+        mode: "solve",
+      })
+      resultBox.appendChild(renderVerdictPanel(body))
+    } catch (err) {
+      resultBox.appendChild(
+        el("section", { class: "panel" }, [
+          el("h2", { text: "判题失败" }),
+          el("p", { class: "error", text: String(err.message || err) }),
+        ])
+      )
+    } finally {
+      submit.disabled = false
+      submit.textContent = "提交判题"
+    }
+  })
+
+  section.appendChild(
+    el("div", { class: "kv" }, [
+      el("div", {}, [document.createTextNode("语言："), langSelect]),
+    ])
+  )
+  section.appendChild(
+    el("p", {
+      class: "muted",
+      text:
+        "判题契约：提交的是完整的 stdin→stdout 程序，必须自己写 main()；" +
+        "系统不会替你生成入口，也不会注入 Solution 包装。",
+    })
+  )
+  section.appendChild(editor)
+  section.appendChild(submit)
+  section.appendChild(resultBox)
+
+  return section
+}
+
 /** 主渲染 */
 async function render() {
   const view = document.getElementById("view")
   view.textContent = ""
+  renderTabs()
   try {
-    const health = await getJson("/api/health")
-    const bank = await getJson("/api/bank")
-    view.appendChild(renderHealth(health))
-    view.appendChild(renderBank(bank))
+    if (currentView === "today") {
+      view.appendChild(renderHealth(await getJson("/api/health")))
+      view.appendChild(renderBank(await getJson("/api/bank")))
+    } else if (currentView === "bank") {
+      view.appendChild(renderBank(await getJson("/api/bank")))
+    } else {
+      view.appendChild(await renderPractice())
+    }
   } catch (err) {
     view.appendChild(
       el("section", { class: "panel" }, [
@@ -107,6 +354,18 @@ async function render() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", function () {
-  render()
-})
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", function () {
+    render()
+  })
+}
+
+// Node 下（测试用）可以 require 本文件取纯函数；浏览器里不会执行这一段
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    describePanel: describePanel,
+    truncate: truncate,
+    TONE_BY_VERDICT: TONE_BY_VERDICT,
+    PANEL_TEXT_LIMIT: PANEL_TEXT_LIMIT,
+  }
+}
