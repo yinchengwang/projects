@@ -16,6 +16,7 @@ const { parseProblemMarkdown } = require("../core/bank/parse.js")
 const { validateProblem } = require("../core/bank/problem.js")
 const sandbox = require("../judge/sandbox.js")
 const manifest = require("../fixtures/judge/manifest.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 function read(file) {
   return fs.readFileSync(file, "utf8")
@@ -66,7 +67,7 @@ test("题库里的参考解法与 code/ 里的正例逐字一致", function () {
 })
 
 test("负例：cpp-compile-error 真的编不过", async function () {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "algo-plan-fx-"))
+  const dir = tmpDir("algo-plan-fx-")
   const source = path.join(dir, "main.cpp")
   fs.copyFileSync(manifest.CODE.cppCompileError, source)
   const run = await sandbox.runCommand("g++", ["-std=c++17", "-O2", "main.cpp", "-o", "main"], {
@@ -78,7 +79,7 @@ test("负例：cpp-compile-error 真的编不过", async function () {
 })
 
 test("负例：cpp-timeout 真的停不下来", async function () {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "algo-plan-fx-"))
+  const dir = tmpDir("algo-plan-fx-")
   const source = path.join(dir, "main.cpp")
   fs.copyFileSync(manifest.CODE.cppTimeout, source)
   const compile = await sandbox.runCommand("g++", ["-std=c++17", "-O2", "main.cpp", "-o", "main"], {
@@ -93,7 +94,7 @@ test("负例：cpp-timeout 真的停不下来", async function () {
 })
 
 test("负例：cpp-runtime-error 真的非零退出", async function () {
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "algo-plan-fx-"))
+  const dir = tmpDir("algo-plan-fx-")
   const source = path.join(dir, "main.cpp")
   fs.copyFileSync(manifest.CODE.cppRuntimeError, source)
   const compile = await sandbox.runCommand("g++", ["-std=c++17", "-O2", "main.cpp", "-o", "main"], {
@@ -111,7 +112,7 @@ test("负例：cpp-runtime-error 真的非零退出", async function () {
 test("负例：python-runtime-error 真的非零退出并留下 traceback", async function () {
   const python = sandbox.detectPython()
   assert.ok(python)
-  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "algo-plan-fx-"))
+  const dir = tmpDir("algo-plan-fx-")
   const source = path.join(dir, "main.py")
   fs.copyFileSync(manifest.CODE.pythonRuntimeError, source)
   const run = await sandbox.runCommand(python.cmd, python.args.concat(["main.py"]), {

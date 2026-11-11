@@ -11,10 +11,11 @@ const path = require("node:path")
 
 const { createApp } = require("../server/app.js")
 const manifest = require("../fixtures/judge/manifest.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 /** 造一个带一道有用例的题的 learning 仓 */
 function tempLearning() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-attempt-"))
+  const root = tmpDir("algo-plan-attempt-")
   const dir = path.join(root, "bank", "interview")
   fs.mkdirSync(dir, { recursive: true })
   fs.copyFileSync(manifest.PROBLEMS.cppSum, path.join(dir, "self-00010.md"))
@@ -120,7 +121,7 @@ test("非法 mode 返回 400", async function () {
 })
 
 test("没有测试用例的题目返回 400 并说清原因", async function () {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-attempt-"))
+  const root = tmpDir("algo-plan-attempt-")
   const dir = path.join(root, "bank", "interview")
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(
@@ -195,7 +196,7 @@ test("超时：settings 里的 judge.timeout_ms 生效", async function () {
 })
 
 test("Python 提交走真实解释器，判为 pass", async function () {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-attempt-"))
+  const root = tmpDir("algo-plan-attempt-")
   const dir = path.join(root, "bank", "fundamentals")
   fs.mkdirSync(dir, { recursive: true })
   fs.copyFileSync(manifest.PROBLEMS.pythonReverse, path.join(dir, "self-00011.md"))

@@ -12,6 +12,7 @@ const os = require("node:os")
 const path = require("node:path")
 
 const sandbox = require("../judge/sandbox.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 test("detectCompiler 找到本机的 g++ 并给出版本", function () {
   const compiler = sandbox.detectCompiler()
@@ -105,7 +106,7 @@ test("runCommand 超时会掐断子进程并标记 timedOut", async function () 
 })
 
 test("超时后整棵进程树都被杀掉（孙进程也停）", async function () {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-tree-"))
+  const dir = tmpDir("algo-plan-tree-")
   const log = path.join(dir, "grandchild.log")
   const parent = path.join(dir, "parent.js")
   const grandchild = path.join(dir, "grandchild.js")

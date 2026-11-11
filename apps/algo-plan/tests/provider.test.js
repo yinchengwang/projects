@@ -12,9 +12,10 @@ const path = require("node:path")
 const { FileProvider } = require("../core/bank/provider.js")
 const { createProblem } = require("../core/bank/problem.js")
 const { serializeProblemMarkdown } = require("../core/bank/parse.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 function tempBank() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-bank-"))
+  const dir = tmpDir("algo-plan-bank-")
   return dir
 }
 

@@ -12,6 +12,7 @@ const os = require("node:os")
 const path = require("node:path")
 
 const solutions = require("../tools/import-solutions.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 // 真实片段：learning/code-solutions/c/src/c/leetcode_1_100.c
 const C_RANGE_EXCERPT = `#include <stdlib.h>
@@ -86,7 +87,7 @@ const README_EXCERPT = `# 滑动窗口 (Sliding Window)
 `
 
 function tempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  return tmpDir(prefix)
 }
 
 /** 造一个临时的 learning 仓根目录，塞进真实的题解文件片段 */

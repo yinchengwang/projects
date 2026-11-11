@@ -17,10 +17,11 @@ const importCatalog = require("../tools/import-catalog.js")
 const importSolutions = require("../tools/import-solutions.js")
 const { parseProblemMarkdown } = require("../core/bank/parse.js")
 const { isValidId } = require("../core/bank/problem.js")
+const { tmpDir: makeTmpDir } = require("./helpers/tmp.js")
 
 /** 建临时目录 */
 function tmpDir(tag) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-m2-" + tag + "-"))
+  return makeTmpDir("algo-plan-m2-" + tag + "-")
 }
 
 /** 写文件（自动建目录） */

@@ -12,12 +12,13 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 const { execFileSync, spawnSync } = require("node:child_process")
+const { tmpDir } = require("./helpers/tmp.js")
 
 const RUN_ALL = path.join(__dirname, "run-all.js")
 
 /** 建一个临时目录，把 run-all.js 复制进去，模拟「另一个工程」 */
 function makeSandbox() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-harness-"))
+  const dir = tmpDir("algo-plan-harness-")
   const testsDir = path.join(dir, "tests")
   fs.mkdirSync(testsDir)
   fs.copyFileSync(RUN_ALL, path.join(testsDir, "run-all.js"))

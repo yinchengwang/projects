@@ -10,10 +10,11 @@ const os = require("node:os")
 const path = require("node:path")
 
 const { createApp } = require("../server/app.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 /** 造一个带一道题的 learning 仓 */
 function tempLearning() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-learning-"))
+  const root = tmpDir("algo-plan-learning-")
   const dir = path.join(root, "bank", "interview")
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(

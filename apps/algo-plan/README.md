@@ -126,6 +126,11 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node tools/import-bank.js --force
   `python3` → `python` → `py -3` 依次探测（第一个能 `--version` 的胜出）。
 - 单用例默认超时 2000ms，超时杀整棵进程树（Windows `taskkill /T /F`，POSIX 进程组 kill）。
 - verdict 只有五个：`pass` / `wrong_answer` / `timeout` / `compile_error` / `runtime_error`。
+- 单次运行的 stdout/stderr 各封顶 **2MB**，超了截断——不封顶的话，一个死循环打印的
+  程序会把输出撑到几百 MB，拼字符串时撞上 V8 的长度上限抛 `ERR_STRING_TOO_LONG`，
+  那行代码在事件回调里，抛出去就是 `uncaughtException`，**整个服务进程直接死**。
+- 杀进程树之后还有 **2 秒宽限期**：到点还没结束就强行按超时收摊，
+  免得请求永远挂着、临时目录永远删不掉。
 
 **判题不是安全沙箱**：它防跑飞、死循环、爆内存、编译垃圾，**不防恶意代码**。
 用户代码以当前用户权限在系统临时目录里跑，每题一个临时目录，判完即删。
@@ -153,7 +158,7 @@ node tests/run-all.js
 | `parse.test.js` | frontmatter、用例表、代码块、往返等价 |
 | `db.test.js` | 建表、配置、流水、复习卡片、知识点 |
 | `provider.test.js` | 题库读写、过滤、坏文件容错 |
-| `api.test.js` | 四个接口、纯本地模式降级、用例不外泄 |
+| `api.test.js` | 三个接口（健康 / 题库 / 单题）、纯本地模式降级、用例不外泄 |
 | `e2e.test.js` | 导入 → 起服务 → 打接口 → 落盘 |
 | `legacy.test.js` | 死脚本内联清单的静态解析：分类合并、题号提取、标题还原、标签归一化 |
 | `solutions-scan.test.js` | 存量题解扫描：标记切分、文件名取号、专题识别、索引解析 |
@@ -163,9 +168,10 @@ node tests/run-all.js
 | `judge-spec.test.js` | 用例归一化、输出比对、容差比较 |
 | `sandbox.test.js` | 工具链探测、临时目录、喂 stdin、超时杀进程树 |
 | `judge-fixtures.test.js` | fixture 自检：正例对、三类负例确实坏 |
-| `runner.test.js` | 五类 verdict 端到端、判题契约反例 |
+| `runner.test.js` | 五类 verdict 端到端、判题契约反例、输出上限、宽限期兜底、临时目录清理 |
 | `attempt.test.js` | `POST /api/attempt` 的形状、校验、流水落库 |
 | `web-panel.test.js` | 结果面板数据整理（纯函数） |
+| `web-dom.test.js` | 前端渲染路径（DOM 桩）：样例渲染、草稿不丢、渲染竞态 |
 
 ## 归属
 

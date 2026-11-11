@@ -12,6 +12,7 @@ const os = require("node:os")
 const path = require("node:path")
 
 const catalog = require("../tools/import-catalog.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 // 与 tests/legacy.test.js 里同一份真实片段
 const GEN_EXCERPT = `
@@ -58,7 +59,7 @@ var src = fs.readFileSync(SRC, "utf-8");
 `
 
 function tempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  return tmpDir(prefix)
 }
 
 /** 造一个临时 scripts 目录，把三个死脚本的片段放进去 */

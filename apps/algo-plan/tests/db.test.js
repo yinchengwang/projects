@@ -10,6 +10,7 @@ const os = require("node:os")
 const path = require("node:path")
 
 const { openDb, createStore } = require("../server/db.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 function freshStore() {
   const db = openDb(":memory:")
@@ -30,7 +31,7 @@ test("openDb 建出四张表", function () {
 })
 
 test("openDb 在文件路径下自动建目录", function () {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-db-"))
+  const dir = tmpDir("algo-plan-db-")
   const file = path.join(dir, "nested", "app.db")
   const db = openDb(file)
   assert.ok(fs.existsSync(file), "应创建数据库文件")

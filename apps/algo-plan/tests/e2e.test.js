@@ -11,9 +11,10 @@ const path = require("node:path")
 
 const { createApp } = require("../server/app.js")
 const seed = require("../tools/seed-bank.js")
+const { tmpDir } = require("./helpers/tmp.js")
 
 function tempLearning() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "algo-plan-e2e-"))
+  return tmpDir("algo-plan-e2e-")
 }
 
 test("样板题能导入 learning 仓的 bank/", function () {
