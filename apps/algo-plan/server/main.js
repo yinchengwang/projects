@@ -20,9 +20,12 @@ function main() {
   checkNodeVersion()
   const app = createApp()
   const port = Number(process.env.PORT || 5173)
+  // listen 是否已经成功：用来区分「端口没起来」和「起来了但后面的启动输出炸了」
+  let listenOk = false
   app
     .listen(port)
     .then(function (p) {
+      listenOk = true
       console.log("算法能力计划 App 已启动：http://127.0.0.1:" + p)
       if (app.learning.ok) {
         console.log("learning 仓：" + app.learning.root)
@@ -31,15 +34,36 @@ function main() {
       }
     })
     .catch(function (err) {
-      // listen 失败（端口被占用等）：打中文错误再退出。
-      // 不接 catch 的话会变成未捕获 rejection，打印英文系统错误 + 堆栈，
-      // 跟这个文件里精心写的中文版本闸门不是一个风格。
       const code = err && err.code ? err.code : "未知错误"
-      console.error("启动失败：无法监听端口 " + port + "（" + code + "）")
+      if (listenOk) {
+        // listen 已经成功了：异常来自上面的 .then 回调（比如读 app.learning 时炸了），
+        // 跟端口一点关系都没有。这时候再 process.exit(1) 会把已经跑起来的服务杀掉，
+        // 所以只记日志，让服务继续跑。
+        console.error(
+          "[algo-plan] 启动信息输出失败（服务已在端口 " + port + " 上运行）：",
+          err
+        )
+        return
+      }
+      // listen 失败：最常见的是端口被占用，按错误码给不同的中文提示
+      if (code === "EADDRINUSE") {
+        console.error(
+          "启动失败：端口 " + port + " 已被占用（EADDRINUSE），请换一个端口，或先关掉占用该端口的程序"
+        )
+      } else if (code === "EACCES") {
+        console.error(
+          "启动失败：没有权限监听端口 " + port + "（EACCES），请换一个 1024 以上的端口"
+        )
+      } else {
+        console.error("启动失败：无法监听端口 " + port + "（" + code + "）")
+      }
       if (!err || !err.code) {
         // 没有错误码的意外异常才补一份堆栈，方便定位
         console.error(err)
       }
+      // 这里必须用 process.exit(1)：createApp() 已经打开了 SQLite 连接，
+      // 改成 process.exitCode = 1 的话进程会因为连接还挂着而不退出。
+      // stderr 是终端而不是管道时不会截断；真要管道场景再单独处理。
       process.exit(1)
     })
 }

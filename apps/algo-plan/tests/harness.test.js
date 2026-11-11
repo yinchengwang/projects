@@ -41,6 +41,13 @@ test("run-all.js 在没有测试套件时报错退出（退出码非 0）", func
       (res.stderr || "").indexOf("没有找到任何测试套件") !== -1,
       "应该打印中文提示，实际输出：" + JSON.stringify(res.stderr)
     )
+    // 提示必须完整送到：stderr 是异步管道时，process.exit() 会在管道把数据
+    // 刷出去之前就把进程干掉，尾部会被截断。run-all.js 现在改用
+    // process.exitCode 让进程自然退出，所以尾部也必须在。
+    assert.ok(
+      (res.stderr || "").indexOf("请先创建测试文件") !== -1,
+      "中文提示的尾部不能被截断，实际输出：" + JSON.stringify(res.stderr)
+    )
   } finally {
     sandbox.cleanup()
   }

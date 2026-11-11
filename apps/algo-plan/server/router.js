@@ -9,9 +9,6 @@
 /** 请求体上限 1MB，防止本地误传超大 body 把内存吃满 */
 const MAX_BODY_BYTES = 1024 * 1024
 
-/** 超限后仍继续丢弃的字节上限：超过这个量就放弃收，直接断开连接 */
-const DRAIN_LIMIT_BYTES = MAX_BODY_BYTES * 8
-
 /** 带 HTTP 状态码的错误，供 handler 抛出 */
 class HttpError extends Error {
   constructor(status, message) {
@@ -107,13 +104,18 @@ function readJsonBody(req) {
     let chunks = []
     let settled = false
 
-    /** 超限后用来丢弃剩余数据的回调：只算字节数，不缓存 */
-    function onDrain(chunk) {
-      size += chunk.length
-      if (size > DRAIN_LIMIT_BYTES) {
-        // 病态大 body：读得够多了，直接断连接（此时 413 响应早已写完）
-        req.destroy()
-      }
+    /** 超限后用来丢弃剩余数据的回调：只丢不存，也绝不中途断连 */
+    function onDrain() {
+      // 故意空实现：这段数据直接丢掉，只为把 socket 里剩下的 body 读干净。
+      // 必须留一个 'data' 监听器：把 onData 摘掉之后光靠 resume() 不保证真的排空，
+      // 留着监听器才能保证数据被消费掉——socket 收空，连接收尾时才不会回 RST。
+      //
+      // 之前这里有个「读到 8MB 就 req.destroy()」的兜底，害得 10MB 的请求
+      // 客户端只拿到 ECONNRESET——销毁 socket 会让内核回 RST，
+      // 把 app.js 已经写好的 413 响应冲掉。
+      // 中途断连接对内存也毫无保护作用（chunks 已经清空，不再缓存任何东西），
+      // 只省带宽而已；而本服务只监听 127.0.0.1，没有远程对手方。
+      // 所以这里一路排空到 body 结束，让 413 响应能安稳送到客户端。
     }
 
     function onData(chunk) {

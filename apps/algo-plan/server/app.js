@@ -88,8 +88,14 @@ function createServer(opts) {
           return found.route.handler(req, res, found.params, query)
         })
         .catch(function (err) {
-          // 响应已经开始发出、或连接已经断了：不能再改状态码，只能收尾
+          // 响应已经开始发出、或连接已经断了：不能再改状态码，只能收尾。
+          // 但异常不能就这么没了——下面那条 console.error 在这个分支里会被跳过，
+          // handler「先 res.end() 再 throw」就会彻底静默。所以这里也要留一份日志。
           if (res.headersSent || res.writableEnded || res.destroyed) {
+            console.error(
+              "[algo-plan] 接口 " + req.method + " " + rawPath + " 处理异常（响应已发出，无法再改状态码）：",
+              err
+            )
             if (!res.writableEnded && !res.destroyed) res.end()
             return
           }
