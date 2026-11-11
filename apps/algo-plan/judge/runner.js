@@ -44,7 +44,7 @@ const VERDICT_PANEL = {
   compile_error: {
     title: "编译失败",
     tone: "bad",
-    hint: "代码没能编译成可执行文件，下面是编译器原文。",
+    hint: "代码没能编译成可执行文件（也可能是本机缺少编译器），下面是编译器原文。",
   },
   runtime_error: {
     title: "运行时错误",
@@ -58,6 +58,15 @@ const DEFAULT_CASE_TIMEOUT_MS = 2000
 
 /** 编译超时（毫秒）：编译比单个用例慢得多，单独给一份预算 */
 const COMPILE_TIMEOUT_MS = 10000
+
+/**
+ * C++ 编译命令的参数。固定不变（G20）：
+ *   -std=c++17  统一 C++ 标准
+ *   -O2         开优化
+ *   不加 -Wall / -Werror——用户的代码有点小毛病不该直接判死。
+ * 导出成常量是为了让测试能直接断言这几个参数不会被顺手改掉。
+ */
+const CPP_COMPILE_ARGS = ["-std=c++17", "-O2", "main.cpp", "-o", "main"]
 
 /**
  * 取第一行非空文本。
@@ -200,21 +209,24 @@ async function judge(params) {
       fs.writeFileSync(path.join(sandbox.dir, "main.cpp"), code, "utf8")
       const compiled = await runCommand(
         compiler.cmd,
-        ["-std=c++17", "-O2", "main.cpp", "-o", "main"],
+        CPP_COMPILE_ARGS,
         { cwd: sandbox.dir, timeoutMs: COMPILE_TIMEOUT_MS }
       )
+      // 编译器把诊断信息写到 stderr，但也有工具会写 stdout（警告、插件输出），
+      // 两边都留着，只看 stderr 会让面板空掉。
+      const compilerOut = [compiled.stderr, compiled.stdout].filter(Boolean).join("\n")
       if (compiled.timedOut) {
         return makeResult(
           "compile_error", 0, cases.length, started, null,
-          "编译超时（超过 " + COMPILE_TIMEOUT_MS + "ms）", compiled.stderr
+          "编译超时（超过 " + COMPILE_TIMEOUT_MS + "ms）", compilerOut
         )
       }
       if (compiled.code !== 0) {
-        const detail = parseCompilerError(compiled.stderr)
+        const detail = parseCompilerError(compilerOut)
         const where = detail.line === null ? "" : "第 " + detail.line + " 行："
         return makeResult(
           "compile_error", 0, cases.length, started, null,
-          where + detail.text, compiled.stderr
+          where + detail.text, compilerOut
         )
       }
       command = resolveBinary(sandbox.dir)
@@ -232,7 +244,12 @@ async function judge(params) {
       args = python.args.concat(["main.py"])
     }
 
-    const pythonEnv = Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8" })
+    // Python 的标准输出编码必须钉死成 utf-8：Windows 上默认是 GBK，
+    // 题目里的中文用例会直接抛 UnicodeEncodeError（G21）。
+    const childEnv =
+      language === "python"
+        ? Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8" })
+        : process.env
     let passed = 0
 
     for (const item of cases) {
@@ -240,7 +257,7 @@ async function judge(params) {
         cwd: sandbox.dir,
         input: item.input === "" ? "" : item.input + "\n",
         timeoutMs: caseTimeoutMs,
-        env: language === "python" ? pythonEnv : process.env,
+        env: childEnv,
       })
 
       if (run.timedOut) {
@@ -252,9 +269,11 @@ async function judge(params) {
       }
 
       if (run.code !== 0) {
-        const how = run.code === null && run.signal
-          ? "被信号 " + run.signal + " 终止"
-          : "退出码 " + run.code
+        // code 为 null 且没有 signal，说明进程根本没起来（spawn 失败），不是「退出码 null」
+        let how
+        if (run.code === null && run.signal) how = "被信号 " + run.signal + " 终止"
+        else if (run.code === null) how = "进程启动失败"
+        else how = "退出码 " + run.code
         return makeResult(
           "runtime_error", passed, cases.length, started, null,
           "第 " + item.index + " 个用例运行失败（" + how + "）：" + firstNonEmptyLine(run.stderr),
@@ -264,10 +283,13 @@ async function judge(params) {
 
       const cmp = compareOutput(run.stdout, item.expect, item.tol)
       if (!cmp.equal) {
+        // 输出被截断过就说明实际输出是「超长且不匹配」，
+        // 得说清楚，否则用户会对着一个被砍掉一半的输出找原因。
+        const cutNote = run.truncated ? "（程序输出过长，已截断后比对）" : ""
         return makeResult(
           "wrong_answer", passed, cases.length, started,
           { index: item.index, input: item.input, expected: item.expect, actual: run.stdout },
-          "第 " + item.index + " 个用例不通过：" + cmp.reason,
+          "第 " + item.index + " 个用例不通过：" + cmp.reason + cutNote,
           run.stderr
         )
       }
@@ -291,6 +313,7 @@ module.exports = {
   VERDICT_PANEL: VERDICT_PANEL,
   DEFAULT_CASE_TIMEOUT_MS: DEFAULT_CASE_TIMEOUT_MS,
   COMPILE_TIMEOUT_MS: COMPILE_TIMEOUT_MS,
+  CPP_COMPILE_ARGS: CPP_COMPILE_ARGS,
   judge: judge,
   parseCompilerError: parseCompilerError,
   firstNonEmptyLine: firstNonEmptyLine,

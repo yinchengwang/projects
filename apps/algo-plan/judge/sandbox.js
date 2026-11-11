@@ -20,6 +20,21 @@ const DEFAULT_TIMEOUT_MS = 2000
 const DETECT_TIMEOUT_MS = 5000
 
 /**
+ * 单次运行的输出上限（字节）。超过就截断。
+ * 不设上限的话，一个 while(true) print 的程序能把 stdout 撑到几百 MB，
+ * Buffer.concat().toString() 会撞上 V8 的字符串长度上限抛 ERR_STRING_TOO_LONG，
+ * 而那行代码在 close 事件回调里 —— 抛出去就是 uncaughtException，整个服务进程直接死。
+ */
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+
+/**
+ * 杀掉进程树之后仍不退出时的宽限期（毫秒）。
+ * 超时了还不收摊，就是进程树杀不动（taskkill 失败、进程卡在不可中断 IO 等），
+ * 这时必须强行按超时判定收结果，否则这个请求永远挂着，临时目录也永远删不掉。
+ */
+const KILL_GRACE_MS = 2000
+
+/**
  * Python 解释器的探测顺序。
  * 本机 python3 是 Microsoft Store 的空占位符（无输出、退出码 49），
  * 真身是 python（3.11.15）与 py -3（3.12.3），所以必须依次试（G17）。
@@ -89,6 +104,14 @@ function detectPython(override) {
   // 没指定解释器时，缓存里已经探到就直接用，不重复 spawn
   if (!override && detectionCache.python) return detectionCache.python
 
+  // 指定了解释器时，若缓存里探到的正是它，也直接复用——
+  // 否则每次判题都会重新 spawn 一遍 python --version，白白多几百毫秒。
+  if (override && detectionCache.python) {
+    const cached = detectionCache.python
+    const cachedText = cached.cmd + (cached.args.length ? " " + cached.args.join(" ") : "")
+    if (cachedText === String(override).trim()) return cached
+  }
+
   const candidates = override
     ? [parseCandidate(override)].concat(PYTHON_CANDIDATES)
     : PYTHON_CANDIDATES
@@ -153,28 +176,39 @@ function createSandbox() {
 /**
  * 杀整棵进程树。
  * Windows：taskkill /T /F；POSIX：杀整个进程组（spawn 时开了 detached）。
+ * taskkill 失败时退回 child.kill()（只能杀直接子进程，聊胜于无）。
  * @param {import("node:child_process").ChildProcess} child
+ * @returns {boolean} 是否看起来杀掉了
  */
 function killTree(child) {
-  if (!child || !child.pid) return
+  if (!child || !child.pid) return false
   const pid = child.pid
   if (process.platform === "win32") {
     try {
-      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      const res = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
       })
+      if (res && res.status === 0) return true
     } catch (e) {
       // 进程可能已经自己退了，杀不掉就算了
     }
-    return
+    try {
+      return typeof child.kill === "function" ? child.kill("SIGKILL") : false
+    } catch (e) {
+      return false
+    }
   }
+  let killed = false
   try {
     process.kill(-pid, "SIGKILL")
+    killed = true
   } catch (e) {}
   try {
     process.kill(pid, "SIGKILL")
+    killed = true
   } catch (e) {}
+  return killed
 }
 
 /**
@@ -182,7 +216,7 @@ function killTree(child) {
  * @param {string} cmd
  * @param {string[]} args
  * @param {{cwd?: string, input?: string, timeoutMs?: number, env?: object}} [options]
- * @returns {Promise<{code: number|null, stdout: string, stderr: string, durationMs: number, timedOut: boolean, signal: string|null}>}
+ * @returns {Promise<{code: number|null, stdout: string, stderr: string, durationMs: number, timedOut: boolean, signal: string|null, truncated: boolean}>}
  */
 function runCommand(cmd, args, options) {
   const opts = options || {}
@@ -208,42 +242,106 @@ function runCommand(cmd, args, options) {
         durationMs: Date.now() - started,
         timedOut: false,
         signal: null,
+        truncated: false,
       })
       return
     }
 
     const outChunks = []
     const errChunks = []
+    let outBytes = 0
+    let errBytes = 0
+    let truncated = false
     let timedOut = false
     let settled = false
+    let timer = null
+    let graceTimer = null
 
-    const timer = setTimeout(function () {
-      timedOut = true
-      killTree(child)
-    }, timeoutMs)
+    /**
+     * 把一段输出塞进缓冲区，超出上限就截断。
+     * 注意：超限时**继续把流读干净**（只是不存），否则子进程写 stdout 写不动会卡死。
+     * @param {Buffer} chunk
+     * @param {Buffer[]} chunks
+     * @param {number} used 已占用的字节数
+     * @returns {number} 新的占用字节数
+     */
+    function push(chunk, chunks, used) {
+      if (used >= MAX_OUTPUT_BYTES) {
+        truncated = true
+        return used
+      }
+      const room = MAX_OUTPUT_BYTES - used
+      if (chunk.length > room) {
+        chunks.push(chunk.subarray(0, room))
+        truncated = true
+        return MAX_OUTPUT_BYTES
+      }
+      chunks.push(chunk)
+      return used + chunk.length
+    }
 
     function finish(code, signal, spawnError) {
       if (settled) return
       settled = true
-      clearTimeout(timer)
+      if (timer) clearTimeout(timer)
+      if (graceTimer) clearTimeout(graceTimer)
+      // 拼字符串这一步必须包 try/catch：万一还有别的路径把输出撑爆，
+      // 也不能让异常从事件回调里逃出去变成 uncaughtException（那会整个服务进程死掉）。
+      let stdout = ""
+      let stderr = ""
+      try {
+        stdout = Buffer.concat(outChunks).toString("utf8")
+      } catch (e) {
+        stdout = ""
+        truncated = true
+      }
+      try {
+        stderr = spawnError ? String(spawnError) : Buffer.concat(errChunks).toString("utf8")
+      } catch (e) {
+        stderr = ""
+        truncated = true
+      }
       resolve({
         code: code === undefined ? null : code,
-        stdout: Buffer.concat(outChunks).toString("utf8"),
-        stderr: spawnError ? String(spawnError) : Buffer.concat(errChunks).toString("utf8"),
+        stdout: stdout,
+        stderr: stderr,
         durationMs: Date.now() - started,
         timedOut: timedOut,
         signal: signal === undefined ? null : signal,
+        truncated: truncated,
       })
     }
 
+    timer = setTimeout(function () {
+      timedOut = true
+      killTree(child)
+      // 杀完还活着就等一会儿；宽限期到了强行按超时收摊，
+      // 否则这个请求会永远挂着，临时目录也永远删不掉。
+      graceTimer = setTimeout(function () {
+        // 管道还开着的话，父进程的 event loop 会被它吊住（野进程不退出就一直在等），
+        // 把流拆掉，别让判题之外的资源跟着泄漏。
+        try {
+          if (child.stdout) child.stdout.destroy()
+        } catch (e) {}
+        try {
+          if (child.stderr) child.stderr.destroy()
+        } catch (e) {}
+        finish(
+          child.exitCode === undefined ? null : child.exitCode,
+          child.signalCode === undefined ? null : child.signalCode,
+          "进程树在超时后未能结束，已强制按超时判定"
+        )
+      }, KILL_GRACE_MS)
+    }, timeoutMs)
+
     if (child.stdout) {
       child.stdout.on("data", function (chunk) {
-        outChunks.push(chunk)
+        outBytes = push(chunk, outChunks, outBytes)
       })
     }
     if (child.stderr) {
       child.stderr.on("data", function (chunk) {
-        errChunks.push(chunk)
+        errBytes = push(chunk, errChunks, errBytes)
       })
     }
     child.on("error", function (err) {
@@ -267,6 +365,8 @@ function runCommand(cmd, args, options) {
 module.exports = {
   DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
   DETECT_TIMEOUT_MS: DETECT_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES: MAX_OUTPUT_BYTES,
+  KILL_GRACE_MS: KILL_GRACE_MS,
   PYTHON_CANDIDATES: PYTHON_CANDIDATES,
   detectCompiler: detectCompiler,
   detectPython: detectPython,

@@ -13,7 +13,7 @@
 const { toSummary } = require("../core/bank/problem.js")
 const { readJsonBody } = require("./router.js")
 const { judge, LANGUAGES, DEFAULT_CASE_TIMEOUT_MS } = require("../judge/runner.js")
-const { resolveToolchain } = require("../judge/sandbox.js")
+const { detectCompiler, detectPython } = require("../judge/sandbox.js")
 
 /** 题面接口最多暴露几个样例用例 */
 const SAMPLE_CASE_COUNT = 2
@@ -153,15 +153,22 @@ function buildRoutes(ctx) {
       const timeoutMs =
         Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DEFAULT_CASE_TIMEOUT_MS
 
-      // 解释器：先按 settings 里的缓存试，不行再按 python3 → python → py -3 探测
-      const pythonOverride = ctx.store.getSetting(KEY_JUDGE_PYTHON)
-      const toolchain = resolveToolchain({ pythonOverride: pythonOverride })
-      if (!pythonOverride && toolchain.python) {
-        ctx.store.setSetting(
-          KEY_JUDGE_PYTHON,
-          toolchain.python.cmd +
-            (toolchain.python.args.length ? " " + toolchain.python.args.join(" ") : "")
-        )
+      // 工具链：编译器的探测结果在进程内缓存，只有第一次付 spawn 的钱。
+      // Python 解释器只在提交 Python 时才探测——提交 C++ 没必要为它多等几百毫秒。
+      const toolchain = { compiler: detectCompiler(), python: null }
+      if (language === "python") {
+        // 先按 settings 里缓存的解释器试，不行再按 python3 → python → py -3 探测
+        const override = ctx.store.getSetting(KEY_JUDGE_PYTHON)
+        const python = detectPython(override || null)
+        toolchain.python = python
+        if (python) {
+          // 无论有没有 override 都回写：override 配错了（比如解释器被删了），
+          // 这里探测到的真身会把它顶掉，下次就不必再走一遍注定失败的探测。
+          const text = python.cmd + (python.args.length ? " " + python.args.join(" ") : "")
+          if (ctx.store.getSetting(KEY_JUDGE_PYTHON) !== text) {
+            ctx.store.setSetting(KEY_JUDGE_PYTHON, text)
+          }
+        }
       }
 
       const result = await judge({
