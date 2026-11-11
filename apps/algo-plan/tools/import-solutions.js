@@ -23,6 +23,7 @@ const { resolveLearningRoot } = require("../core/paths.js")
 const { serializeProblemMarkdown } = require("../core/bank/parse.js")
 const { createProblem } = require("../core/bank/problem.js")
 const scan = require("../core/bank/solutions-scan.js")
+const bankFiles = require("./bank-files.js")
 
 /** 扫描范围（相对 learning 根目录） */
 const SCAN_ROOTS = ["code-solutions/c/src", "algo-c"]
@@ -114,8 +115,16 @@ function run(opts) {
     warnings.push(w)
   })
 
-  // 4. 落盘（同一题号只写一份，后出现的记 skipped）
+  // 4. 落盘（同一题号只写一份；与目录来源同 id 的题也只留一份）
   const bankDir = path.join(learning.root, "bank")
+  const existing = bankFiles.indexExistingProblems(bankDir)
+  // dry-run 时目录来源还没落盘，同 id 的冲突看不出来。
+  // import-bank.js 把「另一路来源将要写入的 id」传进来，
+  // 这样 dry-run 报出来的跳过条数跟真导入一致（契约 G19）。
+  const pending = Object.create(null)
+  ;(options.pendingIds || []).forEach(function (id) {
+    pending[String(id)] = true
+  })
   const seen = Object.create(null)
   parsed.items.forEach(function (item) {
     let id
@@ -158,11 +167,17 @@ function run(opts) {
       return
     }
 
-    const target = path.join(bankDir, problem.tracks[0], problem.id + ".md")
-    if (fs.existsSync(target) && !options.force) {
-      skipped.push(target)
+    const existFile = existing[problem.id]
+    if (existFile && !options.force) {
+      skipped.push(existFile)
       return
     }
+    if (pending[problem.id] && !options.force) {
+      skipped.push(problem.id + "（另一路来源将要写入同一 id，按 G19 跳过）")
+      return
+    }
+    // 覆盖时写回它自己那个文件，不在别的轨道另开一份
+    const target = existFile || path.join(bankDir, problem.tracks[0], problem.id + ".md")
     if (!options.dryRun) {
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, serializeProblemMarkdown(problem), "utf8")
@@ -219,4 +234,5 @@ module.exports = {
   SCAN_ROOTS: SCAN_ROOTS,
   listSourceFiles: listSourceFiles,
   listIndexFiles: listIndexFiles,
+  bankFiles: bankFiles,
 }

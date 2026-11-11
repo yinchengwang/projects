@@ -20,6 +20,7 @@ const { resolveLearningRoot } = require("../core/paths.js")
 const { serializeProblemMarkdown } = require("../core/bank/parse.js")
 const { createProblem } = require("../core/bank/problem.js")
 const legacy = require("../core/bank/legacy.js")
+const bankFiles = require("./bank-files.js")
 
 /** 要扫的三个死脚本，顺序固定 */
 const SCRIPT_FILES = ["gen-practice-data.js", "expand-practice.js", "split-practice-data.js"]
@@ -116,8 +117,9 @@ function run(opts) {
     warnings.push("分类 slug 不在映射表里，已落到兜底轨道 " + legacy.FALLBACK_TRACK + "：" + slug)
   })
 
-  // 3. 落盘
+  // 3. 落盘（冲突按 id 判断：已存在的同 id 文件一律跳过，--force 才覆盖）
   const bankDir = path.join(learning.root, "bank")
+  const existing = bankFiles.indexExistingProblems(bankDir)
   order.forEach(function (id) {
     const data = byId[id]
     let problem
@@ -142,11 +144,13 @@ function run(opts) {
       errors.push(data.id + " 字段非法：" + e.message)
       return
     }
-    const target = path.join(bankDir, problem.tracks[0], problem.id + ".md")
-    if (fs.existsSync(target) && !options.force) {
-      skipped.push(target)
+    const existFile = existing[problem.id]
+    if (existFile && !options.force) {
+      skipped.push(existFile)
       return
     }
+    // 覆盖时写回它自己那个文件，不在别的轨道另开一份
+    const target = existFile || path.join(bankDir, problem.tracks[0], problem.id + ".md")
     if (!options.dryRun) {
       fs.mkdirSync(path.dirname(target), { recursive: true })
       fs.writeFileSync(target, serializeProblemMarkdown(problem), "utf8")
@@ -202,4 +206,5 @@ module.exports = {
   main: main,
   SCRIPT_FILES: SCRIPT_FILES,
   DEFAULT_SCRIPTS_DIR: DEFAULT_SCRIPTS_DIR,
+  bankFiles: bankFiles,
 }
