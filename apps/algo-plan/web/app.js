@@ -98,6 +98,9 @@ window.AlgoPlan = Object.assign(window.AlgoPlan || {}, {
   state: state,
   pages: (window.AlgoPlan && window.AlgoPlan.pages) || {},
   go: go,
+  // 公共界面构件：ui.js 在浏览器里挂 window.AlgoPlanUI；Node 下没有，
+  // 页面脚本会自己 require 一份——两边是同一份实现。
+  ui: (typeof window !== "undefined" && window.AlgoPlanUI) || null,
 })
 
 /** 顶栏的四个标签 */

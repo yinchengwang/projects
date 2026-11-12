@@ -9,12 +9,14 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>算法能力计划</h1>
+    <h1>算法能力计划<span>本地题库 · 判题 · 间隔复习 · 能力诊断</span></h1>
     <nav id="tabs"></nav>
   </header>
   <main id="view">
     <div class="panel">正在加载…</div>
   </main>
+  <!-- ui.js 先加载：公共界面构件（页头 / 主卡 / 数字块），页面脚本随后注册自己 -->
+  <script src="/ui.js"></script>
   <!-- app.js 先加载：它把公共工具挂到 window.AlgoPlan 上，页面脚本随后注册自己 -->
   <script src="/app.js"></script>
   <!-- charts.js 也要先加载：诊断页在注册时就取它的主题色 -->

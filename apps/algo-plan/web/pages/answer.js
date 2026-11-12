@@ -9,6 +9,14 @@
  * M1/M3 的渲染逻辑（原题入口、题面缺失说明、样例用例、判题结果面板、题库表格）
  * 一起搬到这个文件里：app.js 只剩公共工具与 tab 调度。
  *
+ * 层次（类名照 web/style.css 的约定，构件来自 web/ui.js）：
+ *   .page-head     页头：眉标 + 大标题 + 副标，每页第一眼
+ *   .panel.hero    主卡：这一页现在该做的那个动作（写代码、提交判题）
+ *   .panel         普通卡：细节与上下文（题目信息、题面、样例用例）
+ *   .block         卡内小节：题面 / 样例用例 / 判题结果 / 错题订正
+ *   .stat-grid     数字块：用例数、耗时这类「几个数」不再挤成键值行
+ *   .notice        题面缺失时的说明块（状态、去处、下一步）
+ *
  * 判题契约（要显示给用户看）：
  *   提交的是完整的 stdin→stdout 程序，必须自己写 main()。
  *   系统不会替你生成入口，也不会注入 Solution 包装。
@@ -18,6 +26,14 @@
   const A = window.AlgoPlan
   const el = A.el
 
+  /**
+   * 公共界面构件。浏览器里 ui.js 先加载挂 window.AlgoPlanUI；
+   * Node 下没有全局挂载，就 require 同一份文件——实现只有一份。
+   */
+  const UI =
+    (typeof window !== "undefined" && (window.AlgoPlanUI || (window.AlgoPlan && window.AlgoPlan.ui))) ||
+    (typeof require === "function" ? require("../ui.js") : null)
+
   /** verdict → 面板色调（与 judge/runner.js 的 VERDICT_PANEL.tone 对应） */
   const TONE_BY_VERDICT = {
     pass: "ok",
@@ -25,6 +41,15 @@
     timeout: "warn",
     compile_error: "bad",
     runtime_error: "bad",
+  }
+
+  /** verdict → 中文说法：徽章上颜色之外再来一份文字，不靠颜色单独表意 */
+  const VERDICT_TEXT = {
+    pass: "通过",
+    wrong_answer: "答案错误",
+    timeout: "超时",
+    compile_error: "编译失败",
+    runtime_error: "运行时错误",
   }
 
   /** 面板里期望/实际最多显示多少字符 */
@@ -36,6 +61,88 @@
     verdict: null,
     correctionText: "",
     diff: "",
+  }
+
+  /** 拼子节点：空的剔掉 */
+  function kids(list, more) {
+    const out = []
+    ;(list || []).concat(more || []).forEach(function (child) {
+      if (child) out.push(child)
+    })
+    return out
+  }
+
+  /**
+   * 构件的等价实现：UI 在位就用 UI，不在位就用等价的原生写法。
+   * 两条路渲染出的结构一致，页面不会因为少一个脚本就塌掉。
+   */
+  const UIX = {
+    pageHead: function (opts) {
+      const o = opts || {}
+      if (UI) return UI.pageHead(o)
+      return el("section", { class: "page-head" }, [
+        o.eyebrow ? el("span", { class: "eyebrow", text: o.eyebrow }) : null,
+        el("h2", { class: "page-title", text: o.title }),
+        o.sub ? el("p", { class: "page-sub", text: o.sub }) : null,
+      ])
+    },
+    hero: function (opts) {
+      const o = opts || {}
+      if (UI) return UI.hero(o)
+      return el(
+        "section",
+        { class: "panel hero" },
+        kids(
+          [
+            o.title ? el("h2", { text: o.title }) : null,
+            o.sub ? el("p", { class: "reason", text: o.sub }) : null,
+          ],
+          o.children
+        )
+      )
+    },
+    panel: function (opts) {
+      const o = opts || {}
+      if (UI) return UI.panel(o)
+      return el(
+        "section",
+        { class: "panel" + (o.className ? " " + o.className : "") },
+        kids([o.title ? el("h2", { text: o.title }) : null], o.children)
+      )
+    },
+    block: function (opts) {
+      const o = opts || {}
+      if (UI) return UI.block(o)
+      return el(
+        "div",
+        { class: "block" },
+        kids([o.title ? el("p", { class: "block-title", text: o.title }) : null], o.children)
+      )
+    },
+    statGrid: function (items) {
+      if (UI) return UI.statGrid(items)
+      return el(
+        "div",
+        { class: "kv" },
+        (items || []).map(function (item) {
+          return el("div", {}, [
+            document.createTextNode(item.label + "："),
+            el("span", { text: String(item.value) }),
+          ])
+        })
+      )
+    },
+    pill: function (text, tone) {
+      if (UI) return UI.pill(text, tone)
+      return el("span", { class: "badge " + (tone || ""), text: String(text) })
+    },
+    empty: function (title, hint) {
+      if (UI) return UI.empty(title, hint)
+      return el("section", { class: "panel" }, [
+        el("h2", { text: String(title) }),
+        hint ? el("p", { class: "muted", text: String(hint) }) : null,
+      ])
+    },
   }
 
   /** 截断过长文本并注明被截了多少 */
@@ -216,85 +323,108 @@
     ])
   }
 
-  /** 题面：标题 + 元信息 + 题面本体 + 样例用例 */
+  /**
+   * 题面卡：这一页的上下文。
+   *
+   * 分三层：卡内「题目信息」摆事实，「题面」摆正文，「样例用例」摆对答案用的样例。
+   * 键值行只放三四个身份事实，数字（用例数、耗时）另走数字块。
+   */
   function statementPanel(problem) {
     const cases = problem.cases || {}
     const samples = cases.sample || []
-    const children = [
-      el("h2", { text: problem.title || problem.id }),
-      el("div", { class: "kv" }, [
-        el("div", {}, [document.createTextNode("ID："), el("span", { text: problem.id })]),
-        el("div", {}, [document.createTextNode("难度："), el("span", { text: problem.difficulty || "" })]),
-        el("div", {}, [
-          document.createTextNode("知识点："),
-          el("span", { text: (problem.topics || []).join("、") }),
-        ]),
-        el("div", {}, [
-          document.createTextNode("用例数："),
-          el("span", { text: String(cases.total || 0) }),
-        ]),
+    const total = cases.total || 0
+
+    const info = el("div", { class: "kv" }, [
+      el("div", {}, [document.createTextNode("ID："), el("span", { text: problem.id })]),
+      el("div", {}, [document.createTextNode("难度："), el("span", { text: problem.difficulty || "" })]),
+      el("div", {}, [
+        document.createTextNode("知识点："),
+        el("span", { text: (problem.topics || []).join("、") }),
       ]),
-    ]
+      el("div", {}, [
+        document.createTextNode("用例数："),
+        el("span", { text: String(total) }),
+      ]),
+    ])
+
+    // 数字摆成数字块：一眼看完「一共几个用例、界面给了几个样例」
+    const stats = UIX.statGrid([
+      { label: "总用例数", value: String(total), hint: "全部用例由服务端持有" },
+      { label: "样例数", value: String(samples.length), hint: "题面下方已展示" },
+    ])
 
     // 标题旁边常驻一个原题入口：有题面时也能跳过去核对原文
     const link = describeSourceLink(problem)
-    if (link.kind !== "none") {
-      children.push(
-        el("p", { class: "muted" }, [
-          document.createTextNode("原题："),
-          el("a", {
-            class: "link",
-            href: link.url,
-            target: "_blank",
-            rel: "noopener noreferrer",
-            text: link.label,
-          }),
-        ])
-      )
-    }
+    const linkRow =
+      link.kind === "none"
+        ? null
+        : el("p", { class: "muted" }, [
+            document.createTextNode("原题："),
+            el("a", {
+              class: "link",
+              href: link.url,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              text: link.label,
+            }),
+          ])
 
     const statement = String(problem.statement || "").trim()
-    if (statement) {
-      children.push(el("pre", { class: "statement", text: statement }))
-    } else {
-      children.push(renderMissingStatement(problem))
-    }
 
-    children.push(
+    // 样例用例：接口只放行前 2 个，展示出来是给用户对答案用的
+    const sampleChildren = [
       el("p", {
         class: "muted",
         text:
           "共 " +
-          (cases.total || 0) +
+          total +
           " 个用例，界面只展示前 " +
           samples.length +
           " 个样例（全部用例由服务端持有）。",
-      })
-    )
+      }),
+    ]
+    samples.forEach(function (c, i) {
+      sampleChildren.push(
+        el("pre", {
+          class: "raw",
+          text:
+            "用例 " +
+            (i + 1) +
+            "\n输入：" +
+            (c.input || "（空）") +
+            "\n期望：" +
+            (c.expect || "（空）"),
+        })
+      )
+    })
 
-    // 样例用例：接口只放行前 2 个，展示出来是给用户对答案用的
-    if (samples.length > 0) {
-      children.push(el("h2", { text: "样例用例" }))
-      samples.forEach(function (c, i) {
-        children.push(
-          el("pre", {
-            class: "raw",
-            text:
-              "用例 " +
-              (i + 1) +
-              "\n输入：" +
-              (c.input || "（空）") +
-              "\n期望：" +
-              (c.expect || "（空）"),
-          })
-        )
-      })
-    }
-
-    return el("section", { class: "panel" }, children)
+    return UIX.panel({
+      // 题目名已经在页头的大标题里了，这里只说清这张卡是干什么的，不重复一遍
+      title: "题目",
+      children: [
+        UIX.block({
+          title: "题目信息",
+          children: [info, stats, linkRow],
+        }),
+        UIX.block({
+          title: "题面",
+          children: statement
+            ? [el("pre", { class: "statement", text: statement })]
+            : [renderMissingStatement(problem)],
+        }),
+        UIX.block({
+          title: "样例用例",
+          children: sampleChildren,
+        }),
+      ],
+    })
   }
 
-  /** 代码框 + 语言选择 + 提交 */
+  /**
+   * 代码卡：这一页现在该做的那个动作。
+   *
+   * 编辑器占主位，语言与判题契约是它的附属说明，结果面板贴着提交按钮出现。
+   */
   function codePanel(problem) {
     const id = problem.id
     // 草稿按题号存：切页签、切题再切回来，用户写的代码还在
@@ -349,56 +479,83 @@
       }
     })
 
-    return el("section", { class: "panel" }, [
-      el("h2", { text: "我的代码" }),
-      el("div", { class: "kv" }, [el("div", {}, [document.createTextNode("语言："), select])]),
-      el("p", {
-        class: "muted",
-        text:
-          "判题契约：提交的是完整的 stdin→stdout 程序，必须自己写 main()；" +
-          "系统不会替你生成入口，也不会注入 Solution 包装。",
-      }),
-      textarea,
-      el("div", { class: "row" }, [submit]),
-      result,
-    ])
+    return UIX.hero({
+      title: "我的代码",
+      children: [
+        el("div", { class: "kv" }, [el("div", {}, [document.createTextNode("语言："), select])]),
+        el("p", {
+          class: "muted",
+          text:
+            "判题契约：提交的是完整的 stdin→stdout 程序，必须自己写 main()；" +
+            "系统不会替你生成入口，也不会注入 Solution 包装。",
+        }),
+        textarea,
+        el("div", { class: "row" }, [submit]),
+        result,
+      ],
+    })
   }
 
-  /** 判题结果面板（M3 的结果面板完整搬过来：色调、截断、失败用例、编译原文） */
+  /**
+   * 判题结果面板（色调、截断、失败用例、编译原文）。
+   *
+   * 放在代码卡里当嵌套块：结果紧挨着提交按钮出现，
+   * 用例数与耗时走数字块，其余按小节分层。
+   */
   function verdictBox(body, problem) {
     const p = describePanel(body)
-    const children = [
-      el("h2", { text: p.title || "判题结果" }),
-      el("div", { class: "kv" }, p.rows.map(function (row) {
-        return el("div", {}, [
-          document.createTextNode(row.label + "："),
-          el("span", { text: row.value }),
-        ])
-      })),
-    ]
+    const children = []
+
     if (p.verdict) {
-      children.push(el("span", { class: "badge " + (p.tone || ""), text: p.verdict }))
+      children.push(
+        el("div", { class: "row" }, [
+          UIX.pill(VERDICT_TEXT[p.verdict] || p.verdict, p.tone),
+          el("span", { class: "badge " + (p.tone || ""), text: p.verdict }),
+        ])
+      )
     }
+    if (p.title) {
+      children.push(
+        el("p", { class: "verdict-message " + (p.tone || ""), text: p.title })
+      )
+    }
+    children.push(
+      UIX.statGrid(
+        p.rows.map(function (row) {
+          return { label: row.label, value: row.value }
+        })
+      )
+    )
     if (p.failed) {
-      children.push(el("h2", { text: "失败用例" }))
-      children.push(el("div", { class: "kv" }, [
-        el("div", {}, [
-          document.createTextNode("第 " + p.failed.index + " 个用例输入："),
-          el("span", { text: p.failed.input }),
-        ]),
-        el("div", {}, [
-          document.createTextNode("期望："),
-          el("span", { text: p.failed.expected }),
-        ]),
-        el("div", {}, [
-          document.createTextNode("实际："),
-          el("span", { text: p.failed.actual }),
-        ]),
-      ]))
+      children.push(
+        UIX.block({
+          title: "失败用例",
+          children: [
+            el("div", { class: "kv" }, [
+              el("div", {}, [
+                document.createTextNode("第 " + p.failed.index + " 个用例输入："),
+                el("span", { text: p.failed.input }),
+              ]),
+              el("div", {}, [
+                document.createTextNode("期望："),
+                el("span", { text: p.failed.expected }),
+              ]),
+              el("div", {}, [
+                document.createTextNode("实际："),
+                el("span", { text: p.failed.actual }),
+              ]),
+            ]),
+          ],
+        })
+      )
     }
     if (p.compilerOutput) {
-      children.push(el("h2", { text: "编译 / 错误原文" }))
-      children.push(el("pre", { class: "raw", text: p.compilerOutput }))
+      children.push(
+        UIX.block({
+          title: "编译 / 错误原文",
+          children: [el("pre", { class: "raw", text: p.compilerOutput })],
+        })
+      )
     }
     children.push(
       el("p", {
@@ -410,7 +567,7 @@
     if (p.verdict && p.verdict !== "pass" && problem) {
       children.push(correctionPanel(problem))
     }
-    return el("section", { class: "panel" }, children)
+    return UIX.block({ title: "判题结果", children: children })
   }
 
   /** 错题订正：写进 learning 仓的 notes/practice/<id>-订正.md，只给 diff，不自动提交 */
@@ -448,29 +605,33 @@
       },
     })
 
-    return el("div", { class: "correction" }, [
-      el("h3", { text: "错题订正" }),
-      el("p", {
-        class: "muted",
-        text: "写下的复盘会存成 learning 仓里的 notes/practice/" + problem.id + "-订正.md。",
-      }),
-      textarea,
-      el("div", { class: "row" }, [button]),
-      out,
-    ])
+    return UIX.block({
+      title: "错题订正",
+      children: [
+        el("p", {
+          class: "muted",
+          text: "写下的复盘会存成 learning 仓里的 notes/practice/" + problem.id + "-订正.md。",
+        }),
+        textarea,
+        el("div", { class: "row" }, [button]),
+        out,
+      ],
+    })
   }
 
   /** 没选题目时：给个题库下拉 */
   function pickPanel() {
-    const out = el("div", { class: "panel" })
+    const out = el("section", { class: "panel" })
+    const body = el("div", { class: "result" })
+    out.appendChild(el("h2", { text: "先选一道题" }))
+    out.appendChild(body)
     A.getJson("/api/bank")
       .then(function (bank) {
         const items = bank.items || []
-        const select = el("select", {}, items.map(function (item) {
+        const select = el("select", { id: "problem-select" }, items.map(function (item) {
           return el("option", { value: item.id, text: item.id + " " + item.title })
         }))
-        out.appendChild(el("h2", { text: "先选一道题" }))
-        out.appendChild(el("div", { class: "row" }, [
+        body.appendChild(el("div", { class: "row" }, [
           select,
           el("button", {
             text: "打开",
@@ -481,17 +642,25 @@
           }),
         ]))
         if (items.length === 0) {
-          out.appendChild(el("p", { class: "muted", text: "题库还是空的。" }))
+          body.appendChild(el("p", { class: "muted", text: "题库还是空的。" }))
         }
       })
       .catch(function (err) {
-        out.appendChild(el("p", { class: "error", text: String(err.message || err) }))
+        body.appendChild(el("p", { class: "error", text: String(err.message || err) }))
       })
     return out
   }
 
+  /** 打开不了这道题时的错误卡：错误文本必须留着，不能只说一句「加载失败」 */
+  function errorPanel(err) {
+    return el("section", { class: "panel" }, [
+      el("h2", { text: "打不开这道题" }),
+      el("p", { class: "error", text: String(err.message || err) }),
+    ])
+  }
+
   /**
-   * 画作答页正文（题面 + 代码框 + 提交 + 结果面板）。
+   * 画作答页正文（页头 + 题面卡 + 代码卡）。
    * @param {object} holder 容器
    * @param {string} problemId 题目 id
    */
@@ -499,15 +668,23 @@
     const id = problemId || A.state.problemId
     if (!id) {
       holder.appendChild(
-        el("section", { class: "panel" }, [
-          el("h2", { text: "作答" }),
-          el("p", { class: "muted", text: "先在「题库」里点一道题的「作答」按钮。" }),
-        ])
+        UIX.panel({
+          title: "作答",
+          children: [el("p", { class: "muted", text: "先在「题库」里点一道题的「作答」按钮。" })],
+        })
       )
       return holder
     }
     const problem = await A.getJson("/api/problem/" + encodeURIComponent(id))
     pageState.problem = problem
+    // 页头在最上面：先说清这是哪道题，再说下面怎么作答
+    holder.appendChild(
+      UIX.pageHead({
+        eyebrow: "作答",
+        title: problem.title || "作答",
+        sub: "读题 → 写代码 → 提交判题；没通过就把错因写进订正，diff 会摆在这里给你看。",
+      })
+    )
     holder.appendChild(statementPanel(problem))
     holder.appendChild(codePanel(problem))
     return holder
@@ -519,19 +696,32 @@
       view.textContent = ""
       const id = A.state.problemId
       if (!id) {
+        view.appendChild(
+          UIX.pageHead({
+            eyebrow: "作答",
+            title: "作答",
+            sub: "先在题库里挑一道题，然后在这里写代码、提交判题。",
+          })
+        )
         view.appendChild(pickPanel())
         return
       }
+      const holder = el("div", {})
+      holder.appendChild(el("div", { class: "panel", text: "正在打开题目…" }))
+      view.appendChild(holder)
       try {
-        await renderPractice(view, id)
+        holder.textContent = ""
+        await renderPractice(holder, id)
       } catch (err) {
         view.textContent = ""
         view.appendChild(
-          el("section", { class: "panel" }, [
-            el("h2", { text: "打不开这道题" }),
-            el("p", { class: "error", text: String(err.message || err) }),
-          ])
+          UIX.pageHead({
+            eyebrow: "作答",
+            title: "作答",
+            sub: "这道题没能加载出来，下面是具体原因。",
+          })
         )
+        view.appendChild(errorPanel(err))
       }
     },
   }

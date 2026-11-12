@@ -1,25 +1,61 @@
-/* 诊断页专用样式。配色一律取 style.css 里的 CSS 变量，不另起一套。 */
+/* ==========================================================================
+   诊断页专用样式
+   --------------------------------------------------------------------------
+   卡片外框、层次（.panel / .block / .stat-grid / .pill / .empty）与暗色配色
+   全部来自 style.css —— 这里只补诊断页特有的细节：
+     概览的四档处方卡、雷达图图例、图与表格孪生、弱项建议行。
+   配色一律取 style.css 的 CSS 变量，不另起一套、不写死颜色值。
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   图卡：外框是 style.css 的 .panel，这里只收紧卡内的间距
+   -------------------------------------------------------------------------- */
 
 .diag-panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 18px 20px;
   margin-bottom: 18px;
 }
-.diag-panel h2 {
-  font-size: 15px;
-  margin: 0 0 12px;
-  font-weight: 600;
+
+.diag-panel:last-child {
+  margin-bottom: 0;
 }
+
+.diag-panel .block {
+  margin-bottom: 10px;
+}
+
+.diag-panel .block:last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   四档处方：档位药丸 + 知识点数。中文标签在药丸里，颜色只是辅助
+   -------------------------------------------------------------------------- */
+
 .diag-cards {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 32px;
+  gap: 10px;
 }
-.diag-card { min-width: 96px; }
-.diag-card div { color: var(--muted); font-size: 13px; }
-.diag-card span { color: var(--fg); font-size: 18px; font-weight: 600; }
+
+.diag-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+.diag-card-count {
+  color: var(--fg);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   雷达图图例：两个序列的颜色取自 charts.js 的主题色
+   -------------------------------------------------------------------------- */
 
 .diag-legend {
   display: flex;
@@ -28,6 +64,7 @@
   color: var(--muted);
   margin-bottom: 10px;
 }
+
 .diag-legend i {
   display: inline-block;
   width: 10px;
@@ -37,16 +74,37 @@
   vertical-align: middle;
 }
 
-.chart { width: 100%; height: auto; display: block; }
-.chart-host { margin: 4px 0 6px; }
+/* --------------------------------------------------------------------------
+   图与表格孪生
+   -------------------------------------------------------------------------- */
 
-.chart-table { margin-top: 10px; }
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart-host {
+  margin: 4px 0 6px;
+}
+
+.chart-table {
+  margin-top: 10px;
+}
+
 .chart-table summary {
   cursor: pointer;
   font-size: 13px;
   color: var(--muted);
 }
-.chart-table table { margin-top: 8px; }
+
+.chart-table table {
+  margin-top: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   弱项榜的建议行：药丸（档位）+ 知识点 + 处方
+   -------------------------------------------------------------------------- */
 
 .diag-advice {
   list-style: none;
@@ -54,13 +112,30 @@
   padding: 0;
   font-size: 13px;
 }
+
 .diag-advice li {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 5px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
 }
-.diag-topic { color: var(--fg); }
 
-.diag-empty { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+.diag-advice li:last-child {
+  border-bottom: none;
+}
+
+.diag-topic {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   空状态
+   -------------------------------------------------------------------------- */
+
+.diag-empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}

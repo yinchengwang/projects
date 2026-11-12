@@ -24,6 +24,30 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node server/main.js
 没设 `ALGO_PLAN_LEARNING_ROOT` 也能启动——那是「纯本地模式」：只有 SQLite，
 不与 learning 仓同步。
 
+## 界面层次
+
+界面是**单一暗色主题**（不做浅色、不做双主题）。层次靠四件事建立，不靠颜色堆：
+
+| 层 | 构件 | 干什么 |
+|---|---|---|
+| 1 | 页头 `.page-head` | 每页第一眼：眉标 → 大标题 → 一句副标，说清「这是哪儿」 |
+| 2 | 主卡 `.panel.hero` | 「现在该做什么」只有一个：下一步、该复习这道、当前轮次 |
+| 3 | 普通卡 `.panel` / 嵌套块 `.block` | 细节与上下文：题面、样例、队列概况、轮次清单 |
+| 4 | 静默卡 `.panel.quiet` | 背景信息：运行状态、仓库连接情况，不抢注意力 |
+
+另有两条硬规矩：
+
+- **数字摆成数字块**（`.stat-grid`），不要用一长串键值行——「今天做了 2 道 / 复习 1 张」
+  应该一眼看完，而不是逐行读。
+- **状态用中文文字 + 颜色双承载**（`.pill` / `.badge`）。档位、进度、判题结果都有中文说法，
+  不靠一块颜色单独表意（色觉障碍、灰度打印都读得出来）。
+
+公共构件集中在 `web/ui.js`：`pageHead` / `hero` / `panel` / `block` / `statGrid` / `pill` / `kv` / `empty`。
+页面脚本从 `window.AlgoPlanUI` 取（Node 下 require 同一份文件——实现只有一份）。
+
+层次有回归闸门：`tests/ui-hierarchy.test.js` 断言每页有且只有一个页头、
+主行动在主卡里、状态是中文药丸。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认 |
@@ -49,6 +73,7 @@ algo-plan/
 ├── judge/           判题执行器：沙箱（临时目录/探测/杀进程树）、编排器（verdict）
 ├── bank/            工程仓内置题库（Codeforces 题，共 51 道）
 ├── web/             原生 JS 单页（无构建）：today / answer / review / rounds / diagnose 五页
+│                    ui.js 是公共界面构件（页头 / 主卡 / 数字块 / 药丸 / 空态），
 │                    charts.js 是手绘 SVG 的纯函数层（零第三方图表库）
 ├── tools/           seed-bank.js / import-catalog.js / import-solutions.js / import-bank.js
 │                    import-codeforces.js / sync-links.js

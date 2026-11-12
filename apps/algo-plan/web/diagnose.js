@@ -1,3 +1,4 @@
+"use strict";
 ;(function (root, factory) {
   if (typeof module === "object" && module.exports) {
     module.exports = factory(require("./charts.js"))
@@ -20,7 +21,20 @@
    * 分工：
    *   纯函数（buildDiagnoseView 等）——算数据、排序、截断，可单测
    *   渲染层（mountDiagnose / showDiagnose）——只做 DOM 装配，无业务分支
+   *
+   * 层次（跟 style.css 的四件套对齐）：
+   *   页头 → 概览数字块（.stat-grid）→ 四张图卡（.panel），
+   *   每张卡内用 .block 分「图」与「表格孪生」两块。
    */
+
+  /**
+   * 公共界面构件。浏览器里 ui.js 先加载挂 window.AlgoPlanUI；
+   * Node 下没有全局挂载，就 require 同一份文件——实现只有一份。
+   */
+  const UI =
+    (typeof globalThis !== "undefined" &&
+      (globalThis.AlgoPlanUI || (globalThis.AlgoPlan && globalThis.AlgoPlan.ui))) ||
+    (typeof require === "function" ? require("./ui.js") : null)
 
   /** 雷达图最多放几个知识点（轴太多就看不清了） */
   const MAX_RADAR_TOPICS = 6
@@ -36,6 +50,23 @@
 
   /** 两个弱档 */
   const WEAK_BUCKETS = ["weak-dense", "weak-sparse"]
+
+  /**
+   * 四个档位：中文标签 + 徽章色调。
+   * 中文文字必须留着——颜色只是辅助，不能只靠颜色表意。
+   */
+  const BUCKET_META = [
+    { bucket: "weak-dense", label: "练过但总错", tone: "bad" },
+    { bucket: "weak-sparse", label: "薄弱且练得少", tone: "warn" },
+    { bucket: "strong-sparse", label: "偶然会，没练透", tone: "accent" },
+    { bucket: "strong-dense", label: "掌握", tone: "ok" },
+  ]
+
+  /** 中文标签 → 徽章色调（弱项榜的行只带标签，不带档位键） */
+  const LABEL_TONE = BUCKET_META.reduce(function (acc, item) {
+    acc[item.label] = item.tone
+    return acc
+  }, {})
 
   /** 百分比格式化，跟 charts.formatPercent 同口径 */
   function percent(value) {
@@ -242,6 +273,85 @@
     return node
   }
 
+  /**
+   * 公共构件的兜底：ui.js 没加载时按同样的类名手写一套，页面不至于空白。
+   * 正常路径走的是 ui.js——实现只有一份，这里只是防一手。
+   */
+  const U = {
+    pageHead: function (opts) {
+      if (UI) return UI.pageHead(opts)
+      const kids = []
+      if (opts.eyebrow) kids.push(dEl("span", { class: "eyebrow", text: opts.eyebrow }))
+      kids.push(dEl("h2", { class: "page-title", text: opts.title }))
+      if (opts.sub) kids.push(dEl("p", { class: "page-sub", text: opts.sub }))
+      return dEl("section", { class: "page-head" }, kids)
+    },
+    panel: function (opts) {
+      if (UI) return UI.panel(opts)
+      const kids = []
+      if (opts.title) kids.push(dEl("h2", { text: opts.title }))
+      ;(opts.children || []).forEach(function (child) {
+        if (child) kids.push(child)
+      })
+      const cls = "panel" + (opts.className ? " " + opts.className : "")
+      return dEl("section", { class: cls }, kids)
+    },
+    block: function (opts) {
+      if (UI) return UI.block(opts)
+      const kids = []
+      if (opts.title) kids.push(dEl("p", { class: "block-title", text: opts.title }))
+      ;(opts.children || []).forEach(function (child) {
+        if (child) kids.push(child)
+      })
+      return dEl("div", { class: "block" }, kids)
+    },
+    statGrid: function (items) {
+      if (UI) return UI.statGrid(items)
+      const cells = (items || []).map(function (item) {
+        const kids = [
+          dEl("span", { class: "stat-value", text: String(item.value) }),
+          dEl("span", { class: "stat-label", text: String(item.label) }),
+        ]
+        if (item.hint) kids.push(dEl("span", { class: "stat-hint", text: String(item.hint) }))
+        return dEl("div", { class: "stat" + (item.tone ? " tone-" + item.tone : "") }, kids)
+      })
+      return dEl("div", { class: "stat-grid" }, cells)
+    },
+    pill: function (text, tone) {
+      if (UI) return UI.pill(text, tone)
+      return dEl("span", { class: "pill" + (tone ? " " + tone : ""), text: String(text) })
+    },
+    empty: function (title, hint) {
+      if (UI) return UI.empty(title, hint)
+      const kids = [dEl("strong", { text: String(title) })]
+      if (hint) kids.push(dEl("span", { text: String(hint) }))
+      return dEl("div", { class: "empty" }, kids)
+    },
+  }
+
+  /** 概览数字的色调：弱项多的时候用 bad 挑出来，掌握类用 ok，平均掌握度用 accent */
+  function statTone(label, value) {
+    const n = Number(String(value).replace("%", "")) || 0
+    if (label === "平均掌握度") return "accent"
+    if (label === "薄弱知识点") return n > 0 ? "bad" : "ok"
+    if (label === "未涉及的知识点") return n > 0 ? "warn" : ""
+    if (label === "练过题数") return n > 0 ? "ok" : ""
+    return ""
+  }
+
+  /** 概览数字块：八个数字铺开，弱项那一格补一句说明 */
+  function overviewStats(view) {
+    const buckets = view.buckets || {}
+    return (view.summary || []).map(function (card) {
+      const item = { label: card.label, value: card.value, tone: statTone(card.label, card.value) }
+      if (card.label === "薄弱知识点") {
+        item.hint =
+          "薄弱且练得少 " + (buckets["weak-sparse"] || 0) + " · 练过但总错 " + (buckets["weak-dense"] || 0)
+      }
+      return item
+    })
+  }
+
   /** 放一张图（SVG 字符串由 web/charts.js 生成，标签已转义） */
   function chartHost(el, svg) {
     const host = el("div", { class: "chart-host" })
@@ -277,6 +387,18 @@
     ])
   }
 
+  /** 四档处方：每档一个药丸 + 知识点数 */
+  function bucketCards(make, view) {
+    const buckets = view.buckets || {}
+    const cards = BUCKET_META.map(function (item) {
+      return make("div", { class: "diag-card" }, [
+        U.pill(item.label, item.tone),
+        make("span", { class: "diag-card-count", text: String(buckets[item.bucket] || 0) + " 个知识点" }),
+      ])
+    })
+    return make("div", { class: "diag-cards" }, cards)
+  }
+
   /**
    * 把视图数据摆进 DOM。
    * @param {Element} container 容器（一般是 #view）
@@ -293,40 +415,56 @@
         : dEl)
     container.textContent = ""
 
-    // 概览
-    const cards = view.summary.map(function (card) {
-      return make("div", { class: "diag-card" }, [
-        make("div", { text: card.label }),
-        make("span", { text: card.value }),
-      ])
-    })
+    // 页头：这一页的第一眼
     container.appendChild(
-      make("section", { class: "diag-panel" }, [
-        make("h2", { text: "诊断概览" }),
-        make("div", { class: "diag-cards" }, cards),
-      ])
+      U.pageHead({
+        eyebrow: "诊断",
+        title: "能力诊断",
+        sub:
+          "掌握度 = 首次通过率 + 遗忘因子 + 失误惩罚；覆盖度 = 练过的题数 ÷ 期望题量。两个维度交叉出四档处方。",
+      })
+    )
+
+    // 概览：八个数字铺成数字块 + 四档处方
+    container.appendChild(
+      U.panel({
+        title: "诊断概览",
+        className: "diag-panel",
+        children: [
+          U.statGrid(overviewStats(view)),
+          U.block({ title: "四档处方", children: [bucketCards(make, view)] }),
+        ],
+      })
     )
 
     // 掌握度雷达
     const legend = legendItems().map(function (item) {
       const dot = make("i", {})
-      dot.style.background = item.color
+      dot.setAttribute("style", "background:" + item.color)
       return make("span", {}, [dot, document.createTextNode(item.name)])
     })
     container.appendChild(
-      make("section", { class: "diag-panel" }, [
-        make("h2", { text: view.radar.title }),
-        make("div", { class: "diag-legend" }, legend),
-        chartHost(
-          make,
-          C.radarSvg({
-            labels: view.radar.labels,
-            series: view.radar.series,
-            title: view.radar.title,
-          })
-        ),
-        tableTwin(make, view.radar.table),
-      ])
+      U.panel({
+        title: view.radar.title,
+        className: "diag-panel",
+        children: [
+          U.block({
+            title: "图",
+            children: [
+              make("div", { class: "diag-legend" }, legend),
+              chartHost(
+                make,
+                C.radarSvg({
+                  labels: view.radar.labels,
+                  series: view.radar.series,
+                  title: view.radar.title,
+                })
+              ),
+            ],
+          }),
+          U.block({ title: "表格孪生", children: [tableTwin(make, view.radar.table)] }),
+        ],
+      })
     )
 
     // 弱项榜
@@ -335,31 +473,47 @@
     })
     const weakAdvice = view.weak.rows.map(function (row) {
       return make("li", {}, [
-        make("span", { class: "badge", text: row.label }),
+        U.pill(row.label, LABEL_TONE[row.label] || ""),
         make("span", { class: "diag-topic", text: row.topic }),
         make("span", { class: "muted", text: row.action }),
       ])
     })
     container.appendChild(
-      make("section", { class: "diag-panel" }, [
-        make("h2", { text: view.weak.title }),
-        weakBars.length === 0
-          ? make("p", { class: "diag-empty", text: "目前没有薄弱知识点——保持住。" })
-          : chartHost(make, C.barSvg({ rows: weakBars, title: view.weak.title })),
-        weakAdvice.length === 0
-          ? null
-          : make("ul", { class: "diag-advice" }, weakAdvice),
-        tableTwin(make, view.weak.table),
-      ])
+      U.panel({
+        title: view.weak.title,
+        className: "diag-panel",
+        children: [
+          U.block({
+            title: "图",
+            children: [
+              weakBars.length === 0
+                ? make("p", { class: "diag-empty", text: "目前没有薄弱知识点——保持住。" })
+                : chartHost(make, C.barSvg({ rows: weakBars, title: view.weak.title })),
+              weakAdvice.length === 0
+                ? null
+                : make("ul", { class: "diag-advice" }, weakAdvice),
+            ],
+          }),
+          U.block({ title: "表格孪生", children: [tableTwin(make, view.weak.table)] }),
+        ],
+      })
     )
 
     // 每日题量曲线
     container.appendChild(
-      make("section", { class: "diag-panel" }, [
-        make("h2", { text: view.curve.title }),
-        chartHost(make, C.lineSvg({ points: view.curve.points, title: view.curve.title })),
-        tableTwin(make, view.curve.table),
-      ])
+      U.panel({
+        title: view.curve.title,
+        className: "diag-panel",
+        children: [
+          U.block({
+            title: "图",
+            children: [
+              chartHost(make, C.lineSvg({ points: view.curve.points, title: view.curve.title })),
+            ],
+          }),
+          U.block({ title: "表格孪生", children: [tableTwin(make, view.curve.table)] }),
+        ],
+      })
     )
 
     // 知识点覆盖
@@ -367,13 +521,21 @@
       return { label: row.topic, value: row.coverage, display: row.display }
     })
     container.appendChild(
-      make("section", { class: "diag-panel" }, [
-        make("h2", { text: view.coverage.title }),
-        coverageBars.length === 0
-          ? make("p", { class: "diag-empty", text: "还没有练过任何题目。" })
-          : chartHost(make, C.barSvg({ rows: coverageBars, title: view.coverage.title })),
-        tableTwin(make, view.coverage.table),
-      ])
+      U.panel({
+        title: view.coverage.title,
+        className: "diag-panel",
+        children: [
+          U.block({
+            title: "图",
+            children: [
+              coverageBars.length === 0
+                ? make("p", { class: "diag-empty", text: "还没有练过任何题目。" })
+                : chartHost(make, C.barSvg({ rows: coverageBars, title: view.coverage.title })),
+            ],
+          }),
+          U.block({ title: "表格孪生", children: [tableTwin(make, view.coverage.table)] }),
+        ],
+      })
     )
   }
 
@@ -419,6 +581,8 @@
     MAX_COVERAGE_ROWS: MAX_COVERAGE_ROWS,
     URGENCY_ORDER: URGENCY_ORDER,
     WEAK_BUCKETS: WEAK_BUCKETS,
+    BUCKET_META: BUCKET_META,
+    LABEL_TONE: LABEL_TONE,
     percent: percent,
     bucketCounts: bucketCounts,
     legendItems: legendItems,

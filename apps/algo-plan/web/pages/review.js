@@ -14,6 +14,14 @@
   const A = window.AlgoPlan
   const el = A.el
 
+  /**
+   * 公共界面构件。浏览器里 ui.js 先加载挂 window.AlgoPlanUI；
+   * Node 下没有全局挂载，就 require 同一份文件——实现只有一份。
+   */
+  const UI =
+    (typeof window !== "undefined" && (window.AlgoPlanUI || (window.AlgoPlan && window.AlgoPlan.ui))) ||
+    (typeof require === "function" ? require("../ui.js") : null)
+
   /** 四个直觉评分按钮 */
   const BUTTONS = [
     { label: "完全忘了", quality: 1 },
@@ -25,15 +33,21 @@
   /** 队列概况 */
   function queuePanel(next) {
     const count = (next && next.reviewQueueLength) || 0
+    const stats = UI
+      ? UI.statGrid([
+          { label: "到期卡片", value: count + " 张", tone: count > 0 ? "accent" : "" },
+          { label: "单日配额", value: "10 题", hint: "或 20 分钟，取先到者" },
+        ])
+      : el("div", { class: "kv" }, [
+          el("div", {}, [document.createTextNode("队列长度："), el("span", { text: count + " 张" })]),
+          el("div", {}, [
+            document.createTextNode("单日配额："),
+            el("span", { text: "10 题 或 20 分钟，取先到者" }),
+          ]),
+        ])
     return el("section", { class: "panel" }, [
       el("h2", { text: "到期复习" }),
-      el("div", { class: "kv" }, [
-        el("div", {}, [document.createTextNode("队列长度："), el("span", { text: count + " 张" })]),
-        el("div", {}, [
-          document.createTextNode("单日配额："),
-          el("span", { text: "10 题 或 20 分钟，取先到者" }),
-        ]),
-      ]),
+      stats,
     ])
   }
 
@@ -68,7 +82,7 @@
       })
     })
 
-    return el("section", { class: "panel" }, [
+    return el("section", { class: "panel hero" }, [
       el("h2", { text: "该复习这道" }),
       el("div", { class: "kv" }, [
         el("div", {}, [document.createTextNode("题目："), el("span", { text: action.title })]),
@@ -100,6 +114,15 @@
         return
       }
       view.textContent = ""
+      if (UI) {
+        view.appendChild(
+          UI.pageHead({
+            eyebrow: "复习",
+            title: "间隔复习",
+            sub: "按 SM-2 排期：答得越顺，间隔拉得越长。给四个直觉档，间隔算法自己算。",
+          })
+        )
+      }
       const action = next && next.action
       view.appendChild(queuePanel(next))
       if (action && action.kind === "review") {
@@ -115,11 +138,15 @@
           ])
         )
       } else {
+        const hint =
+          "没有到期的卡片，或者今天的复习配额已经用完。回到「今日」页做别的吧。"
         view.appendChild(
-          el("section", { class: "panel" }, [
-            el("h2", { text: "暂时没有要复习的卡片" }),
-            el("p", { class: "muted", text: "没有到期的卡片，或者今天的复习配额已经用完。回到「今日」页做别的吧。" }),
-          ])
+          UI
+            ? UI.empty("暂时没有要复习的卡片", hint)
+            : el("section", { class: "panel" }, [
+                el("h2", { text: "暂时没有要复习的卡片" }),
+                el("p", { class: "muted", text: hint }),
+              ])
         )
       }
     },

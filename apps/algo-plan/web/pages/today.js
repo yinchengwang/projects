@@ -14,6 +14,14 @@
   const A = window.AlgoPlan
   const el = A.el
 
+  /**
+   * 公共界面构件。浏览器里 ui.js 先加载挂 window.AlgoPlanUI；
+   * Node 下没有全局挂载，就 require 同一份文件——实现只有一份。
+   */
+  const UI =
+    (typeof window !== "undefined" && (window.AlgoPlanUI || (window.AlgoPlan && window.AlgoPlan.ui))) ||
+    (typeof require === "function" ? require("../ui.js") : null)
+
   /** 动作类型 → 中文 */
   const KIND_TEXT = {
     review: "到期复习",
@@ -34,7 +42,7 @@
       el("div", {}, [document.createTextNode("作答流水条数："), el("span", { text: String((health && health.attempts) || 0) })]),
       el("div", {}, [document.createTextNode("learning 仓："), el("span", { text: learning.root || "（未连接）" })]),
     ]
-    return el("section", { class: "panel" }, [
+    return el("section", { class: "panel quiet" }, [
       el("h2", { text: "运行状态" }),
       el("div", { class: "kv" }, rows),
       el("p", { class: "muted", text: learning.reason || "" }),
@@ -42,11 +50,11 @@
     ])
   }
 
-  /** 下一题卡片 */
+  /** 下一题卡片——这一页唯一要做的事，放在主卡里 */
   function nextPanel(next) {
     const action = next && next.action
     if (!action) {
-      return el("section", { class: "panel" }, [
+      return el("section", { class: "panel hero" }, [
         el("h2", { text: "下一步" }),
         el("p", { class: "muted", text: "现在没有该做的事：没有到期的复习卡片，也没有没做的轮次条目。" }),
       ])
@@ -85,7 +93,7 @@
           class: "muted",
           text: "这张卡片不在算法题库里——它在轮次清单上，去轮次页把它勾掉。",
         })
-    return el("section", { class: "panel" }, [
+    return el("section", { class: "panel hero" }, [
       el("h2", { text: "下一步" }),
       el("div", { class: "kv" }, [
         el("div", {}, [document.createTextNode("类型："), el("span", { text: KIND_TEXT[action.kind] || action.kind })]),
@@ -99,33 +107,41 @@
     ])
   }
 
-  /** 今日进度 */
+  /** 今日进度——四个数摆成数字块，比键值行更容易一眼看完 */
   function progressPanel(progress) {
     const quota = (progress && progress.quota) || {}
     const limit = Math.max(1, Number(quota.limitQuestions) || 1)
     const percent = Math.min(100, Math.round((Number(quota.questions) || 0) / limit * 100))
-    const rows = [
-      el("div", {}, [document.createTextNode("日期："), el("span", { text: (progress && progress.date) || "" })]),
-      el("div", {}, [document.createTextNode("今天做题："), el("span", { text: ((progress && progress.solved) || 0) + " 道" })]),
-      el("div", {}, [document.createTextNode("今天复习："), el("span", { text: ((progress && progress.reviewed) || 0) + " 张" })]),
-      el("div", {}, [document.createTextNode("复习用时："), el("span", { text: ((progress && progress.reviewMinutes) || 0) + " 分钟" })]),
-      el("div", {}, [
-        document.createTextNode("复习配额："),
-        el("span", {
-          text:
-            (quota.questions || 0) + "/" + (quota.limitQuestions || 0) + " 题，" +
-            (quota.minutes || 0) + "/" + (quota.limitMinutes || 0) + " 分钟",
-        }),
-      ]),
+    const statItems = [
+      { label: "今天做题", value: ((progress && progress.solved) || 0) + " 道" },
+      { label: "今天复习", value: ((progress && progress.reviewed) || 0) + " 张" },
+      { label: "复习用时", value: ((progress && progress.reviewMinutes) || 0) + " 分钟" },
+      {
+        label: "复习配额",
+        value:
+          (quota.questions || 0) + "/" + (quota.limitQuestions || 0) + " 题",
+        hint:
+          (quota.minutes || 0) + "/" + (quota.limitMinutes || 0) + " 分钟",
+        tone: quota.exhausted ? "warn" : "",
+      },
+    ]
+    const stats = UI
+      ? UI.statGrid(statItems)
+      : el("div", { class: "kv" }, statItems.map(function (item) {
+          return el("div", {}, [
+            document.createTextNode(item.label + "："),
+            el("span", { text: String(item.value) }),
+          ])
+        }))
+    const children = [
+      el("h2", { text: "今日进度" }),
+      stats,
+      el("div", { class: "bar" }, [el("div", { class: "fill", style: "width:" + percent + "%" })]),
     ]
     if (quota.exhausted) {
-      rows.push(el("p", { class: "warn-text", text: "今天的复习配额用完了，接下来推新题。" }))
+      children.push(el("p", { class: "warn-text", text: "今天的复习配额用完了，接下来推新题。" }))
     }
-    return el("section", { class: "panel" }, [
-      el("h2", { text: "今日进度" }),
-      el("div", { class: "kv" }, rows),
-      el("div", { class: "bar" }, [el("div", { class: "fill", style: "width:" + percent + "%" })]),
-    ])
+    return el("section", { class: "panel" }, children)
   }
 
   A.pages.today = {
@@ -151,6 +167,15 @@
         return
       }
       view.textContent = ""
+      if (UI) {
+        view.appendChild(
+          UI.pageHead({
+            eyebrow: "今日",
+            title: "今天该做什么",
+            sub: "下一步由到期复习、轮次清单和掌握度共同决定——做完记得在轮次页勾掉。",
+          })
+        )
+      }
       view.appendChild(nextPanel(next))
       view.appendChild(progressPanel(progress))
       view.appendChild(renderHealth(health))
