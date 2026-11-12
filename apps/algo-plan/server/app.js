@@ -214,20 +214,50 @@ function createApp(opts) {
   const { resolveLearningRoot, localBankDir } = require("../core/paths.js")
   const { FileProvider } = require("../core/bank/provider.js")
   const { openDb, createStore } = require("./db.js")
+  // M6：LLM 客户端、服务层与配额上限。与 M1–M5 完全解耦，缺了也能起得来。
+  const { createLlmClient } = require("../core/llm/client.js")
+  const { createLlmService, readLlmSettings } = require("../core/llm/service.js")
+  const { seedLimits } = require("../core/llm/guard.js")
 
   const db = openDb(options.dbPath || path.join(ROOT, "data", "app.db"))
   const store = createStore(db)
 
-  const learning = resolveLearningRoot(options.env || process.env, options.learningRoot)
+  const env = options.env || process.env
+  const learning = resolveLearningRoot(env, options.learningRoot)
   // 两套题库：人审的 learning/bank 在前（写回也写这里），机器抓的工程仓 bank/ 在后。
   // 同 id 以先出现的为准，人改过的版本不会被机器版本盖掉。
   // localBank 显式传 null 表示「不加载工程仓内置题库」（测试隔离用）。
   const bankRoots = []
   if (learning.ok) bankRoots.push(path.join(learning.root, "bank"))
   if (options.localBank !== null) {
-    bankRoots.push(localBankDir(options.env || process.env, options.localBank))
+    bankRoots.push(localBankDir(env, options.localBank))
   }
   const provider = new FileProvider(bankRoots)
+
+  // M6：配额上限。环境变量只在 settings 表里没有这一项时才写入，不覆盖已有设置。
+  seedLimits(store, env)
+
+  // M6：LLM 服务层。没有注入固定客户端时，每次请求按当前设置重建客户端——
+  // 设置页改完 provider / 模型名 / 开关之后立即生效，不用重启服务。
+  const fixedClient = options.llmClient || null
+  const llm = createLlmService({
+    client: fixedClient,
+    getClient: fixedClient
+      ? undefined
+      : function () {
+          const s = readLlmSettings(store)
+          return createLlmClient({
+            provider: s.provider || undefined,
+            model: s.model || undefined,
+            baseUrl: s.baseUrl || undefined,
+            enabled: s.enabled,
+            env: env,
+          })
+        },
+    store: store,
+    provider: provider,
+    env: env,
+  })
 
   const routes = require("./api.js").buildRoutes({
     store: store,
@@ -248,6 +278,18 @@ function createApp(opts) {
       routes.push(route)
     })
 
+  // M6：LLM 接口。同样单独一个文件（server/api-llm.js），与其它里程碑零冲突。
+  routes.push.apply(
+    routes,
+    require("./api-llm.js").buildLlmRoutes({
+      store: store,
+      provider: provider,
+      llm: llm,
+      sendJson: sendJson,
+      env: env,
+    })
+  )
+
   const server = createServer({ routes: routes })
 
   return {
@@ -262,6 +304,8 @@ function createApp(opts) {
     store: store,
     provider: provider,
     learning: learning,
+    // M6：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
+    llm: llm,
   }
 }
 

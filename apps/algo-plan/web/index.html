@@ -19,6 +19,8 @@
   <script src="/ui.js"></script>
   <!-- app.js 先加载：它把公共工具挂到 window.AlgoPlan 上，页面脚本随后注册自己 -->
   <script src="/app.js"></script>
+  <!-- llm.js 自挂载：把「LLM 工作台」插到 #view 顶部，不改 app.js -->
+  <script src="/llm.js"></script>
   <!-- charts.js 也要先加载：诊断页在注册时就取它的主题色 -->
   <script src="/charts.js"></script>
   <script src="/pages/today.js"></script>

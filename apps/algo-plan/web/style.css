@@ -554,3 +554,81 @@ td button {
 
 /* 轮次条目的勾选框稍微大一点，点得准 */
 .item-check { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+
+/* ---- M6：LLM 工作台 ---- */
+.llm-panel h2 { color: var(--accent); }
+.llm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin: 10px 0;
+}
+.llm-label { color: var(--muted); font-size: 13px; }
+.llm-buttons { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.llm-panel .btn {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.llm-panel .btn:hover { border-color: var(--accent); color: var(--accent); }
+.llm-panel .btn-warn { color: var(--warn); border-color: var(--warn); }
+.llm-panel .btn-off { color: var(--muted); cursor: not-allowed; opacity: 0.6; }
+.llm-panel .btn-off:hover { border-color: var(--line); color: var(--muted); }
+.llm-panel select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  padding: 4px 8px;
+  font-size: 13px;
+  min-width: 260px;
+}
+.llm-out {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  max-height: 320px;
+  overflow: auto;
+}
+.llm-meta { margin-bottom: 12px; }
+
+/* ---- M6：题库造题、补全与设置 ---- */
+.llm-block {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.llm-fill-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  padding: 2px 6px 2px 12px;
+  font-size: 13px;
+  color: var(--warn);
+}
+.llm-panel input[type="text"] {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  padding: 4px 8px;
+  font-size: 13px;
+  min-width: 200px;
+}
+.llm-panel input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+}

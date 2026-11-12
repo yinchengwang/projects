@@ -6,7 +6,45 @@
  * 环境变量：PORT（默认 5173）、ALGO_PLAN_LEARNING_ROOT（可选）
  */
 
+const fs = require("node:fs")
+const path = require("node:path")
+
 const { createApp } = require("./app.js")
+
+/**
+ * 读取 .env 文件，把里面的键塞进 process.env。
+ *
+ * 仓库惯例：本地密钥放在 .env 里（projects/.gitignore 已经忽略 .env 与 .env.local）。
+ * 已经存在的环境变量优先，.env 不覆盖——命令行传的值永远最大。
+ *
+ * @param {string} [file] 默认读 apps/algo-plan/.env
+ * @returns {object} 读到的键值对
+ */
+function loadDotEnv(file) {
+  const target = file || path.join(__dirname, "..", ".env")
+  let text
+  try {
+    text = fs.readFileSync(target, "utf8")
+  } catch (err) {
+    return {}
+  }
+  const loaded = {}
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (line === "" || line.charAt(0) === "#") continue
+    const eq = line.indexOf("=")
+    if (eq === -1) continue
+    const key = line.slice(0, eq).trim()
+    if (key === "") continue
+    let value = line.slice(eq + 1).trim()
+    if (value.length >= 2 && value.charAt(0) === '"' && value.charAt(value.length - 1) === '"') {
+      value = value.slice(1, -1)
+    }
+    loaded[key] = value
+    if (process.env[key] === undefined) process.env[key] = value
+  }
+  return loaded
+}
 
 function checkNodeVersion() {
   const major = Number(process.versions.node.split(".")[0])
@@ -18,6 +56,8 @@ function checkNodeVersion() {
 
 function main() {
   checkNodeVersion()
+  // 本地密钥放在 apps/algo-plan/.env 里，命令行传的环境变量优先。
+  loadDotEnv()
   const app = createApp()
   const port = Number(process.env.PORT || 5173)
   // listen 是否已经成功：用来区分「端口没起来」和「起来了但后面的启动输出炸了」
@@ -31,6 +71,13 @@ function main() {
         console.log("learning 仓：" + app.learning.root)
       } else {
         console.log("未连接 learning 仓（纯本地模式）：" + app.learning.reason)
+      }
+      // M6：LLM 状态。没配密钥也照常起得来，只是 LLM 那部分用不了。
+      const info = app.llm.describe()
+      if (info.effectiveProvider === "null") {
+        console.log("LLM 未启用：" + info.reason + "（其余功能照常可用）")
+      } else {
+        console.log("LLM 已就绪：" + info.effectiveProvider + " / " + info.effectiveModel)
       }
     })
     .catch(function (err) {
@@ -72,4 +119,4 @@ if (require.main === module) {
   main()
 }
 
-module.exports = { main: main, checkNodeVersion: checkNodeVersion }
+module.exports = { main: main, checkNodeVersion: checkNodeVersion, loadDotEnv: loadDotEnv }

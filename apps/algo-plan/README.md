@@ -3,10 +3,10 @@
 本机运行的算法学习助手：本地静态题库打底，LLM 做增强，判题走真实编译执行，
 进度与错题写回 learning 仓进 git。
 
-当前进度：**M5 诊断**（推下一题 / SM-2 复习 / 轮次清单 / 勾选写回 / 错题订正 /
-掌握度模型 / 四档诊断 / 手绘 SVG 诊断页）。
+当前进度：**M6 LLM 增强**（讲解 / 分级求助 / 批改思路 / 现造新题 / 补全缺口 /
+成本护栏 / 密钥只从环境变量读 / LLM 关掉后 app 照常可用）。
 题库导入属于 M2（已完成）；判题属于 M3（已完成，真实编译执行）；
-LLM 增强属于 M6，尚未实现。
+轮次与复习闭环属于 M4（已完成）；掌握度与诊断属于 M5（已完成）。
 
 ## 快速开始
 
@@ -55,6 +55,18 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node server/main.js
 | `ALGO_PLAN_LEARNING_ROOT` | learning 仓根目录。**不硬编码相对路径** | 无（未设＝纯本地模式） |
 | `ALGO_PLAN_LOCAL_BANK` | 工程仓内置题库根（Codeforces 题在这） | `apps/algo-plan/bank` |
 | `PORT` | 服务端口 | `5173` |
+| `ARK_API_KEY` | 火山方舟密钥（**只从环境变量读**） | 无 |
+| `ARK_BASE_URL` | 方舟地址 | `https://ark.cn-beijing.volces.com/api/v3` |
+| `ANTHROPIC_API_KEY` | Anthropic 密钥（**只从环境变量读**） | 无 |
+| `ALGO_PLAN_LLM_ENABLED` | LLM 总开关，`0`/`false`/`off` = 关 | 未设＝按密钥自动判断 |
+| `ALGO_PLAN_LLM_PROVIDER` | `ark` / `anthropic` / `null` | 未设＝按密钥推断 |
+| `ALGO_PLAN_LLM_MODEL` | 模型名 | 按 provider 取默认 |
+| `ALGO_PLAN_LLM_BASE_URL` | 覆盖地址 | 按 provider 取默认 |
+| `ALGO_PLAN_LLM_SESSION_LIMIT` | 单次会话请求上限 | `20` |
+| `ALGO_PLAN_LLM_DAILY_LIMIT` | 每日请求上限 | `100` |
+
+密钥还可以放在 `apps/algo-plan/.env` 里（`projects/.gitignore` 已经忽略它），
+启动时自动读取；**已存在的环境变量优先，`.env` 不覆盖**。
 
 ## 目录结构
 
@@ -298,6 +310,13 @@ node tools/import-codeforces.js --rewrite
 | GET | `/api/health` | 运行状态、learning 仓连接情况、题库概况 |
 | GET | `/api/bank` | 题库列表，支持 `track` / `topic` / `difficulty` / `status` / `prefix` / `limit` |
 | GET | `/api/problem/:id` | 单题详情。**只回前 2 个样例用例 + 用例总数，不回参考解法** |
+| POST | `/api/llm/explain` | 讲解。入参 `{problemId, level}`，回 `{text, model}` |
+| POST | `/api/llm/hint` | 分级求助。入参 `{problemId, level}`，回 `{text, model}` |
+| POST | `/api/llm/grade-idea` | 批改思路。入参 `{problemId, idea}`，回 `{verdict, comment, model}` |
+| POST | `/api/bank/llm-generate` | 现造新题并**落盘**。入参 `{track, topics, difficulty}`，回 `{problem, model}` |
+| POST | `/api/llm/fill` | 补全缺口并**写回**。入参 `{problemId}`，回 `{problem, model}` |
+| GET | `/api/llm/settings` | LLM 开关、provider、模型名、密钥来源、配额 |
+| PUT | `/api/llm/settings` | 保存 LLM 开关、provider、模型名、地址。**不接受密钥** |
 | POST | `/api/attempt` | 提交代码判题。入参 `{problemId, code, language, mode}`；响应 `{attemptId, verdict, passedCases, totalCases, durationMs, failedCase, message, compilerOutput}` |
 | GET | `/api/next` | 下一个动作：复习 / 轮次推进 / 主动探索，带「这一步大约 N 分钟」。轮次卡片若不在题库里，`problemId` 为空而 `roundId` / `itemId` 有值——界面会把你带到轮次页去勾掉它 |
 | POST | `/api/review/:id/grade` | 给复习卡片打分（`quality` 0~5），返回下一次复习时间、间隔、难度因子、遗忘次数 |
@@ -349,6 +368,79 @@ node tools/import-codeforces.js --rewrite
 `topics` 的顺序是处置优先级（练过但总错 → 薄弱且练得少 → 偶然会没练透 → 掌握），
 同一档内按掌握度升序。
 
+## LLM 增强（M6）
+
+LLM 是**可选增强**：不配密钥也能用，app 的排程、判题、复习、进度一项不少。
+关掉之后点「讲解」或「求助」，会得到一句明确的中文提示，而不是报错或空白。
+
+### 五个场景
+
+| 场景 | 接口 | 前端入口 |
+|---|---|---|
+| 讲解 | `POST /api/llm/explain` | 作答页「讲思路」/「直接给代码」 |
+| 分级求助 | `POST /api/llm/hint` | 作答页「求助」四档：方向 → 思路 → 伪码 → 代码 |
+| 批改思路 | `POST /api/llm/grade-idea` | 作答页的思路输入框 |
+| 现造新题 | `POST /api/bank/llm-generate` | 题库页「来一题新的」 |
+| 补全缺口 | `POST /api/llm/fill` | 题库页缺题面的题后面的「让 LLM 补全」 |
+
+**不主动泄题**：讲解默认只到思路层；「直接给代码」是另一个独立按钮，点之前要确认一次。
+求助四档**逐级解锁**——用完「方向」才放开「思路」，解锁进度存在 `sessionStorage`，关掉浏览器就没了。
+
+**产出全部可追溯**：现造的新题**落盘进 `learning/bank/<track>/<id>.md`**
+（`source: llm`，题号是 `llm-<内容哈希>`），不是一次性玩具；
+每次讲解都记下 **model + 提示词摘要**到 `settings` 表。
+
+### 配置密钥
+
+密钥**只从环境变量读**，不写进代码、不写进 settings 表、不进 git。
+在本目录下建一个 `.env`（`projects/.gitignore` 已经忽略它）：
+
+```
+ARK_API_KEY=你的方舟密钥
+```
+
+或者：
+
+```
+ANTHROPIC_API_KEY=你的 Anthropic 密钥
+```
+
+启动时会自动读 `.env`；也可以直接用环境变量：
+
+```bash
+ARK_API_KEY=xxx node server/main.js
+```
+
+### provider 与模型
+
+| provider | 默认地址 | 默认模型 |
+|---|---|---|
+| `ark` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6-251015` |
+| `anthropic` | `https://api.anthropic.com` | `claude-opus-5` |
+
+模型名要写**完整版本化 ID**：方舟写 `doubao-seed-1-6-251015` 这种，
+直接写族名会返回 `404 InvalidEndpointOrModel.NotFound`。
+
+设置页可以切 provider、改模型名、开关 LLM；**密钥不在设置页里填**——
+设置页只显示「密钥来自哪个环境变量」。
+
+### 成本护栏
+
+- 单次会话最多 **20** 次请求；
+- 每天最多 **100** 次请求；
+- 超了**直接停**，提示「今天用完了」，不会继续烧钱；
+- 计数落在 `settings` 表，键是 `llm.quota.session.*` 与 `llm.quota.daily.*`；
+- 上限可以用设置页，或用 `ALGO_PLAN_LLM_SESSION_LIMIT` / `ALGO_PLAN_LLM_DAILY_LIMIT` 调。
+
+### 离线自检
+
+```bash
+node tools/llm-check.js
+```
+
+只读不写：**不发任何网络请求**，只打印当前 provider、模型名、密钥来源、配额，
+并对五个提示词做纯函数自检（同样输入两次构造必须一致）。
+
 ## 测试
 
 ```bash
@@ -391,6 +483,15 @@ node tests/run-all.js
 | `charts.test.js` | 手绘 SVG 纯函数：雷达 / 折线 / 条形，数值不出现 NaN |
 | `diagnose.test.js` | 诊断页视图函数、静态资源接线、页面注册 |
 | `diagnose-e2e.test.js` | 造流水 → 打接口 → 静态资源 → 前端 SVG 干净的完整闭环 |
+| `llm-prompts.test.js` | 五个场景的提示词纯函数、防泄题（只有「代码」档才给代码） |
+| `llm-client.test.js` | 三个客户端 + 假 fetch：provider 推断、密钥来源、错误处理 |
+| `llm-guard.test.js` | 成本护栏：会话上限、每日上限、计数落 settings 表 |
+| `llm-service.test.js` | 五个场景服务层、造题落盘、讲解留痕、护栏拦截、关闭态降级 |
+| `llm-api.test.js` | 五个场景接口与两个设置接口的响应形状、错误状态码 |
+| `llm-off.test.js` | 把 LLM 关掉，app 仍然完整可用（硬约束专测） |
+| `llm-web.test.js` | 前端纯逻辑：求助四档逐级解锁、请求体形状 |
+| `llm-web-bank.test.js` | 题库页与设置页：needs-fill 挑题、设置体只留白名单字段 |
+| `llm-e2e.test.js` | 端到端：五个场景跑通、造题落盘、讲解留痕、护栏拦住第 21 次 |
 
 ## 写回 learning 仓的规矩
 
