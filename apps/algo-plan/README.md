@@ -195,7 +195,7 @@ node tools/import-codeforces.js --rewrite
 | GET | `/api/bank` | 题库列表，支持 `track` / `topic` / `difficulty` / `status` / `prefix` / `limit` |
 | GET | `/api/problem/:id` | 单题详情。**只回前 2 个样例用例 + 用例总数，不回参考解法** |
 | POST | `/api/attempt` | 提交代码判题。入参 `{problemId, code, language, mode}`；响应 `{attemptId, verdict, passedCases, totalCases, durationMs, failedCase, message, compilerOutput}` |
-| GET | `/api/next` | 下一个动作：复习 / 轮次推进 / 主动探索，带「这一步大约 N 分钟」 |
+| GET | `/api/next` | 下一个动作：复习 / 轮次推进 / 主动探索，带「这一步大约 N 分钟」。轮次卡片若不在题库里，`problemId` 为空而 `roundId` / `itemId` 有值——界面会把你带到轮次页去勾掉它 |
 | POST | `/api/review/:id/grade` | 给复习卡片打分（`quality` 0~5），返回下一次复习时间、间隔、难度因子、遗忘次数 |
 | GET | `/api/rounds` | learning/progress 下的轮次清单与解析告警 |
 | PATCH | `/api/rounds/:id/items/:itemId` | 勾选写回（`status` / `doneDate` / `commitSha`），只改目标行，返回 diff |
