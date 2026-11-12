@@ -159,6 +159,43 @@ function createStore(db) {
       return Number(row.n)
     },
 
+    /* ---------- attempts（M5 追加：诊断用的只读方法） ---------- */
+
+    /**
+     * 列出全部作答的摘要（诊断统计用）。
+     * **不带 code 列**——诊断只需要知道「哪题、什么时候、什么结果」，
+     * 把源码全捞进内存没必要，几百条流水就是几百份源码。
+     * @returns {Array<{id: number, problem_id: string, ts: string, verdict: string}>}
+     */
+    listAttemptSummaries: function () {
+      return db
+        .prepare("SELECT id, problem_id, ts, verdict FROM attempts ORDER BY problem_id ASC, ts ASC, id ASC")
+        .all()
+        .map(function (row) {
+          // node:sqlite 返回的是 null 原型对象，转成普通对象方便比较与序列化
+          return {
+            id: Number(row.id),
+            problem_id: String(row.problem_id),
+            ts: String(row.ts),
+            verdict: String(row.verdict),
+          }
+        })
+    },
+
+    /**
+     * 按天统计提交次数（每日题量曲线用）。
+     * ts 存的是 ISO 字符串，substr(ts,1,10) 就是 UTC 日期部分。
+     * @returns {Array<{date: string, count: number}>}
+     */
+    countAttemptsByDay: function () {
+      return db
+        .prepare("SELECT substr(ts,1,10) AS date, COUNT(*) AS count FROM attempts GROUP BY date ORDER BY date ASC")
+        .all()
+        .map(function (row) {
+          return { date: String(row.date), count: Number(row.count) }
+        })
+    },
+
     /* ---------- review_cards ---------- */
 
     upsertReviewCard: function (card) {
@@ -222,6 +259,31 @@ function createStore(db) {
 
     listTopics: function () {
       return db.prepare("SELECT * FROM topics ORDER BY id ASC").all()
+    },
+
+    /**
+     * 整体覆盖 topics 表（M5 追加）。
+     *
+     * M1 的 upsertTopic 是**累加**写法，M3/M4 可能还在用它往 topics 里写增量；
+     * M5 每次算诊断都从原始流水重新派生，所以用这个整体覆盖把口径统一，
+     * 两种写法不会互相污染——派生值永远是全量，不是增量。
+     *
+     * @param {Array<{id: string, first_pass: number, attempts: number, last_at: string|null, lapses: number}>} rows
+     */
+    replaceTopics: function (rows) {
+      db.exec("DELETE FROM topics")
+      const stmt = db.prepare(
+        "INSERT INTO topics(id, first_pass, attempts, last_at, lapses) VALUES(?, ?, ?, ?, ?)"
+      )
+      ;(rows || []).forEach(function (row) {
+        stmt.run(
+          String(row.id),
+          Number(row.first_pass || 0),
+          Number(row.attempts || 0),
+          row.last_at === null || row.last_at === undefined ? null : String(row.last_at),
+          Number(row.lapses || 0)
+        )
+      })
     },
 
     countTopics: function () {

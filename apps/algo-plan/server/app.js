@@ -236,6 +236,18 @@ function createApp(opts) {
     sendJson: sendJson,
   })
 
+  // M5：诊断接口。路由在独立文件里（server/api-insights.js），这里合并进同一张路由表。
+  // 只做加法——M1/M3/M4 的接口一个都不动。
+  require("./api-insights.js")
+    .buildInsightRoutes({
+      store: store,
+      provider: provider,
+      sendJson: sendJson,
+    })
+    .forEach(function (route) {
+      routes.push(route)
+    })
+
   const server = createServer({ routes: routes })
 
   return {
