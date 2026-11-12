@@ -3,9 +3,10 @@
 本机运行的算法学习助手：本地静态题库打底，LLM 做增强，判题走真实编译执行，
 进度与错题写回 learning 仓进 git。
 
-当前进度：**M4 闭环**（推下一题 / SM-2 复习 / 轮次清单 / 勾选写回 / 错题订正）。
+当前进度：**M5 诊断**（推下一题 / SM-2 复习 / 轮次清单 / 勾选写回 / 错题订正 /
+掌握度模型 / 四档诊断 / 手绘 SVG 诊断页）。
 题库导入属于 M2（已完成）；判题属于 M3（已完成，真实编译执行）；
-诊断属于 M5，LLM 属于 M6，尚未实现。
+LLM 增强属于 M6，尚未实现。
 
 ## 快速开始
 
@@ -41,11 +42,14 @@ algo-plan/
 │   ├── review/      SM-2 间隔重复与判题结果映射
 │   ├── scheduler/   推下一题：候选动作优先级 + 单日配额
 │   ├── sync/        learning 仓同步：轮次解析、勾选写回、错题订正、查脏
+│   ├── mastery/     掌握度模型：mastery.js（公式与四档诊断）、expected.js（期望题量口径）、
+│   │                topic-stats.js（从流水派生知识点统计）
 │   └── judge-spec/  判题契约纯函数：用例归一化、输出比对
-├── server/          组合根、路由、API、SQLite 存储
+├── server/          组合根、路由、API、SQLite 存储、诊断数据装配（insights.js）
 ├── judge/           判题执行器：沙箱（临时目录/探测/杀进程树）、编排器（verdict）
 ├── bank/            工程仓内置题库（Codeforces 题，共 51 道）
-├── web/             原生 JS 单页（无构建）：today / answer / review / rounds 四页
+├── web/             原生 JS 单页（无构建）：today / answer / review / rounds / diagnose 五页
+│                    charts.js 是手绘 SVG 的纯函数层（零第三方图表库）
 ├── tools/           seed-bank.js / import-catalog.js / import-solutions.js / import-bank.js
 │                    import-codeforces.js / sync-links.js
 ├── fixtures/        样板题 + 判题 fixture（题面、用例、正例与三类负例）
@@ -187,6 +191,81 @@ node tools/import-codeforces.js --rewrite
 **判题不是安全沙箱**：它防跑飞、死循环、爆内存、编译垃圾，**不防恶意代码**。
 用户代码以当前用户权限在系统临时目录里跑，每题一个临时目录，判完即删。
 
+## 掌握度与诊断（M5）
+
+诊断页的每个数字都有明确的来源，口径定死，不随实现漂移。
+
+### 掌握度
+
+```
+首次通过率 = firstPass / attempts            ← 反复重试通过不算掌握
+遗忘因子   = 0.5 ^ (距上次练习天数 / 14)      ← 半衰期 14 天
+掌握度     = (0.7 × 首次通过率 + 0.3 × e^(-失误次数/2)) × 遗忘因子
+```
+
+- `firstPass`：**第一次尝试就通过**的题目数。
+- `attempts`：该知识点下所有题目的提交总次数。
+- `lapses`：该知识点下**没通过**的提交次数。
+- 四个数存在 SQLite 的 `topics` 表里（`first_pass` / `attempts` / `lapses` / `last_at`）。
+
+### 覆盖度
+
+```
+覆盖度 = 练过的不同题目数 / 期望题量
+```
+
+### 期望题量（覆盖度的分母）
+
+三级口径，自上而下：
+
+| 优先级 | 来源 | 说明 |
+|---|---|---|
+| ① 覆盖值 | `settings` 表的 `insights.expected_override.<topic>` | 手工指定某个知识点的期望题量 |
+| ② 题库题数 | 题库里带这个 topic 的题目数 | 「这个知识点一共就这么多题」 |
+| ③ 下限常量 | `settings` 表的 `insights.expected_min_questions`，默认 **5** | 「至少练够 5 题才叫练透」 |
+
+**②③ 的合成规则：`期望题量 = max(题库题数, 下限常量)`。**
+
+下限存在的理由：只有 1 道题的冷门知识点，练 1 道就是 100% 覆盖，会被误判成「掌握」。
+下限常量把这个洞堵上。
+
+**可配置**（改完刷新诊断页立刻生效）：
+
+| 键名 | 作用 | 默认 |
+|---|---|---|
+| `insights.expected_min_questions` | 所有知识点的期望题量下限 | `5` |
+| `insights.expected_override.<topic>` | 单个知识点的期望题量（如 `insights.expected_override.数组`） | 无 |
+
+### 四档诊断
+
+掌握度 ≥ 0.5 算「高」，覆盖度 ≥ 0.5 算「高」，两个维度交叉出四档：
+
+| 掌握度 | 覆盖度 | 档位 | 含义与处方 |
+|---|---|---|---|
+| 低 | 低 | 薄弱且练得少 | 轮次里优先排这类题——先补量 |
+| 低 | 高 | 练过但总错 | 回头看概念，而不是继续刷题 |
+| 高 | 低 | 偶然会，没练透 | 安排复习巩固 |
+| 高 | 高 | 掌握 | 不再主动排 |
+
+「练过但总错」这一档很重要——它区分「题做得少」和「概念没懂」，两者处方完全不同。
+
+### 每日题量曲线
+
+数据源是 `attempts` 表按 `substr(ts,1,10)` 分组的行数，也就是当天的提交次数。
+默认最近 30 天，`GET /api/insights?days=N` 可调（`days=0` 表示全部）。
+窗口内某天没提交会**补 0**，这样「哪天没练」在曲线上看得见。
+
+### 诊断页
+
+顶栏的「诊断」页有四块内容，全部是**手绘 SVG**（零第三方图表库）：
+
+1. **掌握度雷达**——两条序列：掌握度、覆盖度，取练得最多的 6 个知识点；
+2. **弱项榜**——只收「练过但总错」「薄弱且练得少」两档，条形末端标掌握度；
+3. **每日题量曲线**——折线 + 面积，窗口内没提交的日期补 0；
+4. **知识点覆盖**——每个知识点「练过 N / 期望 M 题」的覆盖条。
+
+每张图都能展开成表格视图（表格孪生），方便核对数字。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |
@@ -201,6 +280,49 @@ node tools/import-codeforces.js --rewrite
 | PATCH | `/api/rounds/:id/items/:itemId` | 勾选写回（`status` / `doneDate` / `commitSha`），只改目标行，返回 diff |
 | POST | `/api/correction` | 写错题订正到 `notes/practice/<id>-订正.md`，返回文件路径与 diff |
 | GET | `/api/progress` | 今日进度与单日复习配额 |
+| GET | `/api/insights` | 诊断数据。`?days=N` 调曲线窗口（默认 30，`0`＝全部）。返回 `{topics, summary, series}` |
+
+`GET /api/insights` 的响应：
+
+```json
+{
+  "topics": [{
+    "topic": "数组",
+    "mastery": 0.2836,
+    "coverage": 0.4,
+    "bucket": "weak-sparse",
+    "label": "薄弱且练得少",
+    "action": "轮次里优先排这类题——先补量",
+    "attempts": 4,
+    "firstPass": 1,
+    "lapses": 2,
+    "lastAt": "2026-11-10T11:00:00.000Z",
+    "expected": 5,
+    "expectedSource": "floor",
+    "problems": 2
+  }],
+  "summary": {
+    "topicCount": 2,
+    "untouchedTopics": 1,
+    "weakCount": 1,
+    "strongCount": 1,
+    "avgMastery": 0.4061,
+    "avgCoverage": 0.3,
+    "totalAttempts": 4,
+    "totalProblems": 2,
+    "lastPracticeAt": "2026-11-10T11:00:00.000Z",
+    "minExpectedQuestions": 5,
+    "windowDays": 30,
+    "windowAttempts": 4
+  },
+  "series": [{ "date": "2026-11-01", "count": 0 }, { "date": "2026-11-02", "count": 2 }]
+}
+```
+
+`summary.totalAttempts` / `totalProblems` **从原始流水算**，不按知识点加总——
+一道题挂两个知识点时，按知识点加总会把同一次提交数两遍。
+`topics` 的顺序是处置优先级（练过但总错 → 薄弱且练得少 → 偶然会没练透 → 掌握），
+同一档内按掌握度升序。
 
 ## 测试
 
@@ -237,6 +359,13 @@ node tests/run-all.js
 | `api-m4.test.js` | M4 五个接口的响应字段 |
 | `pages.test.js` | 四个页面注册与评分映射 |
 | `e2e-m4.test.js` | 下一题 → 写回 → 订正 → 评分，且不自动提交 |
+| `mastery.test.js` | 掌握度公式、遗忘因子、四档诊断、处置优先级排序 |
+| `expected.test.js` | 期望题量三级口径（覆盖值 / 题库题数 / 下限常量） |
+| `topic-stats.test.js` | 从流水派生知识点统计（首次通过、失误次数、练过题数） |
+| `insights.test.js` | 诊断装配与 `GET /api/insights`（含天数窗口的夹取与补 0） |
+| `charts.test.js` | 手绘 SVG 纯函数：雷达 / 折线 / 条形，数值不出现 NaN |
+| `diagnose.test.js` | 诊断页视图函数、静态资源接线、页面注册 |
+| `diagnose-e2e.test.js` | 造流水 → 打接口 → 静态资源 → 前端 SVG 干净的完整闭环 |
 
 ## 写回 learning 仓的规矩
 
