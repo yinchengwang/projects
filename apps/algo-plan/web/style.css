@@ -194,3 +194,4 @@ select {
 table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
 th { color: var(--muted); font-weight: 500; }
+tr.focus-row td { background: rgba(122, 162, 247, 0.12); }

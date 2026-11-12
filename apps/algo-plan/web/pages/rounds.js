@@ -19,7 +19,7 @@
   }
 
   /** 一行条目 */
-  function itemRow(round, item, out) {
+  function itemRow(round, item, out, focus) {
     const box = el("input", { type: "checkbox" })
     box.checked = item.status === "done"
     box.addEventListener("change", async function () {
@@ -45,7 +45,7 @@
         box.disabled = false
       }
     })
-    return el("tr", {}, [
+    return el("tr", { class: focus ? "focus-row" : "" }, [
       el("td", {}, [box]),
       el("td", { text: item.id }),
       el("td", { text: item.title }),
@@ -55,10 +55,10 @@
   }
 
   /** 一个轮次 */
-  function roundPanel(round) {
+  function roundPanel(round, focusItemId) {
     const out = el("div", { class: "result" })
     const rows = round.items.map(function (item) {
-      return itemRow(round, item, out)
+      return itemRow(round, item, out, focusItemId && item.id === focusItemId)
     })
     const doneCount = round.items.filter(function (item) {
       return item.status === "done"
@@ -129,8 +129,22 @@
         )
         return
       }
-      rounds.forEach(function (round) {
-        view.appendChild(roundPanel(round))
+      // 今日页跳过来时带着 currentRoundId：把那一轮排到最前，条目也高亮
+      const currentId = String(A.state.currentRoundId || "")
+      const ordered = rounds.slice().sort(function (a, b) {
+        if (a.id === currentId) return -1
+        if (b.id === currentId) return 1
+        return 0
+      })
+      if (currentId) {
+        view.appendChild(
+          el("section", { class: "panel" }, [
+            el("p", { class: "muted", text: "当前轮次：" + currentId + "（今日页推的那一轮，已排在最前）" }),
+          ])
+        )
+      }
+      ordered.forEach(function (round) {
+        view.appendChild(roundPanel(round, A.state.focusItemId))
       })
     },
   }

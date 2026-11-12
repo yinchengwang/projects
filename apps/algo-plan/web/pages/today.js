@@ -63,16 +63,38 @@
           },
         })
       )
+    } else if (action.roundId) {
+      // 轮次卡片不一定在算法题库里（Grokking 卡片、Python 工具链……）。
+      // 这种卡片的正确去处是轮次页——把它勾掉，而不是跳去一个空的作答页。
+      buttons.push(
+        el("button", {
+          class: "primary",
+          text: "去轮次页勾掉它",
+          onclick: function () {
+            A.state.currentRoundId = action.roundId
+            A.state.focusItemId = action.itemId
+            A.go("rounds")
+          },
+        })
+      )
     }
+    const label = action.problemId ? "题目：" : "卡片："
+    const extra = action.problemId
+      ? null
+      : el("p", {
+          class: "muted",
+          text: "这张卡片不在算法题库里——它在轮次清单上，去轮次页把它勾掉。",
+        })
     return el("section", { class: "panel" }, [
       el("h2", { text: "下一步" }),
       el("div", { class: "kv" }, [
         el("div", {}, [document.createTextNode("类型："), el("span", { text: KIND_TEXT[action.kind] || action.kind })]),
-        el("div", {}, [document.createTextNode("题目："), el("span", { text: action.title })]),
+        el("div", {}, [document.createTextNode(label), el("span", { text: action.title })]),
         el("div", {}, [document.createTextNode("用时："), el("span", { text: "这一步大约 " + action.estimatedMinutes + " 分钟" })]),
         el("div", {}, [document.createTextNode("到期复习："), el("span", { text: action.reviewQueueLength + " 张" })]),
       ]),
       el("p", { class: "reason", text: action.reason }),
+      extra,
       el("div", { class: "row" }, buttons),
     ])
   }

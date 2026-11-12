@@ -297,3 +297,96 @@ test("渲染竞态：切走的视图不会被后来的过期请求追加内容",
   assert.strictEqual(bankPanels, 1, "过期的题库面板不该被追加：" + text)
   assert.ok(text.indexOf("运行状态") !== -1, "今天的健康面板应该在：" + text)
 })
+
+/** 把树里所有文本拼起来（textContent 在 stub 上是累加的，重复无妨，能用来判断在不在） */
+function collectText(node) {
+  let out = ""
+  function walk(n) {
+    if (!n) return
+    if (n.textContent) out += " " + n.textContent
+    ;(n.children || []).forEach(walk)
+  }
+  walk(node)
+  return out
+}
+
+test("轮次卡片不在题库里时，今日页给「去轮次页勾掉它」而不是「去作答」", async function () {
+  stubFetch({
+    "/api/next": {
+      action: {
+        kind: "round",
+        problemId: null,
+        title: "virtual_env",
+        estimatedMinutes: 15,
+        reason: "轮次 r32 还剩 11 张卡片没做，先补「virtual_env」这个短板",
+        reviewQueueLength: 0,
+        roundId: "r32",
+        itemId: "virtual_env",
+      },
+      reviewQueueLength: 0,
+    },
+    "/api/progress": {
+      date: "2026-11-12",
+      solved: 0,
+      reviewed: 0,
+      reviewMinutes: 0,
+      quota: { questions: 0, minutes: 0, limitQuestions: 10, limitMinutes: 20, exhausted: false },
+    },
+    "/api/health": {
+      ok: true,
+      node: "v24.0.0",
+      learning: { ok: true, root: "/tmp/learning", reason: "" },
+      bank: { problemCount: 1, fileCount: 1, warnings: [] },
+      attempts: 0,
+    },
+  })
+
+  const today = require("../web/pages/today.js")
+  const view = mountContainer("view")
+  await today.render(view)
+
+  const text = collectText(view)
+  assert.ok(text.indexOf("去轮次页勾掉它") !== -1, text)
+  assert.ok(text.indexOf("去作答") === -1, "卡片不在题库里，不该给「去作答」")
+  assert.ok(text.indexOf("不在算法题库里") !== -1, text)
+})
+
+test("动作里有题目 id 时，今日页给「去作答」", async function () {
+  stubFetch({
+    "/api/next": {
+      action: {
+        kind: "round",
+        problemId: "lc-00001",
+        title: "两数之和",
+        estimatedMinutes: 15,
+        reason: "轮次 r33 还剩 11 张卡片没做",
+        reviewQueueLength: 0,
+        roundId: "r33",
+        itemId: "two_sum",
+      },
+      reviewQueueLength: 0,
+    },
+    "/api/progress": {
+      date: "2026-11-12",
+      solved: 0,
+      reviewed: 0,
+      reviewMinutes: 0,
+      quota: { questions: 0, minutes: 0, limitQuestions: 10, limitMinutes: 20, exhausted: false },
+    },
+    "/api/health": {
+      ok: true,
+      node: "v24.0.0",
+      learning: { ok: true, root: "/tmp/learning", reason: "" },
+      bank: { problemCount: 1, fileCount: 1, warnings: [] },
+      attempts: 0,
+    },
+  })
+
+  const today = require("../web/pages/today.js")
+  const view = mountContainer("view")
+  await today.render(view)
+
+  const text = collectText(view)
+  assert.ok(text.indexOf("去作答") !== -1, text)
+  assert.ok(text.indexOf("去轮次页勾掉它") === -1, text)
+})

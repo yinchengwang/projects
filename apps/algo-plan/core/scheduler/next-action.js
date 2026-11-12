@@ -286,35 +286,53 @@ function roundCreatedKey(round) {
 }
 
 /**
- * 选当前轮次：手动指定 > 最近创建的 active 轮次。
+ * 候选轮次：手动指定 > 最近创建的 active 轮次（按新到旧排）。
+ *
+ * 返回**列表**而不是单个——调用方要逐个试，因为一个轮次里可能全是
+ * 「题库里根本没有」的卡片（Python 工具链、设计模式……），那种轮次推给
+ * 用户也点不开题面，不该占掉「下一个动作」。
  * @param {object[]} rounds
  * @param {string} currentRoundId
- * @returns {object|null}
+ * @returns {object[]}
  */
-function pickRound(rounds, currentRoundId) {
+function pickRounds(rounds, currentRoundId) {
   const list = rounds || []
   if (currentRoundId) {
     const wanted = String(currentRoundId).toLowerCase()
     const hit = list.find(function (r) {
       return r && String(r.id).toLowerCase() === wanted
     })
-    if (hit) return hit
+    if (hit) return [hit]
+    // 手动指定的轮次不存在：退回自动挑选，不装作找到了
   }
   const active = list.filter(function (r) {
     return r && r.status === "active"
   })
-  if (active.length === 0) return null
   active.sort(function (a, b) {
     const ka = roundCreatedKey(a)
     const kb = roundCreatedKey(b)
     if (ka !== kb) return ka < kb ? 1 : -1
     return String(a.id).toLowerCase() < String(b.id).toLowerCase() ? -1 : 1
   })
-  return active[0]
+  return active
+}
+
+/**
+ * 选当前轮次：手动指定 > 最近创建的 active 轮次。
+ * @param {object[]} rounds
+ * @param {string} currentRoundId
+ * @returns {object|null}
+ */
+function pickRound(rounds, currentRoundId) {
+  const candidates = pickRounds(rounds, currentRoundId)
+  return candidates.length ? candidates[0] : null
 }
 
 /**
  * 轮次里挑一题：掌握度最低的 topic 优先，同 topic 内按清单原始顺序（题号顺序）。
+ *
+ * 先在「题库里能对上号」的待办条目里挑（按 id 或标题匹配）；一个都匹配不上时
+ * 才退回全部待办条目——题库为空（纯本地模式）时仍要给得出动作。
  * @param {object} round
  * @param {{byId: Map<string,object>, byTitle: Map<string,object>}} index
  * @param {Object<string, number>} mastery
@@ -330,7 +348,14 @@ function pickRoundItem(round, index, mastery) {
   })
   if (pending.length === 0) return null
 
-  pending.sort(function (a, b) {
+  // 轮次里混着不在算法题库里的卡片（Python 工具链、设计模式……），
+  // 推一个打不开题面的条目不叫「下一个动作」——有对得上的就先给对得上的。
+  const matched = pending.filter(function (p) {
+    return !!matchProblem(p.item, index)
+  })
+  const pool = matched.length > 0 ? matched : pending
+
+  pool.sort(function (a, b) {
     const ma = mastery[topicOf(a.item, index)]
     const mb = mastery[topicOf(b.item, index)]
     const va = ma === undefined ? 0.3 : ma
@@ -339,7 +364,7 @@ function pickRoundItem(round, index, mastery) {
     return a.order - b.order
   })
 
-  const chosen = pending[0]
+  const chosen = pool[0]
   return {
     item: chosen.item,
     problem: matchProblem(chosen.item, index),
@@ -365,6 +390,52 @@ function pickExplore(problems, attemptsByProblem) {
     return String(a.id) < String(b.id) ? -1 : 1
   })
   return untouched[0]
+}
+
+/**
+ * 组装「轮次推进」这个动作。
+ * @param {object} round
+ * @param {{item: object, problem: object|null, topic: string}} picked
+ * @param {object[]} queue 到期复习队列
+ * @param {object} quota 配额状态
+ * @param {Object<string, number>} avgMs 各难度的平均用时
+ * @returns {object} 动作
+ */
+function roundAction(round, picked, queue, quota, avgMs) {
+  const left = (round.items || []).filter(function (it) {
+    return it && it.status !== "done"
+  }).length
+  const quotaNote =
+    quota.exhausted && queue.length > 0
+      ? "今天的复习配额用完了（已复习 " +
+        quota.questions +
+        " 题 / " +
+        quota.minutes +
+        " 分钟），先推进轮次。"
+      : ""
+  return {
+    kind: "round",
+    problemId: picked.problem ? String(picked.problem.id) : null,
+    problem: picked.problem,
+    title: picked.problem
+      ? picked.problem.title
+      : String(picked.item.title || picked.item.id),
+    // 轮次里的卡片不一定在算法题库里（Grokking 卡片、Python 工具链……）。
+    // 带上轮次号与条目号，前端才知道「去轮次页把它勾掉」，而不是跳去一个空的作答页。
+    roundId: round.id ? String(round.id) : "",
+    itemId: picked.item && picked.item.id ? String(picked.item.id) : "",
+    estimatedMinutes: estimateMinutes(picked.problem, avgMs),
+    reason:
+      quotaNote +
+      "轮次 " +
+      round.id +
+      " 还剩 " +
+      left +
+      " 张卡片没做，先补「" +
+      picked.topic +
+      "」这个短板",
+    reviewQueueLength: queue.length,
+  }
 }
 
 /**
@@ -421,41 +492,24 @@ function nextAction(ctx) {
   }
 
   /* ---- 2. 轮次推进 ---- */
-  const round = pickRound(context.rounds || [], context.currentRoundId)
-  if (round) {
+  // 逐个候选轮次试：优先给「题库里对得上号」的那一轮。
+  // 真实 learning 仓里 r32（Python 工具链）、r35~r38（设计模式、并发、数据库、机器学习）
+  // 的卡片都不在算法题库里，直接推它们等于推一个打不开题面的条目。
+  const candidates = pickRounds(context.rounds || [], context.currentRoundId)
+  let fallback = null
+  for (let i = 0; i < candidates.length; i += 1) {
+    const round = candidates[i]
     const picked = pickRoundItem(round, index, mastery)
-    if (picked) {
-      const left = (round.items || []).filter(function (it) {
-        return it && it.status !== "done"
-      }).length
-      const quotaNote =
-        quota.exhausted && queue.length > 0
-          ? "今天的复习配额用完了（已复习 " +
-            quota.questions +
-            " 题 / " +
-            quota.minutes +
-            " 分钟），先推进轮次。"
-          : ""
-      return {
-        kind: "round",
-        problemId: picked.problem ? String(picked.problem.id) : null,
-        problem: picked.problem,
-        title: picked.problem
-          ? picked.problem.title
-          : String(picked.item.title || picked.item.id),
-        estimatedMinutes: estimateMinutes(picked.problem, avgMs),
-        reason:
-          quotaNote +
-          "轮次 " +
-          round.id +
-          " 还剩 " +
-          left +
-          " 张卡片没做，先补「" +
-          picked.topic +
-          "」这个短板",
-        reviewQueueLength: queue.length,
-      }
+    if (!picked) continue
+    if (!picked.problem) {
+      // 这个轮次没有对得上的题，留作兜底（题库为空时它就是唯一的选择）
+      if (!fallback) fallback = { round: round, picked: picked }
+      continue
     }
+    return roundAction(round, picked, queue, quota, avgMs)
+  }
+  if (fallback) {
+    return roundAction(fallback.round, fallback.picked, queue, quota, avgMs)
   }
 
   /* ---- 3. 主动探索 ---- */

@@ -281,6 +281,9 @@ function buildRoutes(ctx) {
           estimatedMinutes: action.estimatedMinutes,
           reason: action.reason,
           reviewQueueLength: action.reviewQueueLength,
+          // 轮次分支才有：卡片不在算法题库里时，靠这两个字段去轮次页勾掉
+          roundId: action.roundId || "",
+          itemId: action.itemId || "",
         },
         reviewQueueLength: action.reviewQueueLength,
       })

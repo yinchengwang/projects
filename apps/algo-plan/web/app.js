@@ -75,6 +75,8 @@ function patchJson(url, body) {
 const state = Object.assign((window.AlgoPlan && window.AlgoPlan.state) || {}, {
   problemId: null,
   currentRoundId: null,
+  // 今日页推的轮次条目 id：跳到轮次页时高亮那一行
+  focusItemId: null,
   language: "cpp",
   draft: {},
   result: {},

@@ -100,18 +100,20 @@ test("GET /api/next 返回契约要求的字段", async function () {
     assert.ok("action" in body)
     assert.ok("reviewQueueLength" in body)
     assert.ok(body.action, "应该给出一个动作")
-    assert.deepStrictEqual(Object.keys(body.action).sort(), [
-      "estimatedMinutes",
-      "kind",
-      "problemId",
-      "reason",
-      "reviewQueueLength",
-      "title",
-    ].sort())
+    // 契约 §3 要求的字段一个都不能少；额外字段（roundId / itemId）是允许的增量
+    const keys = Object.keys(body.action)
+    ;["estimatedMinutes", "kind", "problemId", "reason", "reviewQueueLength", "title"].forEach(
+      function (key) {
+        assert.ok(keys.indexOf(key) !== -1, "缺少字段 " + key)
+      }
+    )
     assert.strictEqual(body.action.kind, "round")
     assert.strictEqual(body.action.problemId, "lc-00001")
     assert.strictEqual(body.action.title, "两数之和")
     assert.ok(body.action.estimatedMinutes > 0)
+    // 轮次分支要带上轮次号与条目号，前端才知道去轮次页勾掉哪一张卡片
+    assert.strictEqual(body.action.roundId, "r33")
+    assert.strictEqual(body.action.itemId, "two_sum")
   })
 })
 

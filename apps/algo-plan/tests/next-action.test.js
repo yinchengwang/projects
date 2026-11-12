@@ -389,3 +389,55 @@ test("masteryByTopic 一个题都没练过的 topic 给 0.3", function () {
   assert.strictEqual(mastery["哈希表"], 0.3)
   assert.strictEqual(mastery["双指针"], 0.3)
 })
+
+test("轮次条目对不上题库时给出轮次号与条目号，但不硬塞一个题目 id", function () {
+  const { db, store } = freshStore()
+  // r32 的卡片是 Python 工具链，不在算法题库里
+  const rounds = [makeRound("r32", "2026-07-12", [makeItem("virtual_env", "virtualenv", "todo")])]
+  const action = scheduler.nextAction(makeCtx(store, { rounds: rounds, problems: PROBLEMS }))
+  assert.ok(action)
+  assert.strictEqual(action.kind, "round")
+  assert.strictEqual(action.problemId, null, "题库里没有它，就别编一个题目 id")
+  assert.strictEqual(action.roundId, "r32")
+  assert.strictEqual(action.itemId, "virtual_env")
+  db.close()
+})
+
+test("有能对上题库的轮次时，优先给对得上的那一轮", function () {
+  const { db, store } = freshStore()
+  const rounds = [
+    // 最近创建的轮次，条目不在题库里
+    makeRound("r32", "2026-07-20", [makeItem("virtual_env", "virtualenv", "todo")]),
+    // 早一轮，但条目标题与题库标题对得上
+    makeRound("r33", "2026-07-12", [makeItem("x", "两数之和", "todo")]),
+  ]
+  const action = scheduler.nextAction(makeCtx(store, { rounds: rounds, problems: PROBLEMS }))
+  assert.strictEqual(action.kind, "round")
+  assert.strictEqual(action.roundId, "r33")
+  assert.strictEqual(action.problemId, "lc-00001")
+  db.close()
+})
+
+test("一轮里既有对得上的也有对不上的，优先挑对得上的", function () {
+  const { db, store } = freshStore()
+  const rounds = [
+    makeRound("r33", "2026-07-12", [
+      makeItem("virtual_env", "virtualenv", "todo"),
+      makeItem("x", "两数之和", "todo"),
+    ]),
+  ]
+  const action = scheduler.nextAction(makeCtx(store, { rounds: rounds, problems: PROBLEMS }))
+  assert.strictEqual(action.problemId, "lc-00001")
+  assert.strictEqual(action.itemId, "x")
+  db.close()
+})
+
+test("题库为空时轮次照样推，只是没有 problemId", function () {
+  const { db, store } = freshStore()
+  const rounds = [makeRound("r32", "2026-07-12", [makeItem("virtual_env", "virtualenv", "todo")])]
+  const action = scheduler.nextAction(makeCtx(store, { rounds: rounds, problems: [] }))
+  assert.ok(action)
+  assert.strictEqual(action.kind, "round")
+  assert.strictEqual(action.problemId, null)
+  db.close()
+})
