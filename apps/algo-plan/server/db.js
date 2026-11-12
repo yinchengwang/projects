@@ -136,6 +136,29 @@ function createStore(db) {
       return Number(row.n)
     },
 
+    /**
+     * 列出全部作答记录（按时间升序，第一条就是某题的最早一次尝试）。
+     * 排程器推下一题时要算「首次通过率」，靠的就是这个顺序。
+     * @returns {object[]}
+     */
+    listAttempts: function () {
+      return db.prepare("SELECT * FROM attempts ORDER BY ts ASC, id ASC").all()
+    },
+
+    /**
+     * 统计某个时刻之后的作答条数（今日页的进度条要用）。
+     * attempts.ts 存的是 ISO 字符串（new Date().toISOString()），
+     * 同一格式的字符串可以直接比大小，不用转成时间戳。
+     * @param {string} sinceIso 起始时刻（ISO）
+     * @returns {number}
+     */
+    countAttemptsSince: function (sinceIso) {
+      const row = db
+        .prepare("SELECT COUNT(*) AS n FROM attempts WHERE ts >= ?")
+        .get(String(sinceIso || ""))
+      return Number(row.n)
+    },
+
     /* ---------- review_cards ---------- */
 
     upsertReviewCard: function (card) {
