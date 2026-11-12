@@ -137,3 +137,60 @@ td button {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ---------- M4：四个页面用到的控件 ---------- */
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+button {
+  background: #262b33;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 14px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #0f1216; font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: default; }
+textarea.code {
+  width: 100%;
+  background: #10131a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font: 13px/1.6 Consolas, "Cascadia Mono", monospace;
+  padding: 10px 12px;
+  resize: vertical;
+}
+select {
+  background: #262b33;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 14px;
+  padding: 6px 10px;
+}
+.reason { color: var(--muted); margin: 10px 0; }
+.muted { color: var(--muted); }
+.error { color: var(--bad); }
+.ok-text { color: var(--ok); }
+.warn-text { color: var(--warn); }
+.result { margin-top: 12px; }
+.bar { height: 8px; background: #262b33; border-radius: 999px; overflow: hidden; margin-top: 10px; }
+.fill { height: 100%; background: var(--accent); }
+.diff {
+  background: #10131a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--fg);
+  font: 12px/1.6 Consolas, "Cascadia Mono", monospace;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.warn-panel { border-color: var(--warn); }
+.correction { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.correction h3 { font-size: 14px; margin: 0 0 8px; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
+th { color: var(--muted); font-weight: 500; }

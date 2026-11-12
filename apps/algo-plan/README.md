@@ -3,8 +3,8 @@
 本机运行的算法学习助手：本地静态题库打底，LLM 做增强，判题走真实编译执行，
 进度与错题写回 learning 仓进 git。
 
-当前进度：**M3 判题**（服务起得来 / SQLite schema / 题库 md 解析 / 真实编译执行的判题器 / 结果面板）。
-题库导入属于 M2（已完成，`learning/bank/` 下有几百道题）；复习与轮次闭环属于 M4，
+当前进度：**M4 闭环**（推下一题 / SM-2 复习 / 轮次清单 / 勾选写回 / 错题订正）。
+题库导入属于 M2（已完成）；判题属于 M3（已完成，真实编译执行）；
 诊断属于 M5，LLM 属于 M6，尚未实现。
 
 ## 快速开始
@@ -28,6 +28,7 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node server/main.js
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `ALGO_PLAN_LEARNING_ROOT` | learning 仓根目录。**不硬编码相对路径** | 无（未设＝纯本地模式） |
+| `ALGO_PLAN_LOCAL_BANK` | 工程仓内置题库根（Codeforces 题在这） | `apps/algo-plan/bank` |
 | `PORT` | 服务端口 | `5173` |
 
 ## 目录结构
@@ -37,14 +38,34 @@ algo-plan/
 ├── core/            纯函数层：Problem 模型、markdown 解析、provider、路径解析
 │   ├── bank/        legacy.js：死脚本内联清单的静态解析
 │   │                solutions-scan.js：存量题解的静态扫描
+│   ├── review/      SM-2 间隔重复与判题结果映射
+│   ├── scheduler/   推下一题：候选动作优先级 + 单日配额
+│   ├── sync/        learning 仓同步：轮次解析、勾选写回、错题订正、查脏
 │   └── judge-spec/  判题契约纯函数：用例归一化、输出比对
 ├── server/          组合根、路由、API、SQLite 存储
 ├── judge/           判题执行器：沙箱（临时目录/探测/杀进程树）、编排器（verdict）
-├── web/             原生 JS 单页（无构建）
+├── bank/            工程仓内置题库（Codeforces 题，共 51 道）
+├── web/             原生 JS 单页（无构建）：today / answer / review / rounds 四页
 ├── tools/           seed-bank.js / import-catalog.js / import-solutions.js / import-bank.js
+│                    import-codeforces.js / sync-links.js
 ├── fixtures/        样板题 + 判题 fixture（题面、用例、正例与三类负例）
 └── tests/           node:test 套件，一个命令跑全部
 ```
+
+## 两套题库根
+
+应用同时认**两个**题库根，**前者优先**：
+
+| 顺序 | 根目录 | 内容 | 性质 |
+|---|---|---|---|
+| 1 | `learning/bank/` | 人审题库（LeetCode、牛客、剑指 Offer……） | 在 git 里，改动要人审 |
+| 2 | `apps/algo-plan/bank/` | 机器抓的 Codeforces 题 | 也在 git 里，但内容由导入器生成 |
+
+- 同一个 id 出现在两个根里时，**以先出现的为准**（人审库优先），并在 `/api/health`
+  的 `bank.warnings` 里记一笔。
+- **写回永远写人审库**（`learning/bank`），不会把机器抓的题写回工程仓。
+- 工程仓的 `bank/` 之所以不住 `data/` 下面：`projects/.gitignore` 有 `data/` 规则，
+  放那儿就进不了 git，题目就丢了。
 
 ## 题库格式
 
@@ -75,8 +96,12 @@ updated: 2026-11-11
 ```
 ````
 
-`id` 是 git 侧与 SQLite 侧的唯一连接键，格式 `<前缀>-<5 位数字>`，
-前缀取自 `lc` / `nc` / `jz` / `self` / `llm`。
+`id` 是 git 侧与 SQLite 侧的唯一连接键。人审题库用 `<前缀>-<5 位数字>`，
+前缀取自 `lc` / `nc` / `jz` / `self` / `llm`；Codeforces 题用 `cf-<题号>-<字母>`。
+
+存量题库里有一批题**只有元数据、没有题面**（`needs_fill: true`）。这类题在界面上
+**不装死链、不显示空白**，而是明确给出状态：题号、源站、去原题的入口，以及
+「题面待回填」的说明。
 
 导入样板题：
 
@@ -117,6 +142,33 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node tools/import-bank.js --force
 同 id 的冲突按 **id** 判断（不按路径）：同一个 id 在两路来源里算出来的轨道可能不同，
 只看自己那条路径会漏判，会写出两份同 id 的文件。
 
+### Codeforces 题源
+
+`tools/import-codeforces.js` 从 Codeforces 抓题面，落到**工程仓**的 `bank/<track>/`
+（不落 learning 仓）：
+
+```bash
+# 抓题面（Chrome DevTools Protocol 驱动，网页版挂在 Cloudflare 后面）
+node tools/fetch-cf-pages.js
+
+# 导入成题库文件
+node tools/import-codeforces.js --dry-run
+node tools/import-codeforces.js
+
+# 已有文件时强制覆盖
+node tools/import-codeforces.js --rewrite
+```
+
+要点：
+
+- **测试数据不公开**，所以用例**只提取题面里的样例**（样例就是官方给的输入输出）。
+- 每道题人工整理了一段**中文题意**放在英文原题面前，中文对照着看更省事。
+- 题面里带「题目信息」小节：源站题号、难度、标签，以及**去原题**的链接。
+- 抓下来的题**一样受「不自动 commit」约束**——导入器只写文件，不碰 git。
+
+`tools/sync-links.js` 负责给存量题回填原题链接（有直达地址给「去原题」，
+只有搜索地址退到「去源站搜索」，两个都没有就明说没有，不装死链）。
+
 ## 判题契约
 
 提交给判题器的是**完整的 stdin→stdout 程序，必须自己写 `main()`**。
@@ -143,6 +195,12 @@ ALGO_PLAN_LEARNING_ROOT=/path/to/learning node tools/import-bank.js --force
 | GET | `/api/bank` | 题库列表，支持 `track` / `topic` / `difficulty` / `status` / `prefix` / `limit` |
 | GET | `/api/problem/:id` | 单题详情。**只回前 2 个样例用例 + 用例总数，不回参考解法** |
 | POST | `/api/attempt` | 提交代码判题。入参 `{problemId, code, language, mode}`；响应 `{attemptId, verdict, passedCases, totalCases, durationMs, failedCase, message, compilerOutput}` |
+| GET | `/api/next` | 下一个动作：复习 / 轮次推进 / 主动探索，带「这一步大约 N 分钟」 |
+| POST | `/api/review/:id/grade` | 给复习卡片打分（`quality` 0~5），返回下一次复习时间、间隔、难度因子、遗忘次数 |
+| GET | `/api/rounds` | learning/progress 下的轮次清单与解析告警 |
+| PATCH | `/api/rounds/:id/items/:itemId` | 勾选写回（`status` / `doneDate` / `commitSha`），只改目标行，返回 diff |
+| POST | `/api/correction` | 写错题订正到 `notes/practice/<id>-订正.md`，返回文件路径与 diff |
+| GET | `/api/progress` | 今日进度与单日复习配额 |
 
 ## 测试
 
@@ -172,6 +230,23 @@ node tests/run-all.js
 | `attempt.test.js` | `POST /api/attempt` 的形状、校验、流水落库 |
 | `web-panel.test.js` | 结果面板数据整理（纯函数） |
 | `web-dom.test.js` | 前端渲染路径（DOM 桩）：样例渲染、草稿不丢、渲染竞态 |
+| `sm2.test.js` | SM-2 公式、easiness 下限、六档 quality 映射、到期与逾期排序 |
+| `rounds-parse.test.js` | 7 种真实表头变体、缺列、坏行、告警 |
+| `sync-write.test.js` | 查脏、只改目标行、缺列告警、脏仓拒绝、错题订正 |
+| `next-action.test.js` | 三级优先级、两种配额耗尽、轮次挑选与掌握度排序 |
+| `api-m4.test.js` | M4 五个接口的响应字段 |
+| `pages.test.js` | 四个页面注册与评分映射 |
+| `e2e-m4.test.js` | 下一题 → 写回 → 订正 → 评分，且不自动提交 |
+
+## 写回 learning 仓的规矩
+
+- **写回前查脏**：`git -c core.quotepath=false status --porcelain -z`（按 NUL 切分），
+  工作区不干净就拒绝写回，并告诉你哪个文件被动过。
+- **只改目标行**：读-改-写，整份轮次文件只有那一行会变。
+- **绝不自动 commit**：写回只落在 learning 仓的工作区，界面把 diff 摆出来，
+  提交与否由你决定。app 不会替你 `git add`，也不会替你 `git commit`。
+- **错题订正**写到 `notes/practice/<题目ID>-订正.md`，frontmatter 键序按
+  `notes/_meta/schema.md` 登记的 `correction` 惯例。
 
 ## 归属
 
