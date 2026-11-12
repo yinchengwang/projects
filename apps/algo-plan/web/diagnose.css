@@ -1,0 +1,66 @@
+/* 诊断页专用样式。配色一律取 style.css 里的 CSS 变量，不另起一套。 */
+
+.diag-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.diag-panel h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.diag-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+}
+.diag-card { min-width: 96px; }
+.diag-card div { color: var(--muted); font-size: 13px; }
+.diag-card span { color: var(--fg); font-size: 18px; font-weight: 600; }
+
+.diag-legend {
+  display: flex;
+  gap: 18px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.diag-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.chart { width: 100%; height: auto; display: block; }
+.chart-host { margin: 4px 0 6px; }
+
+.chart-table { margin-top: 10px; }
+.chart-table summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+}
+.chart-table table { margin-top: 8px; }
+
+.diag-advice {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 13px;
+}
+.diag-advice li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.diag-topic { color: var(--fg); }
+
+.diag-empty { color: var(--muted); font-size: 13px; margin: 4px 0 0; }

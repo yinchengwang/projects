@@ -106,6 +106,7 @@ const TABS = [
   { key: "answer", label: "作答" },
   { key: "review", label: "复习" },
   { key: "rounds", label: "轮次" },
+  { key: "diagnose", label: "诊断" },
 ]
 
 let activeTab = "today"
