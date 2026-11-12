@@ -23,7 +23,7 @@ function tempLearning() {
 }
 
 async function withApp(fn) {
-  const app = createApp({ dbPath: ":memory:", learningRoot: tempLearning() })
+  const app = createApp({ dbPath: ":memory:", learningRoot: tempLearning(), localBank: null })
   const port = await app.listen(0)
   try {
     await fn("http://127.0.0.1:" + port, app)
@@ -151,7 +151,7 @@ test("没有测试用例的题目返回 400 并说清原因", async function () 
     ].join("\n"),
     "utf8"
   )
-  const app = createApp({ dbPath: ":memory:", learningRoot: root })
+  const app = createApp({ dbPath: ":memory:", learningRoot: root, localBank: null })
   const port = await app.listen(0)
   try {
     const res = await post("http://127.0.0.1:" + port, {
@@ -200,7 +200,7 @@ test("Python 提交走真实解释器，判为 pass", async function () {
   const dir = path.join(root, "bank", "fundamentals")
   fs.mkdirSync(dir, { recursive: true })
   fs.copyFileSync(manifest.PROBLEMS.pythonReverse, path.join(dir, "self-00011.md"))
-  const app = createApp({ dbPath: ":memory:", learningRoot: root })
+  const app = createApp({ dbPath: ":memory:", learningRoot: root, localBank: null })
   const port = await app.listen(0)
   try {
     const res = await post("http://127.0.0.1:" + port, {

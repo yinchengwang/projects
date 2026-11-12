@@ -131,3 +131,43 @@ test("serializeProblemMarkdown 产出 frontmatter", function () {
   assert.ok(text.indexOf("---\nid: lc-00001") === 0, text.slice(0, 40))
   assert.ok(text.indexOf("needs_fill: false") !== -1)
 })
+
+test("多套题库合并成一个索引，两边的题都能列出", async function () {
+  const human = tempBank()
+  const machine = tempBank()
+  const humanProvider = new FileProvider(human)
+  await humanProvider.put(sampleProblem("lc-00001"))
+  await humanProvider.put(sampleProblem("lc-00002"))
+  const machineProvider = new FileProvider(machine)
+  await machineProvider.put(sampleProblem("cf-4-a"))
+
+  const merged = new FileProvider([human, machine])
+  const ids = (await merged.list({})).map(function (p) {
+    return p.id
+  })
+  assert.deepStrictEqual(ids, ["cf-4-a", "lc-00001", "lc-00002"])
+  assert.strictEqual(merged.stats().problemCount, 3)
+})
+
+test("同 id 出现在两套题库里时，以先传入的那套为准", async function () {
+  const human = tempBank()
+  const machine = tempBank()
+  const humanProvider = new FileProvider(human)
+  await humanProvider.put(sampleProblem("lc-00001", { title: "人审版" }))
+  const machineProvider = new FileProvider(machine)
+  await machineProvider.put(sampleProblem("lc-00001", { title: "机器版" }))
+
+  const merged = new FileProvider([human, machine])
+  const got = await merged.get("lc-00001")
+  assert.strictEqual(got.title, "人审版")
+  assert.strictEqual((await merged.list({})).length, 1)
+})
+
+test("多套题库下 put 仍写第一套（人审题库）", async function () {
+  const human = tempBank()
+  const machine = tempBank()
+  const merged = new FileProvider([human, machine])
+  const file = await merged.put(sampleProblem("lc-00001"))
+  assert.strictEqual(file, path.join(human, "interview", "lc-00001.md"))
+  assert.strictEqual(fs.existsSync(path.join(machine, "interview", "lc-00001.md")), false)
+})

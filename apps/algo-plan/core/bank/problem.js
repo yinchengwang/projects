@@ -12,7 +12,7 @@ const crypto = require("node:crypto")
 const TRACKS = ["interview", "fundamentals", "advanced", "engineering"]
 
 /** 题目来源 */
-const SOURCES = ["leetcode", "nowcoder", "jz", "self", "llm"]
+const SOURCES = ["leetcode", "nowcoder", "jz", "self", "llm", "codeforces"]
 
 /** 来源 → ID 前缀 */
 const SOURCE_PREFIX = {
@@ -21,6 +21,7 @@ const SOURCE_PREFIX = {
   jz: "jz",
   self: "self",
   llm: "llm",
+  codeforces: "cf",
 }
 
 /** 难度 */
@@ -108,12 +109,32 @@ function makeLlmId(seed) {
 }
 
 /**
+ * Codeforces 的 ID：`cf-<contestId>-<index>`，例如 cf-1234-a。
+ *
+ * CF 的题号是「比赛号 + 字母下标」两段，套不进 `<前缀>-<5 位数字>` 那个格式，
+ * 所以单开一条规则，不去动已有的 lc-/nc-/jz- 编号。
+ *
+ * @param {number|string} contestId 比赛号（Contest ID）
+ * @param {string} index 题号下标（A / B / C1 / 1 ……）
+ * @returns {string}
+ */
+function makeCodeforcesId(contestId, index) {
+  const cid = String(contestId === null || contestId === undefined ? "" : contestId).trim()
+  const idx = String(index === null || index === undefined ? "" : index).trim().toLowerCase()
+  if (!/^\d+$/.test(cid)) throw new Error("Codeforces 的 contestId 必须是数字：" + contestId)
+  if (!/^[a-z0-9]{1,3}$/.test(idx)) throw new Error("Codeforces 的 index 非法：" + index)
+  return "cf-" + cid + "-" + idx
+}
+
+/**
  * ID 是否合法。
  * @param {string} id
  * @returns {boolean}
  */
 function isValidId(id) {
-  return /^(lc|nc|jz|self|llm)-[0-9a-z]{5,12}$/.test(String(id || ""))
+  const s = String(id || "")
+  if (/^(lc|nc|jz|self|llm)-[0-9a-z]{5,12}$/.test(s)) return true
+  return /^cf-[0-9]{1,8}-[a-z0-9]{1,3}$/.test(s)
 }
 
 /**
@@ -143,6 +164,14 @@ function validateProblem(problem) {
     })
   }
   if (STATUSES.indexOf(problem.status) === -1) errors.push("status 非法：" + problem.status)
+  // url 可空；非空就必须是 http(s) 链接——它会被前端直接渲染成可点的外链，
+  // 放个 javascript: 进来就是实打实的 XSS。
+  if (problem.url && !/^https?:\/\/[^\s]+$/.test(String(problem.url))) {
+    errors.push("url 非法：" + problem.url)
+  }
+  if (problem.searchUrl && !/^https?:\/\/[^\s]+$/.test(String(problem.searchUrl))) {
+    errors.push("searchUrl 非法：" + problem.searchUrl)
+  }
   return { ok: errors.length === 0, errors: errors }
 }
 
@@ -156,6 +185,9 @@ function createProblem(input) {
   const problem = {
     id: src.id,
     source: src.source,
+    // sourceId：源站那边的真实题号（LC 的题号、CF 的 contestId-index、剑指 Offer 号）。
+    // 题库自己的 id 是导入顺序号，跟源站号对不上——原题链接全靠这个字段回填。
+    sourceId: src.sourceId === undefined || src.sourceId === null ? "" : String(src.sourceId).trim(),
     title: src.title ? String(src.title).trim() : "",
     difficulty: src.difficulty || "medium",
     topics: normalizeTopics(src.topics),
@@ -164,6 +196,12 @@ function createProblem(input) {
     needsFill: src.needsFill === true,
     created: src.created || today(),
     updated: src.updated || today(),
+    // url：原题直达链接。空串表示「还没找到原题地址」，前端据此显示明确状态而不是空白。
+    url: src.url === undefined || src.url === null ? "" : String(src.url).trim(),
+    // searchUrl：源站搜索页兜底链接。牛客的题目地址是一段不可推导的 hash，
+    // 拿不到直达链接时退到搜索页——总比给用户一个死路强。
+    searchUrl:
+      src.searchUrl === undefined || src.searchUrl === null ? "" : String(src.searchUrl).trim(),
     statement: src.statement ? String(src.statement).trim() : "",
     cases: Array.isArray(src.cases) ? src.cases : [],
     solution: src.solution ? String(src.solution).replace(/\n$/, "") : "",
@@ -188,6 +226,9 @@ function toSummary(problem) {
     id: problem.id,
     title: problem.title,
     source: problem.source,
+    sourceId: problem.sourceId || "",
+    url: problem.url || "",
+    searchUrl: problem.searchUrl || "",
     difficulty: problem.difficulty,
     topics: problem.topics,
     tracks: problem.tracks,
@@ -208,6 +249,7 @@ module.exports = {
   today: today,
   makeId: makeId,
   makeLlmId: makeLlmId,
+  makeCodeforcesId: makeCodeforcesId,
   isValidId: isValidId,
   validateProblem: validateProblem,
   createProblem: createProblem,

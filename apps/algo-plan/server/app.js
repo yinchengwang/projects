@@ -211,7 +211,7 @@ function createApp(opts) {
   const options = opts || {}
 
   // 延迟 require：core/ 与 db/api 在后续 Task 才落地，createServer 不依赖它们
-  const { resolveLearningRoot } = require("../core/paths.js")
+  const { resolveLearningRoot, localBankDir } = require("../core/paths.js")
   const { FileProvider } = require("../core/bank/provider.js")
   const { openDb, createStore } = require("./db.js")
 
@@ -219,7 +219,15 @@ function createApp(opts) {
   const store = createStore(db)
 
   const learning = resolveLearningRoot(options.env || process.env, options.learningRoot)
-  const provider = new FileProvider(learning.ok ? path.join(learning.root, "bank") : null)
+  // 两套题库：人审的 learning/bank 在前（写回也写这里），机器抓的工程仓 bank/ 在后。
+  // 同 id 以先出现的为准，人改过的版本不会被机器版本盖掉。
+  // localBank 显式传 null 表示「不加载工程仓内置题库」（测试隔离用）。
+  const bankRoots = []
+  if (learning.ok) bankRoots.push(path.join(learning.root, "bank"))
+  if (options.localBank !== null) {
+    bankRoots.push(localBankDir(options.env || process.env, options.localBank))
+  }
+  const provider = new FileProvider(bankRoots)
 
   const routes = require("./api.js").buildRoutes({
     store: store,

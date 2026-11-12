@@ -47,4 +47,31 @@ function bankDir(learningRoot) {
   return path.join(learningRoot, "bank")
 }
 
-module.exports = { resolveLearningRoot: resolveLearningRoot, bankDir: bankDir }
+/**
+ * 工程仓内置题库根：apps/algo-plan/bank/。
+ *
+ * 为什么要有第二套题库：
+ *   learning/bank 放人审内容（题解、译文），改动要进 git；
+ *   而 Codeforces 这类「机器抓来的原题」不适合塞进人审仓——
+ *   51 个文件一次性涌入，人审仓的 diff 全是噪音。
+ *   所以机器题单独放工程仓，跟代码一起走版本控制，两边都能取到。
+ *
+ * 环境变量 ALGO_PLAN_LOCAL_BANK 可以把它指到别处。
+ * @param {object} env 进程环境变量对象
+ * @param {string} [override] 显式指定路径（优先于环境变量，测试用）
+ * @returns {string}
+ */
+function localBankDir(env, override) {
+  const raw =
+    override !== undefined && override !== null ? override : (env || process.env).ALGO_PLAN_LOCAL_BANK
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return path.join(__dirname, "..", "bank")
+  }
+  return path.resolve(String(raw).trim())
+}
+
+module.exports = {
+  resolveLearningRoot: resolveLearningRoot,
+  bankDir: bankDir,
+  localBankDir: localBankDir,
+}

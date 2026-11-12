@@ -3,13 +3,14 @@
  * parse.js —— markdown ↔ Problem 双向转换
  *
  * 纯函数，无 IO。题库文件格式见设计文档 §3.2：
- *   frontmatter（id/source/title/difficulty/topics/tracks/status/needs_fill/created/updated）
+ *   frontmatter（id/source/source_id/title/difficulty/topics/tracks/status/needs_fill/url/search_url/created/updated）
  *   + 「## 题面」「## 测试用例」「## 参考解法」三个正文小节。
  *
  * frontmatter 用手写的 mini-YAML 解析器——零依赖是硬约束（设计文档 §1.9）。
  */
 
 const { normalizeTopics, normalizeTracks, today } = require("./problem.js")
+const { encodeCell, decodeCell, splitRow } = require("./case-codec.js")
 
 /** 已知的正文小节标题 */
 const SECTION_STATEMENT = "题面"
@@ -139,6 +140,9 @@ function splitSections(body) {
  * 表头形如 `| input | expect |`，数据行第三格可带 `tol=1e-6` 容差标记。
  * 认不出列的行直接跳过，不报错。
  *
+ * 单元格里的换行写成 <br>、竖线写成 \|（见 case-codec.js），
+ * 所以 Codeforces 那种多行样例也能塞进一行表格里。
+ *
  * @param {string} text
  * @returns {Array<{input: string, expect: string, tol: number|null}>}
  */
@@ -151,9 +155,7 @@ function parseCases(text) {
       const trimmed = line.trim()
       if (trimmed.charAt(0) !== "|") return
       const body = trimmed.charAt(trimmed.length - 1) === "|" ? trimmed.slice(1, -1) : trimmed.slice(1)
-      const cells = body.split("|").map(function (cell) {
-        return cell.trim()
-      })
+      const cells = splitRow(body)
       if (!headerSeen) {
         headerSeen = true
         return
@@ -175,7 +177,7 @@ function parseCases(text) {
           if (!Number.isNaN(value)) tol = value
         }
       }
-      cases.push({ input: cells[0], expect: cells[1], tol: tol })
+      cases.push({ input: decodeCell(cells[0]), expect: decodeCell(cells[1]), tol: tol })
     })
   return cases
 }
@@ -226,6 +228,7 @@ function parseProblemMarkdown(text) {
   const problem = {
     id: fm.id === undefined ? "" : String(fm.id),
     source: fm.source === undefined ? "" : String(fm.source),
+    sourceId: fm.source_id === undefined ? "" : String(fm.source_id),
     title: fm.title === undefined ? "" : String(fm.title),
     difficulty: fm.difficulty === undefined ? "medium" : String(fm.difficulty),
     topics: normalizeTopics(fm.topics),
@@ -234,6 +237,8 @@ function parseProblemMarkdown(text) {
     needsFill: needsFillRaw === true || needsFillRaw === "true",
     created: fm.created === undefined ? today() : String(fm.created),
     updated: fm.updated === undefined ? today() : String(fm.updated),
+    url: fm.url === undefined ? "" : String(fm.url),
+    searchUrl: fm.search_url === undefined ? "" : String(fm.search_url),
     statement: (sections[SECTION_STATEMENT] || "").trim(),
     cases: parseCases(sections[SECTION_CASES] || ""),
     solution: solution.code,
@@ -253,18 +258,31 @@ function parseProblemMarkdown(text) {
  * @returns {string}
  */
 function serializeProblemMarkdown(problem) {
-  const frontmatter = serializeFrontmatter({
-    id: problem.id,
-    source: problem.source,
-    title: problem.title,
-    difficulty: problem.difficulty,
-    topics: problem.topics,
-    tracks: problem.tracks,
-    status: problem.status,
-    needs_fill: problem.needsFill ? "true" : "false",
-    created: problem.created,
-    updated: problem.updated,
+  // 按固定顺序拼 frontmatter；source_id 与 url 为空就整行省掉——
+  // 空值写进去会被 mini-YAML 解析成块列表（空数组），文件里也平白多两行噪声。
+  const pairs = [
+    ["id", problem.id],
+    ["source", problem.source],
+    ["source_id", problem.sourceId],
+    ["title", problem.title],
+    ["difficulty", problem.difficulty],
+    ["topics", problem.topics],
+    ["tracks", problem.tracks],
+    ["status", problem.status],
+    ["needs_fill", problem.needsFill ? "true" : "false"],
+    ["url", problem.url],
+    ["search_url", problem.searchUrl],
+    ["created", problem.created],
+    ["updated", problem.updated],
+  ]
+  const fields = {}
+  pairs.forEach(function (pair) {
+    const value = pair[1]
+    if (value === undefined || value === null) return
+    if (typeof value === "string" && value === "") return
+    fields[pair[0]] = value
   })
+  const frontmatter = serializeFrontmatter(fields)
 
   const lines = []
   lines.push("---")
@@ -281,7 +299,7 @@ function serializeProblemMarkdown(problem) {
   lines.push("|---|---|")
   ;(problem.cases || []).forEach(function (item) {
     const tol = item.tol === null || item.tol === undefined ? "" : " tol=" + item.tol
-    lines.push("| " + item.input + " | " + item.expect + " |" + tol)
+    lines.push("| " + encodeCell(item.input) + " | " + encodeCell(item.expect) + " |" + tol)
   })
   lines.push("")
   lines.push("## " + SECTION_SOLUTION)

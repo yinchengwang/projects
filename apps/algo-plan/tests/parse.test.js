@@ -12,12 +12,14 @@ const SAMPLE = [
   "---",
   "id: lc-00001",
   "source: leetcode",
+  "source_id: 1",
   "title: 两数之和",
   "difficulty: easy",
   "topics: [哈希表, 数组]",
   "tracks: [interview, fundamentals]",
   "status: todo",
   "needs_fill: false",
+  "url: https://leetcode.cn/problems/two-sum/",
   "created: 2026-11-11",
   "updated: 2026-11-11",
   "---",
@@ -92,6 +94,8 @@ test("parseProblemMarkdown 解析整篇", function () {
   const p = result.problem
   assert.strictEqual(p.id, "lc-00001")
   assert.strictEqual(p.source, "leetcode")
+  assert.strictEqual(p.sourceId, "1")
+  assert.strictEqual(p.url, "https://leetcode.cn/problems/two-sum/")
   assert.strictEqual(p.title, "两数之和")
   assert.strictEqual(p.difficulty, "easy")
   assert.deepStrictEqual(p.topics, ["哈希表", "数组"])
@@ -124,4 +128,16 @@ test("Problem → markdown → Problem 往返等价", function () {
   const text = parse.serializeProblemMarkdown(first)
   const second = parse.parseProblemMarkdown(text).problem
   assert.deepStrictEqual(second, first)
+})
+
+test("source_id 与 url 为空时整行省掉，不留空值噪声", function () {
+  const p = parse.parseProblemMarkdown(SAMPLE).problem
+  p.sourceId = ""
+  p.url = ""
+  const text = parse.serializeProblemMarkdown(p)
+  assert.strictEqual(text.indexOf("source_id"), -1, text)
+  assert.strictEqual(text.indexOf("url:"), -1, text)
+  const back = parse.parseProblemMarkdown(text).problem
+  assert.strictEqual(back.sourceId, "")
+  assert.strictEqual(back.url, "")
 })

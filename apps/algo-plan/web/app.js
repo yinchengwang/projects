@@ -161,7 +161,40 @@ function renderHealth(health) {
   ])
 }
 
-/** 渲染题库列表（每行带一个「作答」按钮） */
+/**
+ * 题目 → 原题入口。
+ *
+ * 有直达地址就给「去原题」，只有搜索地址就退到「去源站搜索」，
+ * 两个都没有就明说没有——不装作有链接，也不给个死链。
+ *
+ * @param {object} item 题库条目（summary 或 problem 都行）
+ * @returns {{url: string, label: string, kind: string}}
+ */
+function describeSourceLink(item) {
+  const url = String((item && item.url) || "").trim()
+  const searchUrl = String((item && item.searchUrl) || "").trim()
+  if (url) return { url: url, label: "去原题", kind: "direct" }
+  if (searchUrl) return { url: searchUrl, label: "去源站搜索", kind: "search" }
+  return { url: "", label: "暂无链接", kind: "none" }
+}
+
+/** 造一个「跳原题」的链接元素 */
+function renderSourceLink(item) {
+  const link = describeSourceLink(item)
+  if (link.kind === "none") {
+    return el("span", { class: "muted", text: link.label })
+  }
+  const a = el("a", {
+    class: "link",
+    href: link.url,
+    target: "_blank",
+    rel: "noopener noreferrer",
+    text: link.label,
+  })
+  return a
+}
+
+/** 渲染题库列表（每行带一个「作答」按钮 + 原题入口） */
 function renderBank(bank) {
   const items = (bank && bank.items) || []
   const rows = items.map(function (item) {
@@ -185,6 +218,7 @@ function renderBank(bank) {
           text: item.needsFill ? "待补全" : item.status,
         }),
       ]),
+      el("td", {}, [renderSourceLink(item)]),
       el("td", {}, [go]),
     ])
   })
@@ -203,6 +237,7 @@ function renderBank(bank) {
               el("th", { text: "难度" }),
               el("th", { text: "知识点" }),
               el("th", { text: "状态" }),
+              el("th", { text: "原题" }),
               el("th", { text: "操作" }),
             ]),
           ]),
@@ -256,6 +291,63 @@ function renderVerdictPanel(result) {
   return el("section", { class: "panel" }, children)
 }
 
+/**
+ * 题面缺失时的说明块。
+ *
+ * 为什么不能只留一句「（题面为空）」：
+ *   存量题库里大部分题只有题号和标题，正文要跳到源站读。
+ *   白屏式的「为空」等于把用户堵死在门外——他既不知道要去哪读，
+ *   也不知道读完该干嘛。这里把状态、去处、下一步都写明白。
+ */
+function renderMissingStatement(problem) {
+  const link = describeSourceLink(problem)
+  const source = String(problem.source || "")
+  const sourceId = String(problem.sourceId || "")
+  const children = [
+    el("h3", { class: "notice-title", text: "题面还没进题库" }),
+    el("p", {
+      class: "notice-text",
+      text:
+        "这道题在本地题库里只有题号和标题，正文在源站上。" +
+        (link.kind === "none"
+          ? "它也还没有原题链接，先按下面的题号去源站搜一下。"
+          : "点下面的链接去源站读题，读懂后回到这里写代码提交判题。"),
+    }),
+  ]
+
+  if (source || sourceId) {
+    children.push(
+      el("p", {
+        class: "muted",
+        text: "源站题号：" + (source || "未知来源") + (sourceId ? " / " + sourceId : ""),
+      })
+    )
+  }
+
+  if (link.kind !== "none") {
+    children.push(
+      el("p", {}, [
+        el("a", {
+          class: "link strong",
+          href: link.url,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          text: link.label,
+        }),
+      ])
+    )
+  } else {
+    children.push(
+      el("p", {
+        class: "muted",
+        text: "提示：运行 node tools/sync-links.js 可以给题库回填原题链接。",
+      })
+    )
+  }
+
+  return el("div", { class: "notice" }, children)
+}
+
 /** 渲染作答页：题面 + 样例 + 语言选择 + 代码框 + 提交按钮 + 结果面板 */
 async function renderPractice() {
   const section = el("section", { class: "panel" })
@@ -271,7 +363,31 @@ async function renderPractice() {
   const problem = await getJson("/api/problem/" + encodeURIComponent(state.problemId))
   const samples = (problem.cases && problem.cases.sample) || []
   section.appendChild(el("h2", { text: problem.title + "（" + problem.id + "）" }))
-  section.appendChild(el("pre", { class: "statement", text: problem.statement || "（题面为空）" }))
+
+  // 标题旁边常驻一个原题入口：有题面时也能跳过去核对原文
+  const link = describeSourceLink(problem)
+  if (link.kind !== "none") {
+    section.appendChild(
+      el("p", { class: "muted" }, [
+        document.createTextNode("原题："),
+        el("a", {
+          class: "link",
+          href: link.url,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          text: link.label,
+        }),
+      ])
+    )
+  }
+
+  const statement = String(problem.statement || "").trim()
+  if (statement) {
+    section.appendChild(el("pre", { class: "statement", text: statement }))
+  } else {
+    section.appendChild(renderMissingStatement(problem))
+  }
+
   section.appendChild(
     el("p", {
       class: "muted",
@@ -417,6 +533,7 @@ if (typeof document !== "undefined") {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     describePanel: describePanel,
+    describeSourceLink: describeSourceLink,
     truncate: truncate,
     TONE_BY_VERDICT: TONE_BY_VERDICT,
     PANEL_TEXT_LIMIT: PANEL_TEXT_LIMIT,
@@ -427,6 +544,8 @@ if (typeof module !== "undefined" && module.exports) {
       renderBank: renderBank,
       renderPractice: renderPractice,
       renderVerdictPanel: renderVerdictPanel,
+      renderMissingStatement: renderMissingStatement,
+      renderSourceLink: renderSourceLink,
       setView: function (view) {
         currentView = view
       },

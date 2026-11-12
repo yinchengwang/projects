@@ -98,6 +98,9 @@ function run(opts) {
         byId[id] = {
           id: id,
           source: item.platform,
+          // 死脚本里存的是源站真实题号（LC 题号 / 剑指 Offer 号），别丢——
+          // 题库自己的 id 是导入顺序号，对不上源站，原题链接全靠这个字段回填。
+          sourceId: item.problemId,
           title: item.title,
           difficulty: item.difficulty,
           tracks: [track],
@@ -127,6 +130,7 @@ function run(opts) {
       problem = createProblem({
         id: data.id,
         source: data.source,
+        sourceId: data.sourceId,
         title: data.title,
         // 实测死脚本里只有 easy / medium，没有 hard
         difficulty: data.difficulty === "easy" ? "easy" : "medium",

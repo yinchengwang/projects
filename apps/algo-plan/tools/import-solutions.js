@@ -149,6 +149,8 @@ function run(opts) {
       problem = createProblem({
         id: id,
         source: item.source,
+        // 文件名里的题号就是源站真实题号（leetcode_1455 → 1455），留着好回填原题链接
+        sourceId: item.sourceId,
         title: item.title,
         // 查不到难度时默认 medium（存量题解本身没有难度信息）
         difficulty: meta ? meta.difficulty : "medium",

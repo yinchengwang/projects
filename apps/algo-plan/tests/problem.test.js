@@ -41,6 +41,29 @@ test("isValidId 只认已知前缀", function () {
   assert.ok(!problem.isValidId(""))
 })
 
+test("makeCodeforcesId 生成 cf-<contestId>-<index>", function () {
+  assert.strictEqual(problem.makeCodeforcesId(1234, "A"), "cf-1234-a")
+  assert.strictEqual(problem.makeCodeforcesId(4, "C1"), "cf-4-c1")
+  assert.ok(problem.isValidId(problem.makeCodeforcesId(1234, "A")))
+})
+
+test("makeCodeforcesId 拒绝非法 contestId 与 index", function () {
+  assert.throws(function () {
+    problem.makeCodeforcesId("abc", "A")
+  })
+  assert.throws(function () {
+    problem.makeCodeforcesId(1, "!!")
+  })
+})
+
+test("isValidId 认 Codeforces 编号但不认乱写的", function () {
+  assert.ok(problem.isValidId("cf-1234-a"))
+  assert.ok(problem.isValidId("cf-4-c1"))
+  assert.ok(!problem.isValidId("cf-1234"))
+  assert.ok(!problem.isValidId("cf-abc-a"))
+  assert.ok(!problem.isValidId("cf-1234-abcdef"))
+})
+
 test("normalizeTopics 去空白、去重、保序", function () {
   const out = problem.normalizeTopics([" 哈希表 ", "数组", "哈希表", "", "  "])
   assert.deepStrictEqual(out, ["哈希表", "数组"])
@@ -121,4 +144,59 @@ test("toSummary 不带题面与解法", function () {
   assert.strictEqual(summary.id, "lc-00003")
   assert.strictEqual(summary.statement, undefined)
   assert.strictEqual(summary.solution, undefined)
+})
+
+test("createProblem 带出 sourceId 与 url", function () {
+  const created = problem.createProblem({
+    id: "lc-00004",
+    source: "leetcode",
+    sourceId: 4,
+    url: "https://leetcode.cn/problems/median-of-two-sorted-arrays/",
+    title: "题目",
+    topics: ["数组"],
+    tracks: ["interview"],
+  })
+  assert.strictEqual(created.sourceId, "4")
+  assert.strictEqual(created.url, "https://leetcode.cn/problems/median-of-two-sorted-arrays/")
+  assert.strictEqual(problem.toSummary(created).url, created.url)
+})
+
+test("createProblem 不给 sourceId / url 时补空串", function () {
+  const created = problem.createProblem({
+    id: "lc-00005",
+    source: "leetcode",
+    title: "题目",
+    topics: ["数组"],
+    tracks: ["interview"],
+  })
+  assert.strictEqual(created.sourceId, "")
+  assert.strictEqual(created.url, "")
+})
+
+test("validateProblem 拒绝非 http 的 url", function () {
+  const result = problem.validateProblem({
+    id: "lc-00006",
+    source: "leetcode",
+    title: "题目",
+    difficulty: "easy",
+    topics: ["数组"],
+    tracks: ["interview"],
+    status: "todo",
+    url: "javascript:alert(1)",
+  })
+  assert.strictEqual(result.ok, false)
+  assert.ok(result.errors.some(function (e) { return e.indexOf("url 非法") === 0 }))
+})
+
+test("codeforces 是合法来源", function () {
+  assert.ok(problem.SOURCES.indexOf("codeforces") !== -1)
+  const created = problem.createProblem({
+    id: "cf-1234-a",
+    source: "codeforces",
+    title: "Theatre Square",
+    difficulty: "easy",
+    topics: ["数学"],
+    tracks: ["fundamentals"],
+  })
+  assert.strictEqual(created.source, "codeforces")
 })

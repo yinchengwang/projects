@@ -44,6 +44,34 @@ function indexExistingProblems(bankDir) {
   return out
 }
 
+/**
+ * 列出题库目录下的全部 .md 文件（绝对路径）。
+ * @param {string} bankDir learning/bank 目录（可以不存在）
+ * @returns {string[]}
+ */
+function listProblemFiles(bankDir) {
+  const out = []
+  function walk(dir) {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch (e) {
+      return
+    }
+    entries.forEach(function (entry) {
+      const abs = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(abs)
+        return
+      }
+      if (entry.isFile() && /\.md$/i.test(entry.name)) out.push(abs)
+    })
+  }
+  walk(String(bankDir || ""))
+  return out
+}
+
 module.exports = {
   indexExistingProblems: indexExistingProblems,
+  listProblemFiles: listProblemFiles,
 }

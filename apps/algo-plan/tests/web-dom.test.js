@@ -43,6 +43,116 @@ function mountContainer(id) {
   return node
 }
 
+/** 在树里找出所有带某个属性值的节点 */
+function findAllByAttr(node, key, value) {
+  const out = []
+  function walk(n) {
+    if (!n) return
+    if (n.attributes && n.attributes[key] === value) out.push(n)
+    ;(n.children || []).forEach(walk)
+  }
+  walk(node)
+  return out
+}
+
+test("原题入口：有直达地址给「去原题」，只有搜索地址退到「去源站搜索」", function () {
+  assert.deepStrictEqual(panel.describeSourceLink({ url: "https://x/1", searchUrl: "" }), {
+    url: "https://x/1",
+    label: "去原题",
+    kind: "direct",
+  })
+  assert.deepStrictEqual(panel.describeSourceLink({ url: "", searchUrl: "https://s/2" }), {
+    url: "https://s/2",
+    label: "去源站搜索",
+    kind: "search",
+  })
+  assert.deepStrictEqual(panel.describeSourceLink({ url: "", searchUrl: "" }), {
+    url: "",
+    label: "暂无链接",
+    kind: "none",
+  })
+})
+
+test("题库每一行都带一个通往原题的链接", function () {
+  const bank = {
+    total: 2,
+    items: [
+      {
+        id: "lc-00001",
+        title: "两数之和",
+        difficulty: "easy",
+        topics: ["哈希表"],
+        status: "todo",
+        needsFill: false,
+        url: "https://leetcode.cn/problems/two-sum/",
+        searchUrl: "",
+      },
+      {
+        id: "cf-4-a",
+        title: "西瓜",
+        difficulty: "easy",
+        topics: ["数学"],
+        status: "todo",
+        needsFill: true,
+        url: "",
+        searchUrl: "https://www.nowcoder.com/search?query=西瓜",
+      },
+    ],
+  }
+  const section = panel.__test.renderBank(bank)
+  const links = findAllByAttr(section, "href", "https://leetcode.cn/problems/two-sum/")
+  assert.strictEqual(links.length, 1, "题库行要有原题直链")
+  const searches = findAllByAttr(section, "href", "https://www.nowcoder.com/search?query=西瓜")
+  assert.strictEqual(searches.length, 1, "没有直达地址的行要给搜索入口")
+})
+
+test("题面为空时给出明确状态和跳转入口，而不是一句「（题面为空）」", async function () {
+  stubFetch({
+    "/api/problem/": {
+      id: "lc-00009",
+      title: "缺失题面的题",
+      source: "leetcode",
+      sourceId: "9",
+      url: "https://leetcode.cn/problems/x/",
+      searchUrl: "",
+      statement: "",
+      cases: { sample: [{ input: "1", expect: "2" }], total: 1 },
+    },
+  })
+
+  state.problemId = "lc-00009"
+  const section = await panel.__test.renderPractice()
+  const text = section.textContent
+  assert.ok(text.indexOf("题面还没进题库") !== -1, "要说明状态：" + text)
+  assert.ok(text.indexOf("（题面为空）") === -1, "不该再出现空白提示：" + text)
+  assert.ok(text.indexOf("leetcode / 9") !== -1, "要给出源站题号，方便自己搜：" + text)
+  assert.ok(
+    findAllByAttr(section, "href", "https://leetcode.cn/problems/x/").length >= 1,
+    "要有跳转原题的入口"
+  )
+})
+
+test("题面为空且没有链接时，说明去哪里找题", async function () {
+  stubFetch({
+    "/api/problem/": {
+      id: "lc-00010",
+      title: "既没题面也没链接",
+      source: "nowcoder",
+      sourceId: "10",
+      url: "",
+      searchUrl: "",
+      statement: "",
+      cases: { sample: [], total: 0 },
+    },
+  })
+
+  state.problemId = "lc-00010"
+  const section = await panel.__test.renderPractice()
+  const text = section.textContent
+  assert.ok(text.indexOf("还没有原题链接") !== -1, "要说清没有链接这件事：" + text)
+  assert.ok(text.indexOf("sync-links") !== -1, "要指出回填链接的办法：" + text)
+})
+
 test("题库每一行都渲染出「作答」按钮", function () {
   const bank = {
     total: 1,

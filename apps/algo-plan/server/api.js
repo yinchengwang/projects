@@ -48,7 +48,12 @@ function buildRoutes(ctx) {
           root: ctx.learning.root,
           reason: ctx.learning.reason,
         },
-        bank: stats,
+        bank: {
+          fileCount: stats.fileCount,
+          problemCount: stats.problemCount,
+          warnings: stats.warnings,
+          roots: ctx.provider.roots || [],
+        },
         attempts: ctx.store.countAttempts(),
       })
     },
@@ -87,6 +92,9 @@ function buildRoutes(ctx) {
         id: problem.id,
         title: problem.title,
         source: problem.source,
+        sourceId: problem.sourceId || "",
+        url: problem.url || "",
+        searchUrl: problem.searchUrl || "",
         difficulty: problem.difficulty,
         topics: problem.topics,
         tracks: problem.tracks,

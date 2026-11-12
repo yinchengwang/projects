@@ -7,8 +7,10 @@
  *   get(id)       -> Promise<Problem|undefined>
  *   put(problem)  -> Promise<void>
  *
- * 现在只有 FileProvider（读写 learning/bank/*.md）。
- * 将来换 DbProvider（查 engine/db）只需再加一个实现，上层一行不用改。
+ * 现在只有 FileProvider（读写 markdown 题库）。
+ * 题库根可以有多套（人审的 learning/bank + 机器抓的工程仓 bank/），
+ * 合并成一个 id 索引对外提供；将来换 DbProvider（查 engine/db）只需再加一个实现，
+ * 上层一行不用改。
  */
 
 const fs = require("node:fs")
@@ -46,10 +48,24 @@ function listMarkdownFiles(dir) {
  */
 class FileProvider {
   /**
-   * @param {string|null} bankDir 题库根目录；null 表示纯本地模式（无题库）
+   * @param {string|string[]|null} bankDir 题库根目录；数组表示多套题库；
+   *        null 表示纯本地模式（无题库）
+   *
+   * 多根的语义：按传入顺序扫描，同 id 以**先出现的**为准。
+   * 惯例是「人审题库（learning/bank）在前，机器题库（工程仓 bank/）在后」，
+   * 这样人改过的版本不会被机器抓来的版本盖掉。
    */
   constructor(bankDir) {
-    this.bankDir = bankDir || null
+    const roots = []
+    const list = Array.isArray(bankDir) ? bankDir : bankDir ? [bankDir] : []
+    list.forEach(function (dir) {
+      if (!dir) return
+      const abs = path.resolve(String(dir))
+      if (roots.indexOf(abs) === -1) roots.push(abs)
+    })
+    this.roots = roots
+    // 写入目标：第一个根。写回（如掌握度、状态）永远写人审题库。
+    this.bankDir = roots.length ? roots[0] : null
     this.index = null
     this.warnings = []
   }
@@ -62,29 +78,28 @@ class FileProvider {
     const byId = {}
     const files = []
     const warnings = []
-    if (!this.bankDir || !fs.existsSync(this.bankDir)) {
-      this.index = { byId: byId, files: files, warnings: warnings }
-      return this.index
-    }
-    listMarkdownFiles(this.bankDir).forEach(function (file) {
-      files.push(file)
-      let text
-      try {
-        text = fs.readFileSync(file, "utf8")
-      } catch (e) {
-        warnings.push("读取失败：" + file + "（" + e.message + "）")
-        return
-      }
-      const parsed = parseProblemMarkdown(text)
-      if (!parsed.problem || !parsed.problem.id) {
-        warnings.push("缺少 id，已跳过：" + file)
-        return
-      }
-      if (byId[parsed.problem.id]) {
-        warnings.push("id 重复：" + parsed.problem.id + "（保留先出现的）")
-        return
-      }
-      byId[parsed.problem.id] = file
+    this.roots.forEach(function (root) {
+      if (!fs.existsSync(root)) return
+      listMarkdownFiles(root).forEach(function (file) {
+        files.push(file)
+        let text
+        try {
+          text = fs.readFileSync(file, "utf8")
+        } catch (e) {
+          warnings.push("读取失败：" + file + "（" + e.message + "）")
+          return
+        }
+        const parsed = parseProblemMarkdown(text)
+        if (!parsed.problem || !parsed.problem.id) {
+          warnings.push("缺少 id，已跳过：" + file)
+          return
+        }
+        if (byId[parsed.problem.id]) {
+          warnings.push("id 重复：" + parsed.problem.id + "（保留先出现的）")
+          return
+        }
+        byId[parsed.problem.id] = file
+      })
     })
     this.index = { byId: byId, files: files, warnings: warnings }
     return this.index
@@ -103,11 +118,13 @@ class FileProvider {
    */
   async list(filter) {
     const f = filter || {}
-    if (!this.bankDir || !fs.existsSync(this.bankDir)) return []
+    if (this.roots.length === 0) return []
     const index = this.getIndex()
     const out = []
-    const files = index.files
-    for (const file of files) {
+    // 按去重后的索引遍历：同一个 id 在两套题库里各有一份时只出现一次（取先传入的那套）。
+    const ids = Object.keys(index.byId)
+    for (const id of ids) {
+      const file = index.byId[id]
       let problem
       try {
         problem = parseProblemMarkdown(fs.readFileSync(file, "utf8")).problem
@@ -134,7 +151,7 @@ class FileProvider {
    * @returns {Promise<object|undefined>}
    */
   async get(id) {
-    if (!this.bankDir || !fs.existsSync(this.bankDir)) return undefined
+    if (this.roots.length === 0) return undefined
     const index = this.getIndex()
     const file = index.byId[id]
     if (!file) return undefined

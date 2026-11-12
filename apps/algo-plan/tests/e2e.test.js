@@ -51,6 +51,7 @@ test("端到端：导入 → 起服务 → 打接口", async function () {
     dbPath: path.join(root, "app.db"),
     learningRoot: root,
     env: { ALGO_PLAN_LEARNING_ROOT: root },
+    localBank: null,
   })
   const port = await app.listen(0)
   const base = "http://127.0.0.1:" + port
@@ -83,7 +84,7 @@ test("端到端：SQLite 文件真的落盘了", function () {
   const root = tempLearning()
   seed.run({ env: { ALGO_PLAN_LEARNING_ROOT: root } })
   const dbPath = path.join(root, "app.db")
-  const app = createApp({ dbPath: dbPath, learningRoot: root, env: {} })
+  const app = createApp({ dbPath: dbPath, learningRoot: root, env: {}, localBank: null })
   return app.close().then(function () {
     assert.ok(fs.existsSync(dbPath), "应生成 SQLite 文件")
   })

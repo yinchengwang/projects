@@ -65,6 +65,26 @@ th { color: var(--muted); font-weight: 500; }
 .error { color: var(--bad); }
 .muted { color: var(--muted); font-size: 13px; }
 
+/* ---- 题面缺失时的说明块：把状态、去处、下一步写明白 ---- */
+.notice {
+  background: var(--bg);
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 0 0 12px;
+}
+.notice-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.notice-text { margin: 0 0 8px; font-size: 13px; color: var(--fg); }
+a.link { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+a.link:hover { border-bottom-color: var(--accent); }
+a.link.strong { font-size: 14px; font-weight: 600; }
+
 /* ---- M3：作答页与判题结果面板 ---- */
 select {
   background: var(--bg);

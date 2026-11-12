@@ -58,7 +58,7 @@ function tempLearning() {
 
 async function withApp(fn, opts) {
   const app = createApp(
-    Object.assign({ dbPath: ":memory:", learningRoot: tempLearning() }, opts || {})
+    Object.assign({ dbPath: ":memory:", learningRoot: tempLearning(), localBank: null }, opts || {})
   )
   const port = await app.listen(0)
   try {
@@ -81,7 +81,7 @@ test("GET /api/health 返回运行状态", async function () {
 })
 
 test("未设置 learning 仓时降级为纯本地模式", async function () {
-  const app = createApp({ dbPath: ":memory:", learningRoot: "", env: {} })
+  const app = createApp({ dbPath: ":memory:", learningRoot: "", env: {}, localBank: null })
   const port = await app.listen(0)
   try {
     const res = await fetch("http://127.0.0.1:" + port + "/api/health")
