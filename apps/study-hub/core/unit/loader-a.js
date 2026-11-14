@@ -10,18 +10,7 @@
 
 const { parseProblemMarkdown } = require("../bank/parse")
 // Unit 的枚举只有 core/unit/unit.js 一份（G41）：这里引用，不另抄。
-const { createUnit, PROGRESSES, DIFFICULTIES } = require("./unit")
-
-/** 来源白名单；不在表内的一律记 unknown。 */
-const SOURCE_WHITELIST = [
-  "leetcode",
-  "nowcoder",
-  "self",
-  "grokking",
-  "scaffold",
-  "generated",
-  "codeforces",
-]
+const { createUnit, PROGRESSES, DIFFICULTIES, SOURCES, normalizeUnitId } = require("./unit")
 
 /**
  * 按内容判定单元状态（契约 §1.4 的 loader A 规则）。
@@ -41,13 +30,14 @@ function statusOf(problem) {
 }
 
 /**
- * 来源归一化：不在白名单里 → unknown。
+ * 来源归一化：不在枚举里 → unknown。
+ * 来源表只有 core/unit/unit.js 的 SOURCES 一份（G41），这里引用，不另抄。
  * @param {*} raw
  * @returns {string}
  */
 function normalizeSource(raw) {
   const value = String(raw === undefined || raw === null ? "" : raw).trim()
-  return SOURCE_WHITELIST.indexOf(value) !== -1 ? value : "unknown"
+  return SOURCES.indexOf(value) !== -1 ? value : "unknown"
 }
 
 /**
@@ -74,7 +64,7 @@ function difficultyOf(raw) {
  * 解析一份算法题 md，产出 Unit。
  *
  * @param {string} text 文件全文
- * @param {object} opts { track?: "algorithm", relPath: string }
+ * @param {object} opts { track?: string, relPath: string }（track 缺省为 "algorithm"）
  * @returns {{unit: object|null, warnings: string[]}}
  */
 function parseUnitMarkdown(text, opts) {
@@ -99,6 +89,10 @@ function parseUnitMarkdown(text, opts) {
     return { unit: null, warnings: warnings }
   }
 
+  // 轨道来自调用方（缺省算法轨）。轨道↔id 前缀的映射只有 core/track/tracks.js 一份（G41），
+  // 所以 id 一律走 core/unit/unit.js 的 normalizeUnitId，loader 自己不拼前缀。
+  const track = String(options.track || "algorithm").trim() || "algorithm"
+
   // 用例 → output 断言。tol 在 v1 一律丢弃（契约 §3.1.1）。
   const asserts = []
   ;(problem.cases || []).forEach(function (item, index) {
@@ -118,8 +112,8 @@ function parseUnitMarkdown(text, opts) {
   let unit = null
   try {
     unit = createUnit({
-      id: "algo:" + problem.id,
-      track: "algorithm",
+      id: normalizeUnitId(problem.id, track),
+      track: track,
       kind: "problem",
       title: problem.title || problem.id,
       statement: problem.statement || "",
@@ -150,7 +144,6 @@ function parseUnitMarkdown(text, opts) {
 }
 
 module.exports = {
-  SOURCE_WHITELIST: SOURCE_WHITELIST,
   statusOf: statusOf,
   parseUnitMarkdown: parseUnitMarkdown,
 }

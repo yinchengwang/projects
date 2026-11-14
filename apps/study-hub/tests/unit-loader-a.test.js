@@ -56,6 +56,15 @@ test("id 带上 algo 前缀，track 恒为 algorithm", function () {
   assert.equal(res.unit.kind, "problem")
 })
 
+test("id 已带前缀时不重复加前缀", function () {
+  const front = FULL_FRONT.replace("id: lc-00007", "id: algo:lc-00007")
+  const res = loaderA.parseUnitMarkdown(makeMd(front, FULL_BODY), {
+    relPath: "bank/interview/lc-00007.md",
+  })
+  assert.ok(res.unit)
+  assert.equal(res.unit.id, "algo:lc-00007")
+})
+
 test("题面与用例齐备 → verified", function () {
   const res = loaderA.parseUnitMarkdown(FULL, { relPath: "bank/interview/lc-00007.md" })
   assert.equal(res.unit.status, "verified")
