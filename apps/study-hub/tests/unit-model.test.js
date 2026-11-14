@@ -214,6 +214,36 @@ test("validateUnit 要求 id 前缀与 track 一致（G41）", function () {
 
 test("normalizeUnitId 未知轨道返回空串，不静默兜底成 algo", function () {
   assert.equal(unit.normalizeUnitId("lc-00007", "network"), "")
+  // 已经带前缀的 raw 也一样：未知轨道一律空串（G41）
+  assert.equal(unit.normalizeUnitId("algo:x", "network"), "")
+})
+
+test("ID_PATTERN 的前缀集与 tracks.js 的 idPrefix 一致（G41 不留第二份）", function () {
+  const prefixes = tracks.TRACKS.map(function (t) {
+    return t.idPrefix
+  })
+  for (const p of prefixes) {
+    assert.ok(unit.ID_PATTERN.test(p + ":x"), p)
+  }
+  assert.ok(!unit.ID_PATTERN.test("xx:x"))
+  assert.deepEqual(
+    tracks.TRACK_CODES,
+    tracks.TRACKS.map(function (t) {
+      return t.code
+    })
+  )
+})
+
+test("validateUnit 报 track 非法", function () {
+  const errors = unit.validateUnit(validUnit({ track: "network" }))
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0].indexOf("track 非法") !== -1, errors[0])
+})
+
+test("validateUnit 要求 subtracks 是数组", function () {
+  const errors = unit.validateUnit(validUnit({ subtracks: "fundamentals" }))
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0].indexOf("subtracks") !== -1, errors[0])
 })
 
 test("createUnit 缺 path 时抛中文错误", function () {

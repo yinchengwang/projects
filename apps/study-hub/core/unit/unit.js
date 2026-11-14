@@ -9,7 +9,7 @@
  */
 
 // 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41），这里引用它，不另抄一份。
-const { TRACK_CODES, trackOf } = require("../track/tracks.js")
+const { TRACKS, trackOf } = require("../track/tracks.js")
 
 /** 单元种类：problem = 要写答案；card = 读讲解 + 跑 demo + 过断言。 */
 const KINDS = ["problem", "card"]
@@ -38,8 +38,13 @@ const SOURCES = [
   "unknown",
 ]
 
-/** 单元 id 的形状：<trackCode>:<stem>。 */
-const ID_PATTERN = /^(algo|db|ai):[a-z0-9][a-z0-9._-]*$/
+/**
+ * 单元 id 的形状：<trackCode>:<stem>。
+ * 前缀集由 tracks.js 派生，不另抄一份——抄一份就会漂移（G41）。
+ */
+const ID_PATTERN = new RegExp(
+  "^(" + TRACKS.map(function (t) { return t.idPrefix }).join("|") + "):[a-z0-9][a-z0-9._-]*$"
+)
 
 /**
  * 归一化一个字符串数组：去空、去首尾空白、去重、保序。
@@ -76,9 +81,11 @@ function normalizeList(list) {
 function normalizeUnitId(raw, track) {
   const text = String(raw === undefined || raw === null ? "" : raw).trim()
   if (text === "") return ""
-  if (text.indexOf(":") !== -1) return text
+  // 轨道先查：未知轨道一律返回空串（G41）——连「已经带前缀的 raw」也不例外，
+  // 否则会造出前缀与轨道对不上的 id。
   const t = trackOf(track)
   if (!t) return ""
+  if (text.indexOf(":") !== -1) return text
   return t.idPrefix + ":" + text
 }
 
@@ -107,12 +114,13 @@ function validateUnit(unit) {
   if (!ID_PATTERN.test(String(unit.id || ""))) {
     errors.push("id 非法：" + String(unit.id || ""))
   }
-  if (TRACK_CODES.indexOf(unit.track) === -1) {
+  const t = trackOf(unit.track)
+  if (!t) {
     errors.push("track 非法：" + String(unit.track || ""))
   } else {
     // G41：id 前缀必须与轨道一致。前缀对不上的单元永远 join 不上 SQLite 里的调度态，
     // 还不许落库——否则它会安静地待在那里，join 一次也 join 不上。
-    const expected = trackOf(unit.track).idPrefix
+    const expected = t.idPrefix
     const prefix = String(unit.id || "").split(":")[0]
     if (prefix !== expected) {
       errors.push(
@@ -145,6 +153,9 @@ function validateUnit(unit) {
   }
   if (!Array.isArray(unit.topics)) {
     errors.push("topics 必须是数组")
+  }
+  if (!Array.isArray(unit.subtracks)) {
+    errors.push("subtracks 必须是数组")
   }
   if (DIFFICULTIES.indexOf(unit.difficulty) === -1) {
     errors.push("difficulty 非法：" + String(unit.difficulty || ""))

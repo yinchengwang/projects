@@ -38,7 +38,10 @@ const TRACKS = [
   },
 ]
 
-const TRACK_CODES = ["algorithm", "database", "ai"]
+// 由 TRACKS 派生：加了新轨却忘了改这份清单，是最容易犯的漂移（G41）。
+const TRACK_CODES = TRACKS.map(function (t) {
+  return t.code
+})
 
 /** grokking 数据库卡目录名（实测清单，冻结） */
 const GROKKING_DB_CARDS = [
