@@ -42,13 +42,20 @@ function str(fm, key) {
  * 解析一份单元文件，产出 Unit。
  *
  * @param {string} text 文件全文
- * @param {object} opts { path: string } —— 相对 units/ 根的路径，如 "database/mvcc.md"
+ * @param {object} opts { path: string } —— 相对 units/ 根的路径，如 "database/mvcc.md"（必填，G42）
  * @returns {{unit: object|null, warnings: string[]}}
  */
 function parseUnitFile(text, opts) {
   const options = opts || {}
   const warnings = []
   const relPath = String(options.path === undefined || options.path === null ? "" : options.path)
+
+  // G42：opts.path 必填（契约 §3.3）。缺了就只给一条警告，不产出单元——
+  // 否则 path 会退化成 "units/"：非空，却指向目录，下游永远找不到文件。
+  if (relPath.trim() === "") {
+    warnings.push("单元文件缺少 path，无法产出单元")
+    return { unit: null, warnings: warnings }
+  }
 
   const src = String(text || "").replace(/\r\n/g, "\n")
   let body = src
@@ -112,7 +119,11 @@ function parseUnitFile(text, opts) {
 
   // 算法轨单元的「测试用例」表格转成 output 断言（与 loader A 同构）
   const asserts = []
-  parseCases(sections["测试用例"] || "").forEach(function (item) {
+  parseCases(sections["测试用例"] || "").forEach(function (item, index) {
+    // tol 在 v1 一律丢弃并留一句中文警告（与 loader A 同文案，契约 §3.1.1）。
+    if (item.tol !== null && item.tol !== undefined) {
+      warnings.push("用例 " + (index + 1) + " 带 tol 参数，v1 按精确比对处理")
+    }
     asserts.push({
       type: "output",
       input: item.input === undefined || item.input === null ? "" : String(item.input),

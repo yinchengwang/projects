@@ -198,3 +198,43 @@ test("未知小节被忽略，不报错", function () {
   assert.ok(res.unit)
   assert.equal(res.unit.statement, "正文")
 })
+
+test("不传 path → 不产出单元，只给一条中文警告（G42）", function () {
+  const res = loaderC.parseUnitFile(makeUnitFile(GOOD_FRONT, GOOD_BODY), {})
+  assert.equal(res.unit, null)
+  assert.equal(res.warnings.length, 1)
+  assert.ok(res.warnings[0].indexOf("path") !== -1, res.warnings[0])
+})
+
+test("带 tol 的用例：丢弃 tol 并留中文警告", function () {
+  const front = [
+    "id: algo:lc-00007",
+    "track: algorithm",
+    "kind: problem",
+    "title: 反转整数",
+    "graded: user",
+    "status: draft",
+  ].join("\n")
+  const body = [
+    "## 题面",
+    "",
+    "题面",
+    "",
+    "## 测试用例",
+    "",
+    "| input | expect | tol |",
+    "|---|---|---|",
+    "| 1.5 | 1.5 | tol=1e-6 |",
+    "",
+  ].join("\n")
+  const res = loaderC.parseUnitFile(makeUnitFile(front, body), { path: "algorithm/lc-00007.md" })
+  assert.ok(res.unit)
+  assert.equal(res.unit.asserts.length, 1)
+  assert.equal(res.unit.asserts[0].cmp, "exact")
+  assert.ok(
+    res.warnings.some(function (w) {
+      return w.indexOf("用例 1 带 tol 参数，v1 按精确比对处理") !== -1
+    }),
+    JSON.stringify(res.warnings)
+  )
+})
