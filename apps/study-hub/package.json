@@ -1,0 +1,11 @@
+{
+  "name": "study-hub",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/main.js",
+    "test": "node tests/run-all.js"
+  },
+  "dependencies": {}
+}
