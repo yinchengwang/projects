@@ -46,11 +46,17 @@ function makeTree() {
   fs.mkdirSync(bankDir, { recursive: true })
   fs.writeFileSync(path.join(bankDir, "lc-00007.md"), makeProblemMd("lc-00007", "反转整数", true), "utf8")
   fs.writeFileSync(path.join(bankDir, "lc-00008.md"), makeProblemMd("lc-00008", "回文数", false), "utf8")
+  // 与 loader C 的单元文件撞 id 的题库 md：id 归一化后也是 algo:mvcc。
+  // 契约 §3.4 的「C → A」去重优先级就靠这一对夹具钉住。
+  fs.writeFileSync(path.join(bankDir, "mvcc.md"), makeProblemMd("mvcc", "MVCC 题库旧版", true), "utf8")
+  // learning 题库与工程仓本地题库各有一份同 id 的 md：钉死 loader A 内部的先后顺序。
+  fs.writeFileSync(path.join(bankDir, "dup.md"), makeProblemMd("dup", "学习仓版本", true), "utf8")
 
   // 工程仓的本地题库
   const localDir = path.join(root, "app", "bank", "engineering")
   fs.mkdirSync(localDir, { recursive: true })
   fs.writeFileSync(path.join(localDir, "cf-12-d.md"), makeProblemMd("cf-12-d", "舞会", true), "utf8")
+  fs.writeFileSync(path.join(localDir, "dup.md"), makeProblemMd("dup", "本地仓版本", true), "utf8")
 
   // 新内容的落点
   const unitsDir = path.join(root, "learning", "units")
@@ -76,11 +82,42 @@ function makeTree() {
     "utf8"
   )
 
+  // loader C 的算法轨单元文件：id 与 learning 题库里的 mvcc.md 撞车（都是 algo:mvcc），
+  // 谁留下来就说明「C → A」的优先级还活着。
+  fs.mkdirSync(path.join(unitsDir, "algorithm"), { recursive: true })
+  fs.writeFileSync(
+    path.join(unitsDir, "algorithm", "mvcc.md"),
+    [
+      "---",
+      "id: algo:mvcc",
+      "track: algorithm",
+      "kind: problem",
+      "title: MVCC",
+      "graded: script",
+      "script: units/algorithm/mvcc.assert.py",
+      "status: verified",
+      "---",
+      "",
+      "## 题面",
+      "",
+      "MVCC 单元文件版。",
+      "",
+    ].join("\n"),
+    "utf8"
+  )
+
   // grokking 卡
   const cardDir = path.join(root, "learning", "scaffold", "grokking", "mvcc")
   fs.mkdirSync(cardDir, { recursive: true })
   fs.writeFileSync(path.join(cardDir, "README.md"), "# MVCC 卡\n\n正文\n", "utf8")
   fs.writeFileSync(path.join(cardDir, "main.py"), "print('ok')\n", "utf8")
+
+  // 第二张卡：id 不与 loader C 的单元文件撞车（db:transaction），
+  // loader B 的成功路径就靠这张卡来验收。
+  const txCardDir = path.join(root, "learning", "scaffold", "grokking", "transaction")
+  fs.mkdirSync(txCardDir, { recursive: true })
+  fs.writeFileSync(path.join(txCardDir, "README.md"), "# 事务卡\n\n事务正文\n", "utf8")
+  fs.writeFileSync(path.join(txCardDir, "main.py"), "print('ok')\n", "utf8")
 
   return {
     learningRoot: path.join(root, "learning"),
@@ -196,4 +233,109 @@ test("refreshUnitIndex 是整体覆盖语义", function () {
   fs.unlinkSync(path.join(opts.learningRoot, "bank", "interview", "lc-00008.md"))
   index.refreshUnitIndex(fakeStore, opts)
   assert.equal(rows.length, first - 1)
+})
+
+// —— 以下是评审 I-1 / I-2 / I-3 / M-6 补的用例 ——
+
+test("loader B 的成功路径：卡目录产出的单元字段都对", function () {
+  const opts = makeTree()
+  const res = index.loadUnits(opts)
+  // db:transaction 这张卡的 id 不与 loader C 的单元文件撞车，所以它一定活到了 byId 里
+  const unit = res.byId["db:transaction"]
+  assert.ok(unit, JSON.stringify(Object.keys(res.byId)))
+  assert.equal(unit.track, "database")
+  assert.equal(unit.kind, "card")
+  // path 相对内容根，带结尾斜杠（G42：必填且非空）
+  assert.equal(unit.path, "scaffold/grokking/transaction/")
+  assert.equal(unit.source, "grokking")
+  // 目录里有 main.py → status 判成 verified
+  assert.equal(unit.status, "verified")
+  assert.equal(unit.title, "事务卡")
+})
+
+test("loader C 优先级高于 loader A：同一个 id 保留 C 的", function () {
+  const opts = makeTree()
+  const res = index.loadUnits(opts)
+  // units/algorithm/mvcc.md（loader C）与 learning/bank/interview/mvcc.md（loader A）撞 id
+  const unit = res.byId["algo:mvcc"]
+  assert.ok(unit, JSON.stringify(Object.keys(res.byId)))
+  // 保留下来的是 C 那份：标题与 path 都是单元文件里的
+  assert.equal(unit.title, "MVCC")
+  assert.equal(unit.path, "units/algorithm/mvcc.md")
+  assert.ok(
+    res.warnings.some(function (w) {
+      return w.indexOf("单元 id 重复：algo:mvcc（保留先出现的）") !== -1
+    }),
+    JSON.stringify(res.warnings)
+  )
+})
+
+test("loader A 内部顺序：learning 题库先于工程仓本地题库", function () {
+  const opts = makeTree()
+  const res = index.loadUnits(opts)
+  // 两份 md 同 id（归一化后都是 algo:dup），分别在 learning 题库与工程仓本地题库里
+  const unit = res.byId["algo:dup"]
+  assert.ok(unit, JSON.stringify(Object.keys(res.byId)))
+  // 先到先得：learning 题库那份在前
+  assert.equal(unit.title, "学习仓版本")
+  assert.equal(unit.path, "bank/interview/dup.md")
+  assert.ok(
+    res.warnings.some(function (w) {
+      return w.indexOf("单元 id 重复：algo:dup（保留先出现的）") !== -1
+    }),
+    JSON.stringify(res.warnings)
+  )
+})
+
+test("物化行带 title / difficulty / updated 三列", function () {
+  const opts = makeTree()
+  const rows = []
+  const fakeStore = {
+    replaceUnits: function (items) {
+      rows.length = 0
+      items.forEach(function (item) { rows.push(item) })
+    },
+    listUnits: function () {
+      return rows.slice()
+    },
+  }
+  index.refreshUnitIndex(fakeStore, opts)
+  const row = rows.filter(function (r) { return r.id === "algo:lc-00007" })[0]
+  assert.ok(row)
+  assert.equal(row.title, "反转整数")
+  assert.equal(row.difficulty, "medium")
+  // updated 是 ISO 时间戳
+  assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(row.updated), String(row.updated))
+})
+
+test("preloaded 缺 warnings 时返回空数组，不返回 undefined", function () {
+  const rows = []
+  const fakeStore = {
+    replaceUnits: function (items) {
+      rows.length = 0
+      items.forEach(function (item) { rows.push(item) })
+    },
+    listUnits: function () {
+      return rows.slice()
+    },
+  }
+  // 调用方没带 warnings：返回值也必须是数组，否则调用方 res.warnings.length 直接炸
+  const res = index.refreshUnitIndex(fakeStore, null, {
+    units: [
+      {
+        id: "algo:x",
+        track: "algorithm",
+        kind: "problem",
+        title: "X",
+        path: "bank/x.md",
+        status: "todo",
+        topics: [],
+        difficulty: "medium",
+        subtracks: [],
+      },
+    ],
+  })
+  assert.equal(res.count, 1)
+  assert.ok(Array.isArray(res.warnings), String(res.warnings))
+  assert.deepEqual(res.warnings, [])
 })

@@ -230,7 +230,9 @@ function refreshUnitIndex(store, opts, preloaded) {
     }
   })
   store.replaceUnits(rows)
-  return { count: rows.length, warnings: res.warnings }
+  // 兜底：调用方传的 preloaded 可能没带 warnings（契约要求带，但兜住成本近乎为零）。
+  // 没有这行，调用方 res.warnings.length 会在 undefined 上炸掉。
+  return { count: rows.length, warnings: res.warnings || [] }
 }
 
 module.exports = {
