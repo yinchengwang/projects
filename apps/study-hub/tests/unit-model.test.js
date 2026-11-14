@@ -135,9 +135,10 @@ test("validateUnit 对合规单元返回空数组", function () {
 
 test("validateUnit 报出具体的中文错误", function () {
   const errors = unit.validateUnit(validUnit({ id: "mvcc", title: "" }))
-  assert.equal(errors.length, 2)
+  assert.equal(errors.length, 3)
   assert.ok(errors[0].indexOf("id 非法") !== -1, errors[0])
-  assert.ok(errors[1].indexOf("title") !== -1, errors[1])
+  assert.ok(errors[1].indexOf("前缀") !== -1, errors[1])
+  assert.ok(errors[2].indexOf("title") !== -1, errors[2])
 })
 
 test("validateUnit 抓到 graded:script 却没有 script 路径", function () {
@@ -155,6 +156,7 @@ test("createUnit 填齐默认值并保留 related", function () {
     kind: "problem",
     title: "两数之和",
     entry: { graded: "user" },
+    path: "bank/interview/lc-00007.md",
     related: "轮次：R01",
   })
   assert.equal(got.difficulty, "medium")
@@ -176,6 +178,7 @@ test("createUnit 填齐默认值并保留 related", function () {
     kind: "problem",
     title: "两数之和",
     entry: { graded: "user" },
+    path: "bank/interview/lc-00007.md",
   })
   assert.ok(Object.prototype.hasOwnProperty.call(bare, "related"))
   assert.equal(bare.related, "")
@@ -184,7 +187,39 @@ test("createUnit 填齐默认值并保留 related", function () {
 test("createUnit 字段非法时抛中文错误", function () {
   assert.throws(
     function () {
-      unit.createUnit({ id: "bad", track: "algorithm", kind: "problem", title: "x", entry: { graded: "user" } })
+      unit.createUnit({
+        id: "bad",
+        track: "algorithm",
+        kind: "problem",
+        title: "x",
+        entry: { graded: "user" },
+        path: "bank/interview/lc-00007.md",
+      })
+    },
+    /单元字段非法/
+  )
+})
+
+test("validateUnit 要求 path 非空（契约 §1.2 必填，G42）", function () {
+  const errors = unit.validateUnit(validUnit({ path: "" }))
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0].indexOf("path") !== -1, errors[0])
+})
+
+test("validateUnit 要求 id 前缀与 track 一致（G41）", function () {
+  const errors = unit.validateUnit(validUnit({ id: "algo:mvcc" }))
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0].indexOf("前缀") !== -1, errors[0])
+})
+
+test("normalizeUnitId 未知轨道返回空串，不静默兜底成 algo", function () {
+  assert.equal(unit.normalizeUnitId("lc-00007", "network"), "")
+})
+
+test("createUnit 缺 path 时抛中文错误", function () {
+  assert.throws(
+    function () {
+      unit.createUnit({ id: "algo:lc-00007", track: "algorithm", kind: "problem", title: "x", entry: { graded: "user" } })
     },
     /单元字段非法/
   )

@@ -8,6 +8,9 @@
  * 字段表见契约 §1.2。本文件是**唯一**定义 Unit 形状的地方。
  */
 
+// 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41），这里引用它，不另抄一份。
+const { TRACK_CODES, trackOf } = require("../track/tracks.js")
+
 /** 单元种类：problem = 要写答案；card = 读讲解 + 跑 demo + 过断言。 */
 const KINDS = ["problem", "card"]
 
@@ -60,6 +63,10 @@ function normalizeList(list) {
  * 把任意来源的 id 规范成 <trackCode>:<stem>。
  * 已经带前缀的原样返回；不带前缀的按 track 补前缀。
  *
+ * 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41），这里引用它，不另抄一份。
+ * 未知轨道返回空串——**不许静默兜底成 algo 前缀**：那样会造出前缀与轨道不符、
+ * 永远 join 不上 SQLite 调度态的单元（G24）。
+ *
  * 注意：规范化只发生在**内存层**——存量内容文件里的 id 一个字都不改（G33）。
  *
  * @param {string} raw 原始 id
@@ -70,8 +77,9 @@ function normalizeUnitId(raw, track) {
   const text = String(raw === undefined || raw === null ? "" : raw).trim()
   if (text === "") return ""
   if (text.indexOf(":") !== -1) return text
-  const prefix = track === "database" ? "db" : track === "ai" ? "ai" : "algo"
-  return prefix + ":" + text
+  const t = trackOf(track)
+  if (!t) return ""
+  return t.idPrefix + ":" + text
 }
 
 /**
@@ -99,14 +107,28 @@ function validateUnit(unit) {
   if (!ID_PATTERN.test(String(unit.id || ""))) {
     errors.push("id 非法：" + String(unit.id || ""))
   }
-  if (["algorithm", "database", "ai"].indexOf(unit.track) === -1) {
+  if (TRACK_CODES.indexOf(unit.track) === -1) {
     errors.push("track 非法：" + String(unit.track || ""))
+  } else {
+    // G41：id 前缀必须与轨道一致。前缀对不上的单元永远 join 不上 SQLite 里的调度态，
+    // 还不许落库——否则它会安静地待在那里，join 一次也 join 不上。
+    const expected = trackOf(unit.track).idPrefix
+    const prefix = String(unit.id || "").split(":")[0]
+    if (prefix !== expected) {
+      errors.push(
+        "id 前缀与 track 不一致：" + String(unit.id || "") + "（" + unit.track + " 轨应是 " + expected + " 前缀）"
+      )
+    }
   }
   if (KINDS.indexOf(unit.kind) === -1) {
     errors.push("kind 非法：" + String(unit.kind || ""))
   }
   if (!String(unit.title || "").trim()) {
     errors.push("title 不能为空")
+  }
+  // 契约 §1.2：path 必填，空串视为缺失（G42）。没有 path 的单元下游找不到文件。
+  if (!String(unit.path || "").trim()) {
+    errors.push("path 不能为空")
   }
   if (!unit.entry || typeof unit.entry !== "object") {
     errors.push("entry 缺失")
