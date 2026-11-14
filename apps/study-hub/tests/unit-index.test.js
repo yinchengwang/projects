@@ -339,3 +339,46 @@ test("preloaded 缺 warnings 时返回空数组，不返回 undefined", function
   assert.ok(Array.isArray(res.warnings), String(res.warnings))
   assert.deepEqual(res.warnings, [])
 })
+
+// —— 以下是 Task 9 补的用例：核对 refreshUnitIndex 的第三个参数 preloaded 真的生效 ——
+
+test("refreshUnitIndex 收到 preloaded 时不重新扫盘", function () {
+  // 造一个「坏单元文件」目录：loader C 真扫到它，warnings 必然非空。
+  // 目录层级要对：loader C 扫的是 <unitsDir>/<track>/，所以坏文件放在 <unitsDir>/database/ 下。
+  const unitsDir = tmpDir("study-hub-units-")
+  const brokenDir = path.join(unitsDir, "database")
+  fs.mkdirSync(brokenDir, { recursive: true })
+  fs.writeFileSync(path.join(brokenDir, "broken.md"), "## 讲解\n\n没有 frontmatter。\n", "utf8")
+
+  const rows = []
+  const fakeStore = {
+    replaceUnits: function (r) {
+      rows.push.apply(rows, r)
+    },
+  }
+  const preloaded = {
+    units: [
+      {
+        id: "db:mvcc",
+        track: "database",
+        kind: "card",
+        title: "MVCC",
+        path: "units/database/mvcc.md",
+        status: "verified",
+        topics: [],
+        difficulty: "medium",
+        subtracks: [],
+      },
+    ],
+    warnings: [],
+    byId: {},
+  }
+  const res = index.refreshUnitIndex(fakeStore, { unitsDir: unitsDir }, preloaded)
+  assert.equal(res.count, 1)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].id, "db:mvcc")
+  assert.equal(rows[0].path, "units/database/mvcc.md")
+  // 关键断言：给了 preloaded，就**不该**去扫 unitsDir。那个目录里躺着一个坏单元文件，
+  // 真扫了 loader C 必然报「缺少 frontmatter」「单元 id 非法」，warnings 就非空了。
+  assert.deepEqual(res.warnings, [])
+})

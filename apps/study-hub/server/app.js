@@ -234,6 +234,20 @@ function createApp(opts) {
   }
   const provider = new FileProvider(bankRoots)
 
+  // P0：单元索引。启动时扫一遍三个 loader，把结果灌进 units 表；
+  // 详情接口用同一份快照（含全字段的 Unit 与 statement）。
+  // 纯本地模式（没连上 learning 仓）也能跑：只有工程仓内置题库那部分单元。
+  const { unitsDir, grokkingDir } = require("../core/paths.js")
+  const { loadUnits, refreshUnitIndex } = require("../core/unit/index.js")
+  const unitOpts = {
+    learningRoot: learning.ok ? learning.root : null,
+    localBank: options.localBank !== null ? localBankDir(env, options.localBank) : null,
+    unitsDir: learning.ok ? unitsDir(learning.root) : null,
+    grokkingDir: learning.ok ? grokkingDir(learning.root) : null,
+  }
+  const unitSnapshot = loadUnits(unitOpts)
+  refreshUnitIndex(store, unitOpts, unitSnapshot)
+
   // M6：配额上限。环境变量只在 settings 表里没有这一项时才写入，不覆盖已有设置。
   seedLimits(store, env)
 
@@ -265,6 +279,17 @@ function createApp(opts) {
     learning: learning,
     sendJson: sendJson,
   })
+
+  // P0：单元查询接口。独立文件（server/api-units.js），与其它里程碑零冲突。
+  require("./api-units.js")
+    .buildUnitRoutes({
+      store: store,
+      unitSnapshot: unitSnapshot,
+      sendJson: sendJson,
+    })
+    .forEach(function (route) {
+      routes.push(route)
+    })
 
   // M5：诊断接口。路由在独立文件里（server/api-insights.js），这里合并进同一张路由表。
   // 只做加法——M1/M3/M4 的接口一个都不动。
@@ -304,6 +329,8 @@ function createApp(opts) {
     store: store,
     provider: provider,
     learning: learning,
+    // P0：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
+    unitSnapshot: unitSnapshot,
     // M6：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
     llm: llm,
   }
