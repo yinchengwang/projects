@@ -94,3 +94,40 @@ code 聚合仓尚未在 `C:\code` 初始化；远程 `code` 仓的初始内容�
 5. `git diff --check` 退出码 0；构建/测试产物均在 `engine/db/.gitignore` 覆盖的 `build/` 与 `test/tmp/`；`git status` 只显示三份计划文档与 15 个指定 JSONB 文件，未跟踪文件没有变化或额外测试数据库进入版本控制。
 
 审查结论：没有确认到必然阻断 build/test 的问题。仍需记录的非阻断风险：JSONPath 下标长输入的整数累积溢出、裸 UTF-8 校验不足、对象多次 realloc 失败时的状态一致性、外置页写失败回滚与两趟读取并发一致性。提交 JSONB 代码前应决定是否修复/记录这些风险；不得因门禁全绿就声称这些边界已解决。
+
+## 七、A1 风险处理结果（2026-11-16 补记）
+
+四项风险已逐项处理并提交在 projects `78feaa222`：
+
+| 风险 | 结论 |
+|---|---|
+| JSONPath 下标 u64 回绕 | **证伪**。用探针直接调用 `json_path_parse`：`$[4294967295]` 接受（index=4294967295）；`$[4294967296]`、`$[18446744073709551616]`、`$[99999999999999999999]` 均立即返回 `E_INVAL`「下标太大」。原因是每读一位就检查 `> 0xFFFFFFFF`，在 u64 回绕前退出。保留三条断言为边界回归，不改生产代码。 |
+| 裸 UTF-8 未校验 | **已修（TDD）**。新增 7 类非法字节用例（含 3/4 字节截断），旧实现 10 个断言全红且产出树；新增 `utf8_seq_len()` 后转绿，合法中文/emoji/代理对不受影响。`json_parse.h` 合同同步改为严格拒绝。 |
+| `jsonb_obj_set` realloc 部分失败 | **复核为非缺陷**。`count` 失败时不变、成员搬移未发生，前 `count` 项始终有效可读/编码/释放；只缺强容量回滚，无逻辑或内存安全缺陷。未新增 allocator seam。 |
+| 页链写回滚 | **补真实可达测试**。用 `nframes=1` 真实 Pager 触发第二页 `pager_alloc` 失败：断言返回错误、`ext_key` 为 NIL、已分配页进入空闲栈、之后同池可再写一页。首次运行真实变红（两条断言），修正断言口径后转绿。`pager_unpin` 的 ownership 违规按用户决策定义为不可恢复 API misuse，不伪造注入。 |
+| 页链两趟读取并发 | **合同化**。采纳用户选择的「调用方串行化」；`json_ovf.h` 明确 read/write/free 不可并发、free 前需无读者。当前无 SQL 主路径调用点。 |
+
+验证证据（2026-11-16 复跑）：`mingw32-make clean && mingw32-make all` 退出码 0 零 error；`sh tools/check_deps.sh` 输出 `✓ 依赖方向正确`；`sh test/run.sh` 退出码 0，117 个 `[PASS]`、0 个失败标记。
+
+## 八、Stage A 收尾状态（2026-11-16）
+
+已完成并推送：
+
+| 项 | 结果 |
+|---|---|
+| 四份自有仓代码/README 推送 | projects `3cacdfeac`、learning `84c400d`、ai-docs `7b08d23`、reference `3d2ad47`，均与各自远端 main 一致，工作区干净 |
+| code 聚合仓 | `6e9f0bf`，四个直接 submodule 与远端一致，工作区干净 |
+| m5-verify 保全 | 已迁至 `C:\code\m5-verify`，38 文件 / 204,968 字节 / manifest sha256 `8a4d87fb…` 与迁移前一致，被 code `.gitignore` 忽略 |
+| docs 合并 | `StillEvolving/docs` 22 个文件中 21 个逐字节相同，`architecture.md` 为有意的拓扑改写；旧镜像 README 已由 code 权威 `docs/README.md` 取代 |
+| `.superpowers` 合并 | 192 个未跟踪文件全部并入 code 侧 ignored 目录，逐一核验无缺失、无差异 |
+| learning/ai-docs gitdir 脱钩 | 已完成并验证：learning 与嵌套 GoogleTest、ai-docs 的 toplevel/HEAD/status 均正常 |
+| 旧父仓删除 | `C:\code\StillEvolving` 已删除（9.1 MB）；GitHub 上的仓与历史未动 |
+| 脚本门禁 | `check_consistency.py` 退出码 0（仅 6 条已知 clone_url 分歧告警）；Python 单测 38 项通过；`test_fetch_reference.sh` 37 条通过 |
+| `update=none` 行为 | **沙盒实测**：裸 `git submodule update --init` 打印 `Skipping submodule 'child'` 并保持未初始化；`-c submodule.<name>.update=checkout` 才初始化且不向下递归 |
+
+**未完成项（阻塞 Stage A 完整验收）：**
+
+- 完整 clean clone 的 submodule 初始化未验证通过。两次尝试均在 `git submodule update --init --depth 1 projects` 处因本机网络超时被终止（10 分钟上限），`projects` 目录保持为空。因此不能声称「干净 clone 能拉到四个直接 submodule」，只验证到「clone code 仓本身成功、四个 gitlink 与 `.gitmodules` 正确、reference 被正确跳过」。
+- 该未完成项是环境/网络限制，不是配置缺陷的证据；但按计划 Gate，Stage A 尚不能标为完全通过。
+
+
