@@ -13,6 +13,15 @@
 const SENTINEL = "\u0000"
 
 /**
+ * 引用块的行判定：`>` 后**必须**有空白（GFM 要求；`>5 秒` 这类写法是正文，不是引用）。
+ *
+ * 同一条规则同时用于三处——判定块的起点、收集引用体、剥掉前缀。
+ * **必须共用这一个常量**：历史上这里抄了三份，改了其中一处就会让 `toHtml` 死循环
+ * （判定说「这是引用」，收集循环却不认，`i` 不前进）。
+ */
+const QUOTE_LINE = /^>\s/
+
+/**
  * HTML 转义。
  * @param {*} text
  * @returns {string}
@@ -88,7 +97,7 @@ function isBlockStart(line, next) {
   if (/^```/.test(text)) return "code"
   if (/^(#{1,6})\s+(.*)$/.test(text)) return "heading"
   if (isTableStart(text, next)) return "table"
-  if (/^>\s/.test(text)) return "quote"
+  if (QUOTE_LINE.test(text)) return "quote"
   if (/^\s*[-*]\s+/.test(text) || /^\s*\d+\.\s+/.test(text)) return "list"
   return null
 }
@@ -197,8 +206,8 @@ function toHtml(markdown) {
     // 引用
     if (block === "quote") {
       const body = []
-      while (i < lines.length && /^>\s/.test(lines[i])) {
-        body.push(lines[i].replace(/^>\s/, ""))
+      while (i < lines.length && QUOTE_LINE.test(lines[i])) {
+        body.push(lines[i].replace(QUOTE_LINE, ""))
         i += 1
       }
       out.push("<blockquote>" + toHtml(body.join("\n")) + "</blockquote>")

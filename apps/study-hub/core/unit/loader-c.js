@@ -38,31 +38,49 @@ function str(fm, key) {
   return value === undefined || value === null ? "" : String(value).trim()
 }
 
+/** frontmatter 的围栏行：整行只有三个减号（允许尾随空白）。 */
+const FENCE = /^---[ \t]*$/
+
 /**
- * 判断文件里有没有**不在开头**的 frontmatter 块（`---` 行 + 内容 + `---` 行）。
+ * 诊断「为什么没解析到 frontmatter」——给出能看出**真实原因**的分类。
  *
- * 只认文件里**第一处** `---` 行——frontmatter 如果存在，必然是文件的第一块。
- * 这样就不会把正文里的分隔线（Markdown 的水平线 `---`）误判成 frontmatter。
+ * 主正则 `^---\n` 只在**完美顶格**时才匹配。匹配不上有好几种真实原因，
+ * 一律甩一句「缺少 frontmatter」会让人白折腾：P4 的供给流水线会自动写单元文件，
+ * 尾随空白、前导空行都会出现，而报错指不出方向就没法修。
+ *
+ * 三种结论：
+ *   - `fence-not-exact`：第一行确实是分隔行，但减号后面有空白 —— 只差这一点格式。
+ *   - `not-at-top`：文件里有个**像** frontmatter 的块（`---` + `key: value` + `---`），
+ *     但它不在文件最前面。这里**不断言**前面是空行还是别的文字——没证据的事不说。
+ *   - `none`：确实找不到像 frontmatter 的块。
  *
  * @param {string} src 已统一成 \n 的文件全文
- * @returns {boolean}
+ * @returns {"none"|"fence-not-exact"|"not-at-top"}
  */
-function hasFrontmatterLater(src) {
-  const text = String(src === undefined || src === null ? "" : src)
-  // 文件里第一处 `---` 行
-  const first = /(^|\n)---[ \t]*\n/.exec(text)
-  if (!first) return false
-  // 这一处 `---` 在不在文件开头？（first[1] 是它前面吃掉的那个换行）
-  const fenceStart = first.index + first[1].length
-  if (fenceStart === 0) return false
-  // 还得有收尾的 `---` 行，才算一个完整的 frontmatter 块
-  const after = text.slice(first.index + first[0].length)
-  const close = /\n---[ \t]*(?:\n|$)/.exec(after)
-  if (!close) return false
-  const content = after.slice(0, close.index)
-  // 内容要么是空的，要么像 YAML（至少有一行 key: value）
-  if (content.trim() === "") return true
-  return /^[ \t]*[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/m.test(content)
+function diagnoseFrontmatter(src) {
+  const lines = String(src === undefined || src === null ? "" : src).split("\n")
+
+  // 第一行就是分隔行却没被主正则吃下：只可能是减号后面多了空白。
+  if (/^---[ \t]+$/.test(lines[0])) return "fence-not-exact"
+
+  // 从第二行起找第一处分隔行，再看它后面有没有配对的收尾分隔行。
+  for (let i = 1; i < lines.length; i += 1) {
+    if (!FENCE.test(lines[i])) continue
+    let close = -1
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (FENCE.test(lines[j])) {
+        close = j
+        break
+      }
+    }
+    if (close === -1) return "none"
+    const body = lines.slice(i + 1, close)
+    // 内容为空，或至少有一行像 YAML 的 `key: value` —— 才算是「像 frontmatter 的块」。
+    if (body.every(function (line) { return line.trim() === "" })) return "not-at-top"
+    if (/^[ \t]*[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/m.test(body.join("\n"))) return "not-at-top"
+    return "none"
+  }
+  return "none"
 }
 
 /**
@@ -94,13 +112,19 @@ function parseUnitFile(text, opts) {
   } else if (src.charAt(0) === "\uFEFF") {
     // 文件带 BOM：frontmatter 明明在，但正则锚在字符串开头，BOM 把它顶掉了。
     warnings.push("单元文件带 BOM，请去掉 BOM 再试")
-  } else if (hasFrontmatterLater(src)) {
-    // frontmatter 存在但不在文件开头（前面有空行 / 别的内容）。
-    // 顶格要求是对的，不放宽；但报错文案要能看出真实原因——
-    // P4 的供给流水线会自动写单元文件，BOM / 前导空行出现概率不低。
-    warnings.push("frontmatter 必须顶格，前面不能有空行")
   } else {
-    warnings.push("缺少 frontmatter")
+    // 顶格要求是对的，不放宽；但报错文案要能看出**真实原因**，
+    // 不能一律甩「缺少 frontmatter」——P4 的供给流水线会自动写单元文件，
+    // 尾随空白与前置内容都会出现，指不出方向就没法修。
+    const reason = diagnoseFrontmatter(src)
+    if (reason === "fence-not-exact") {
+      warnings.push("frontmatter 的分隔行必须正好是三个减号（---），减号后面不能有空白")
+    } else if (reason === "not-at-top") {
+      // 不断言前面是空行还是正文——没证据的事不说，只说「不在最前面」。
+      warnings.push("frontmatter 必须顶格：文件第一行就得是 ---，前面不能有任何内容")
+    } else {
+      warnings.push("缺少 frontmatter")
+    }
   }
 
   const id = str(fm, "id")

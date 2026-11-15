@@ -183,6 +183,48 @@ test("frontmatter 不在文件开头 → 中文提示点名「顶格」", functi
   )
 })
 
+test("分隔行带尾随空白 → 提示点名「减号」，不是「缺少 frontmatter」", function () {
+  // `--- ` 这种手感错误很常见（编辑器自动补空格）。以前主正则匹配不上、
+  // hasFrontmatterLater 又提前返回 false → 误报「缺少 frontmatter」，指错了方向。
+  const text = "--- \n" + GOOD_FRONT + "\n---\n" + GOOD_BODY
+  const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  const joined = res.warnings.join("｜")
+  assert.ok(joined.indexOf("减号") !== -1, joined)
+  assert.ok(joined.indexOf("缺少 frontmatter") === -1, joined)
+})
+
+test("正文里的 --- 加 key: value 不当成「不顶格的 frontmatter」", function () {
+  // 以前这种情况会被判成「frontmatter 必须顶格，前面不能有空行」——
+  // 但前面根本没有空行，是正文里的一段。提示不能断言一个不存在的现象。
+  const text = "# 讲解\n\n说明: 这里有个分隔线\n\n---\n\n注意: 后面还有内容\n"
+  const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  assert.ok(res.warnings.indexOf("缺少 frontmatter") !== -1, JSON.stringify(res.warnings))
+})
+
+test("正文里成对的 --- 夹着散文 → 仍是「缺少 frontmatter」", function () {
+  // `---` 在 Markdown 里是水平线，一篇正文里出现两三次很常见。
+  // 如果诊断只看「有没有成对的 ---」，就会把所有带水平线的文件都误报成
+  // 「frontmatter 没顶格」——所以内容必须像 YAML（key: value）才算数。
+  const text = "# 讲解\n\n第一段\n\n---\n\n第二段\n\n---\n\n第三段\n"
+  const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  assert.ok(res.warnings.indexOf("缺少 frontmatter") !== -1, JSON.stringify(res.warnings))
+})
+
+test("不顶格但内容合法的 frontmatter 仍能被认出来（不因收紧判定而误杀）", function () {
+  // M-e 收紧诊断判定后必须保证：真正「只是位置靠后」的 frontmatter 依旧被认出，
+  // 不能被降级成「缺少 frontmatter」。
+  const text = "前言一段\n\n" + makeUnitFile(GOOD_FRONT, GOOD_BODY)
+  const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  const joined = res.warnings.join("｜")
+  assert.ok(joined.indexOf("顶格") !== -1, joined)
+  // 「前面不能有空行」这句是没证据的断言，已不再使用
+  assert.ok(joined.indexOf("前面不能有空行") === -1, joined)
+})
+
 test("算法轨分支：题面进 statement，测试用例转断言", function () {
   const front = [
     "id: algo:lc-00007",

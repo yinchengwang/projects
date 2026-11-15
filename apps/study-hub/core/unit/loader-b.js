@@ -19,7 +19,7 @@ const { trackOf } = require("../track/tracks.js")
 const SECTION_BREAK = "\n\n---\n\n"
 
 /**
- * 从 README 全文里抠出第一行的 `# 标题`；抠不到就用 stem 兜底。
+ * 从 README 全文里找**第一个** `# ` 标题行；找不到就用 stem 兜底。
  *
  * @param {string} readme
  * @param {string} stem

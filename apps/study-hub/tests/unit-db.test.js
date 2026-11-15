@@ -25,6 +25,9 @@ function columnsOf(db, table) {
     })
 }
 
+/** 契约 §4.2 里的全部 9 张表：既有 4 张 + P0 新增 5 张。 */
+const TABLES = ["attempts", "review_cards", "topics", "settings", "units", "sessions", "session_queue", "mastery", "unit_progress"]
+
 /** 造一个「P0 之前」的旧库：四张表，没有新列。 */
 function makeLegacyDb(file) {
   const db = new DatabaseSync(file)
@@ -95,6 +98,39 @@ test("migrate 幂等：同一个库跑两次，第二次什么都不做", functi
   assert.deepEqual(second.warnings, [])
 
   db.close()
+})
+
+test("openDb 对同一个文件连开两次，结果一致（契约 §4.2 幂等）", function () {
+  // 上面那条测的是「同一个连接上 migrate 跑两次」；契约 §4.2 的字面要求是**开两次库**：
+  // SCHEMA + migrate 各跑两遍，结果必须一致。这条走 openDb 的真实路径（关掉再开）。
+  const file = path.join(tmpDir("study-hub-db-"), "open-twice.db")
+  makeLegacyDb(file)
+
+  const first = openDb(file)
+  const schema1 = {}
+  TABLES.forEach(function (table) {
+    schema1[table] = columnsOf(first, table).join(",")
+  })
+  first.close()
+
+  const second = openDb(file)
+  const schema2 = {}
+  TABLES.forEach(function (table) {
+    schema2[table] = columnsOf(second, table).join(",")
+  })
+
+  // 1. 两次打开得到的表结构与列完全一致
+  assert.deepEqual(schema2, schema1)
+  // 2. 第二次打开后，再跑一遍 migrate 必须一条都不做、也不报警告。
+  //    这一步是关键：删掉 migrate 里「列已存在就跳过」那一行，这里会红
+  //    （7 条 ALTER 全挂进 warnings）——openDb 本身吞掉了 warnings，只能在这里看。
+  const again = migrate(second)
+  assert.deepEqual(again.applied, [])
+  assert.deepEqual(again.warnings, [])
+  // 3. 老数据一条不少
+  const rows = second.prepare("SELECT COUNT(*) AS n FROM attempts").get()
+  assert.equal(Number(rows.n), 1)
+  second.close()
 })
 
 test("老库被补齐新列，老数据一条不少", function () {
