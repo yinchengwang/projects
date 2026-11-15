@@ -194,13 +194,29 @@ test("分隔行带尾随空白 → 提示点名「减号」，不是「缺少 fr
   assert.ok(joined.indexOf("缺少 frontmatter") === -1, joined)
 })
 
-test("正文里的 --- 加 key: value 不当成「不顶格的 frontmatter」", function () {
-  // 以前这种情况会被判成「frontmatter 必须顶格，前面不能有空行」——
-  // 但前面根本没有空行，是正文里的一段。提示不能断言一个不存在的现象。
-  const text = "# 讲解\n\n说明: 这里有个分隔线\n\n---\n\n注意: 后面还有内容\n"
+test("正文里的 --- 加 ASCII key: value → 判「不在最前面」，但不断言前面有空行", function () {
+  // 这条守的是 M-e 的核心诉求：诊断可以说「不在最前面」，但**不能**断言
+  // 「前面有空行」——前面到底是什么，我们并没有证据。
+  // 旧实现（hasFrontmatterLater）在这里给的是「frontmatter 必须顶格，前面不能有空行」，
+  // 所以这条用例在旧实现上会红。
+  // 注意 key 必须是 ASCII：旧实现的 YAML 探测正则是 `[A-Za-z_]`，中文 key 探不出来。
+  const text = "# 讲解\n\n---\n\nnote: x\n\n---\n"
   const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
   assert.equal(res.unit, null)
-  assert.ok(res.warnings.indexOf("缺少 frontmatter") !== -1, JSON.stringify(res.warnings))
+  const joined = res.warnings.join("｜")
+  assert.ok(joined.indexOf("顶格") !== -1, joined)
+  assert.ok(joined.indexOf("前面不能有空行") === -1, joined)
+})
+
+test("开头与收尾两行 --- 紧挨着 → 提示「内容为空」，不说「没有收尾」", function () {
+  // `---\n---\n` 这种空壳：收尾行**明明在**，但主正则要求收尾的 --- 前有一个换行
+  // （即中间至少一行），两行紧挨时匹配不上。
+  // 以前这种会被诊断成「没有收尾」，让用户去补一行本来就已经存在的行。
+  const res = loaderC.parseUnitFile("---\n---\n", { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  const joined = res.warnings.join("｜")
+  assert.ok(joined.indexOf("内容为空") !== -1, joined)
+  assert.ok(joined.indexOf("没有收尾") === -1, joined)
 })
 
 test("只有开头没有收尾的 --- → 提示点名「没有收尾」", function () {

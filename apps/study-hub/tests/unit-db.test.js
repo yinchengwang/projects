@@ -109,6 +109,8 @@ test("openDb 对同一个文件连开两次，结果一致（契约 §4.2 幂等
   const first = openDb(file)
   const schema1 = {}
   TABLES.forEach(function (table) {
+    // 打开后立刻记列名：连接一 close，PRAGMA 就查不了了。
+    // 记下来顺便当「存在性」的证据（空字符串 = 这张表根本不存在）。
     schema1[table] = columnsOf(first, table).join(",")
   })
   first.close()
@@ -119,15 +121,33 @@ test("openDb 对同一个文件连开两次，结果一致（契约 §4.2 幂等
     schema2[table] = columnsOf(second, table).join(",")
   })
 
-  // 1. 两次打开得到的表结构与列完全一致
+  // 1. 先断言「第一次打开之后，该有的都在」——否则「两次都不对」也能通过（假绿）。
+  //    （评审实测：把 migrate 整个改成空实现、或从 SCHEMA 删掉 5 张新表，
+  //      只比 schema2 === schema1 的话本用例照样绿。）
+  TABLES.forEach(function (table) {
+    assert.ok(schema1[table] !== "", "打开后应有这张表：" + table)
+  })
+  const NEW_COLUMNS = {
+    attempts: ["unit_id", "track", "assert_total", "assert_passed"],
+    review_cards: ["unit_id", "units_since"],
+    topics: ["track"],
+  }
+  Object.keys(NEW_COLUMNS).forEach(function (table) {
+    const cols = schema1[table].split(",")
+    NEW_COLUMNS[table].forEach(function (col) {
+      assert.ok(cols.indexOf(col) !== -1, table + " 应有新列 " + col + "：" + schema1[table])
+    })
+  })
+
+  // 2. 两次打开得到的表结构与列完全一致
   assert.deepEqual(schema2, schema1)
-  // 2. 第二次打开后，再跑一遍 migrate 必须一条都不做、也不报警告。
+  // 3. 第二次打开后，再跑一遍 migrate 必须一条都不做、也不报警告。
   //    这一步是关键：删掉 migrate 里「列已存在就跳过」那一行，这里会红
   //    （7 条 ALTER 全挂进 warnings）——openDb 本身吞掉了 warnings，只能在这里看。
   const again = migrate(second)
   assert.deepEqual(again.applied, [])
   assert.deepEqual(again.warnings, [])
-  // 3. 老数据一条不少
+  // 4. 老数据一条不少
   const rows = second.prepare("SELECT COUNT(*) AS n FROM attempts").get()
   assert.equal(Number(rows.n), 1)
   second.close()
