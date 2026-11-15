@@ -1,7 +1,7 @@
 # projects — C/C++ 算法工程实践
 
 > code 四仓体系中的**工程仓**：`engine/` 产出生产级作品。
-> **学习轨（learning）与参考轨（reference）已切出为独立仓**，本仓不再承载学习笔记与第三方源码镜像。
+> **学习轨（learning）与源码笔记轨（reference）由 code 顶层聚合仓中的两个直接 submodule 提供**，本仓不承载学习笔记与第三方源码镜像。
 
 [![CI](https://img.shields.io/badge/CI-github%20actions-blue)](.github/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
