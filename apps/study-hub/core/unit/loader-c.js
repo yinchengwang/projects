@@ -50,18 +50,22 @@ const FENCE = /^---[ \t]*$/
  *
  * 三种结论：
  *   - `fence-not-exact`：第一行确实是分隔行，但减号后面有空白 —— 只差这一点格式。
+ *   - `no-closing-fence`：第一行是完整的分隔行（`---`），但后面再没有 `---` 收尾。
  *   - `not-at-top`：文件里有个**像** frontmatter 的块（`---` + `key: value` + `---`），
  *     但它不在文件最前面。这里**不断言**前面是空行还是别的文字——没证据的事不说。
  *   - `none`：确实找不到像 frontmatter 的块。
  *
  * @param {string} src 已统一成 \n 的文件全文
- * @returns {"none"|"fence-not-exact"|"not-at-top"}
+ * @returns {"none"|"fence-not-exact"|"no-closing-fence"|"not-at-top"}
  */
 function diagnoseFrontmatter(src) {
   const lines = String(src === undefined || src === null ? "" : src).split("\n")
 
   // 第一行就是分隔行却没被主正则吃下：只可能是减号后面多了空白。
   if (/^---[ \t]+$/.test(lines[0])) return "fence-not-exact"
+  // 第一行就是干净的分隔行，主正则却没匹配上 → 说明后面没有配对的收尾行
+  // （只要后面还有一条 `---`，懒惰匹配的主正则就会成功）。
+  if (FENCE.test(lines[0])) return "no-closing-fence"
 
   // 从第二行起找第一处分隔行，再看它后面有没有配对的收尾分隔行。
   for (let i = 1; i < lines.length; i += 1) {
@@ -119,6 +123,8 @@ function parseUnitFile(text, opts) {
     const reason = diagnoseFrontmatter(src)
     if (reason === "fence-not-exact") {
       warnings.push("frontmatter 的分隔行必须正好是三个减号（---），减号后面不能有空白")
+    } else if (reason === "no-closing-fence") {
+      warnings.push("frontmatter 没有收尾：第一行是 --- 之后，还得再有一行 --- 把 frontmatter 关掉")
     } else if (reason === "not-at-top") {
       // 不断言前面是空行还是正文——没证据的事不说，只说「不在最前面」。
       warnings.push("frontmatter 必须顶格：文件第一行就得是 ---，前面不能有任何内容")

@@ -203,6 +203,16 @@ test("正文里的 --- 加 key: value 不当成「不顶格的 frontmatter」", 
   assert.ok(res.warnings.indexOf("缺少 frontmatter") !== -1, JSON.stringify(res.warnings))
 })
 
+test("只有开头没有收尾的 --- → 提示点名「没有收尾」", function () {
+  // 手工写单元文件时最容易漏收尾那一行。以前这里落到「缺少 frontmatter」，
+  // 而文件明明有 frontmatter 的开头——指错了方向。
+  const res = loaderC.parseUnitFile("---\nid: db:mvcc\n", { path: "database/mvcc.md" })
+  assert.equal(res.unit, null)
+  const joined = res.warnings.join("｜")
+  assert.ok(joined.indexOf("没有收尾") !== -1, joined)
+  assert.ok(joined.indexOf("缺少 frontmatter") === -1, joined)
+})
+
 test("正文里成对的 --- 夹着散文 → 仍是「缺少 frontmatter」", function () {
   // `---` 在 Markdown 里是水平线，一篇正文里出现两三次很常见。
   // 如果诊断只看「有没有成对的 ---」，就会把所有带水平线的文件都误报成
