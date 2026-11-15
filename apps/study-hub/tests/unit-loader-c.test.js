@@ -185,7 +185,7 @@ test("frontmatter 不在文件开头 → 中文提示点名「顶格」", functi
 
 test("分隔行带尾随空白 → 提示点名「减号」，不是「缺少 frontmatter」", function () {
   // `--- ` 这种手感错误很常见（编辑器自动补空格）。以前主正则匹配不上、
-  // hasFrontmatterLater 又提前返回 false → 误报「缺少 frontmatter」，指错了方向。
+  // 主正则匹配不上、诊断又只认「文件开头」时 → 误报「缺少 frontmatter」，指错了方向。
   const text = "--- \n" + GOOD_FRONT + "\n---\n" + GOOD_BODY
   const res = loaderC.parseUnitFile(text, { path: "database/mvcc.md" })
   assert.equal(res.unit, null)
