@@ -88,7 +88,26 @@ function main() {
   for (const hint of legacyHints) {
     console.log("[study-hub] " + hint)
   }
-  const app = createApp()
+  // createApp() 会打开 SQLite。数据库文件被另一个实例占用时，
+  // 建表那一步会抛「database is locked」——不接住的话 Node 会打印一坨英文堆栈，
+  // 违反 G4（面向用户的文案一律中文）。这里给一句能直接照着做的中文提示。
+  let app
+  try {
+    app = createApp()
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err)
+    if (msg.includes("database is locked") || msg.includes("database table is locked")) {
+      // 判定条件用 message 文本匹配，不依赖 err.code 的具体取值
+      // （node:sqlite 的错误码在不同版本里不稳定）。
+      // 中文提示里保留英文原句 database is locked，是故意的——那是用户去搜报错时能搜到的关键字。
+      console.error(
+        "[study-hub] 启动失败：数据库文件被另一个实例占用（database is locked），请先关掉那个进程。"
+      )
+    } else {
+      console.error("[study-hub] 启动失败：" + msg)
+    }
+    process.exit(1)
+  }
   const port = Number(process.env.PORT || 5173)
   // listen 是否已经成功：用来区分「端口没起来」和「起来了但后面的启动输出炸了」
   let listenOk = false

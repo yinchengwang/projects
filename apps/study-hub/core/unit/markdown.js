@@ -69,6 +69,31 @@ function isTableStart(line, next) {
 }
 
 /**
+ * 判断一行是不是某个块级语法的起点，并给出块的种类。
+ *
+ * 这是块类型清单的**唯一来源**：
+ *   - 分派链（`toHtml` 里的 if 链）靠它决定这一段渲染成什么；
+ *   - 段落扫描靠它判断段落什么时候结束。
+ * 将来加块类型只改这一处——漏改段落扫描就会出现「某个块被当成段落」。
+ *
+ * 判定顺序就是分派链的顺序：代码块 → 标题 → 表格 → 引用 → 列表。
+ * 表格要看下一行（分隔行），所以要 `next`。
+ *
+ * @param {string} line 当前行
+ * @param {string} next 下一行
+ * @returns {"code"|"heading"|"table"|"quote"|"list"|null} 不是块级起点时返回 null
+ */
+function isBlockStart(line, next) {
+  const text = String(line === undefined || line === null ? "" : line)
+  if (/^```/.test(text)) return "code"
+  if (/^(#{1,6})\s+(.*)$/.test(text)) return "heading"
+  if (isTableStart(text, next)) return "table"
+  if (/^>\s/.test(text)) return "quote"
+  if (/^\s*[-*]\s+/.test(text) || /^\s*\d+\.\s+/.test(text)) return "list"
+  return null
+}
+
+/**
  * 切一行表格为单元格数组。单元格里写 `\|` 表示竖线本身。
  * @param {string} line
  * @returns {string[]}
@@ -132,9 +157,11 @@ function toHtml(markdown) {
 
   while (i < lines.length) {
     const line = lines[i]
+    // 块级判定统一走 isBlockStart（块类型清单只有那一份）。
+    const block = isBlockStart(line, lines[i + 1])
 
     // 代码块
-    if (/^```/.test(line)) {
+    if (block === "code") {
       const body = []
       i += 1
       while (i < lines.length && !/^```/.test(lines[i])) {
@@ -147,8 +174,8 @@ function toHtml(markdown) {
     }
 
     // 标题
-    const head = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (head) {
+    if (block === "heading") {
+      const head = /^(#{1,6})\s+(.*)$/.exec(line)
       const level = head[1].length
       out.push("<h" + level + ">" + inline(head[2]) + "</h" + level + ">")
       i += 1
@@ -156,7 +183,7 @@ function toHtml(markdown) {
     }
 
     // 表格
-    if (isTableStart(line, lines[i + 1])) {
+    if (block === "table") {
       const rows = [splitTableRow(line)]
       i += 2
       while (i < lines.length && lines[i].trim() !== "" && lines[i].indexOf("|") !== -1) {
@@ -168,10 +195,10 @@ function toHtml(markdown) {
     }
 
     // 引用
-    if (/^>\s?/.test(line)) {
+    if (block === "quote") {
       const body = []
-      while (i < lines.length && /^>\s?/.test(lines[i])) {
-        body.push(lines[i].replace(/^>\s?/, ""))
+      while (i < lines.length && /^>\s/.test(lines[i])) {
+        body.push(lines[i].replace(/^>\s/, ""))
         i += 1
       }
       out.push("<blockquote>" + toHtml(body.join("\n")) + "</blockquote>")
@@ -179,7 +206,7 @@ function toHtml(markdown) {
     }
 
     // 列表
-    if (/^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+    if (block === "list") {
       const ordered = /^\s*\d+\.\s+/.test(line)
       const items = []
       while (i < lines.length) {
@@ -211,12 +238,7 @@ function toHtml(markdown) {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !/^(#{1,6})\s/.test(lines[i]) &&
-      !/^```/.test(lines[i]) &&
-      !/^>\s?/.test(lines[i]) &&
-      !/^\s*[-*]\s+/.test(lines[i]) &&
-      !/^\s*\d+\.\s+/.test(lines[i]) &&
-      !isTableStart(lines[i], lines[i + 1])
+      !isBlockStart(lines[i], lines[i + 1])
     ) {
       para.push(lines[i])
       i += 1

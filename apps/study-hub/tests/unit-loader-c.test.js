@@ -154,6 +154,35 @@ test("缺 frontmatter → unit 为 null", function () {
   assert.ok(res.warnings.indexOf("缺少 frontmatter") !== -1, JSON.stringify(res.warnings))
 })
 
+test("文件带 BOM → 中文提示点名 BOM", function () {
+  // P4 的供给流水线会自动写单元文件，BOM 出现概率不低。
+  // 以前只给一句「缺少 frontmatter」，看不出真实原因（变异体 J2 存活）。
+  const res = loaderC.parseUnitFile("\uFEFF" + makeUnitFile(GOOD_FRONT, GOOD_BODY), {
+    path: "database/mvcc.md",
+  })
+  assert.equal(res.unit, null)
+  assert.ok(
+    res.warnings.some(function (w) {
+      return w.indexOf("BOM") !== -1
+    }),
+    JSON.stringify(res.warnings)
+  )
+})
+
+test("frontmatter 不在文件开头 → 中文提示点名「顶格」", function () {
+  // 前面多一个空行，frontmatter 就整段被忽略。以前也只给「缺少 frontmatter」（变异体 J1 存活）。
+  const res = loaderC.parseUnitFile("\n" + makeUnitFile(GOOD_FRONT, GOOD_BODY), {
+    path: "database/mvcc.md",
+  })
+  assert.equal(res.unit, null)
+  assert.ok(
+    res.warnings.some(function (w) {
+      return w.indexOf("顶格") !== -1
+    }),
+    JSON.stringify(res.warnings)
+  )
+})
+
 test("算法轨分支：题面进 statement，测试用例转断言", function () {
   const front = [
     "id: algo:lc-00007",

@@ -23,7 +23,7 @@ function makeProblemMd(id, title, withCases) {
     "id: " + id,
     "source: leetcode",
     "title: " + title,
-    "difficulty: medium",
+    "difficulty: easy",
     "topics: [数组]",
     "tracks: [interview]",
     "status: todo",
@@ -175,6 +175,23 @@ test("目录不存在不抛错，只给警告", function () {
   assert.deepEqual(res.warnings, [])
 })
 
+test("单元目录存在却读不到 → 进 warnings（中文），不静默吞掉", function () {
+  // 「目录不存在」静默是对的（learning/units/ 在 Task 10 之前根本不存在，
+  // 否则启动日志会被几十条警告淹没）。但「目录存在却读不到」（路径其实是个文件）
+  // 以前被一并静默 → 单元会无声无息地从索引里消失，没有任何诊断线索。
+  const unitsDir = tmpDir("study-hub-units-")
+  // 把 <unitsDir>/database 做成**文件**而不是目录：readdirSync 报 ENOTDIR，不是 ENOENT。
+  fs.writeFileSync(path.join(unitsDir, "database"), "这不是目录\n", "utf8")
+  const res = index.loadUnits({ unitsDir: unitsDir })
+  const badDir = path.join(unitsDir, "database")
+  assert.ok(
+    res.warnings.indexOf("单元目录读不到：" + badDir) !== -1,
+    JSON.stringify(res.warnings)
+  )
+  // 目录不存在的那一支仍然静默：只有 database 这一条警告
+  assert.equal(res.warnings.length, 1)
+})
+
 test("坏文件不打断整体加载", function () {
   const opts = makeTree()
   const badDir = path.join(opts.unitsDir, "database")
@@ -303,7 +320,10 @@ test("物化行带 title / difficulty / updated 三列", function () {
   const row = rows.filter(function (r) { return r.id === "algo:lc-00007" })[0]
   assert.ok(row)
   assert.equal(row.title, "反转整数")
-  assert.equal(row.difficulty, "medium")
+  // 夹具的 difficulty 特意取 easy（不是 medium）：以前夹具本身就是 medium，
+  // 物化链路上「合法难度原样透传」这一条**零覆盖**——
+  // 把 difficultyOf 改成「无论合法非法一律返回 medium」，测试依然全绿。
+  assert.equal(row.difficulty, "easy")
   // updated 是 ISO 时间戳
   assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(row.updated), String(row.updated))
 })

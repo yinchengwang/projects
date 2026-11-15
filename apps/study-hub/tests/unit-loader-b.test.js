@@ -60,6 +60,16 @@ test("README 第一行的 # 标题当标题", function () {
   assert.equal(res.unit.title, "MVCC：版本链与 ReadView")
 })
 
+test("标题取全文里第一个 # 标题行，不只看第 0 行", function () {
+  // 契约 §3.2 第 3 条：读 README.md **全文里第一个 `# ` 标题行**。
+  // 这条夹具是**刻意反直觉**的——首行不是标题，标题在后面一行。
+  // 它证明实现确实是「扫全文」而不是「只看第 0 行」：
+  // 把 titleOf 改成只看第 0 行，这条用例必须变红。
+  const dir = makeCard("mvcc", { readme: "这不是标题，只是开头的一段话。\n\n# 真正的标题\n\n正文\n" })
+  const res = loaderB.parseCardDirectory(dir, { track: "database" })
+  assert.equal(res.unit.title, "真正的标题")
+})
+
 test("README 没有标题行时用 stem 兜底", function () {
   const dir = makeCard("mvcc", { readme: "直接就是正文，没有标题。\n" })
   const res = loaderB.parseCardDirectory(dir, { track: "database" })

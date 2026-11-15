@@ -140,6 +140,27 @@ test("difficulty 非法 → medium", function () {
   assert.equal(res.unit.difficulty, "medium")
 })
 
+test("difficulty 合法值原样保留（easy / medium / hard）", function () {
+  // 契约 §3.1 第 9 条冻结了「unit.difficulty = problem.difficulty（不在 easy|medium|hard 内 → medium）」。
+  // 合法值这一支以前**零覆盖**：把 difficultyOf 改成「无论合法非法一律返回 medium」，
+  // 全部测试依然全绿——而 difficulty 是 P1 排程与 P3 掌握度的输入，
+  // 被压平成 medium 的话线上表现是「所有题都按中等难度排程」。
+  const easy = loaderA.parseUnitMarkdown(
+    makeMd(FULL_FRONT.replace("difficulty: medium", "difficulty: easy"), FULL_BODY),
+    { relPath: "bank/interview/lc-00007.md" }
+  )
+  assert.equal(easy.unit.difficulty, "easy")
+
+  const medium = loaderA.parseUnitMarkdown(FULL, { relPath: "bank/interview/lc-00007.md" })
+  assert.equal(medium.unit.difficulty, "medium")
+
+  const hard = loaderA.parseUnitMarkdown(
+    makeMd(FULL_FRONT.replace("difficulty: medium", "difficulty: hard"), FULL_BODY),
+    { relPath: "bank/interview/lc-00007.md" }
+  )
+  assert.equal(hard.unit.difficulty, "hard")
+})
+
 test("progress 取自 frontmatter 的 status；非法值 → todo", function () {
   const res = loaderA.parseUnitMarkdown(FULL, { relPath: "bank/interview/lc-00007.md" })
   assert.equal(res.unit.progress, "in-progress")

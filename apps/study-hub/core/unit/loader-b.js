@@ -41,7 +41,7 @@ function titleOf(readme, stem) {
  * 读一张卡目录，产出 Unit。
  *
  * @param {string} dirAbs 卡目录的绝对路径
- * @param {object} opts { learningRoot?: string, track: "database"|"ai", unitsDir?: string|null }
+ * @param {object} opts { track: "database"|"ai", unitsDir?: string|null }
  * @returns {{unit: object|null, warnings: string[]}}
  */
 function parseCardDirectory(dirAbs, opts) {

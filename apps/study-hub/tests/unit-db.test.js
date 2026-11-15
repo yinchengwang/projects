@@ -76,9 +76,24 @@ test("新库既有新列，也有 5 张新表", function () {
 })
 
 test("migrate 幂等：同一个库跑两次，第二次什么都不做", function () {
-  const db = openDb(":memory:")
+  // 用「P0 之前」的旧库（makeLegacyDb 没有新列）：migrate 的第一次必须真的加列。
+  // 只断言 applied === [] 的话，「正确跳过」与「7 条 ALTER 全挂」分不出来——
+  // 后者的 applied 仍然是 []，但 warnings 里会多出 7 条中文告警。
+  const file = path.join(tmpDir("study-hub-db-"), "migrate-idem.db")
+  makeLegacyDb(file)
+  const db = new DatabaseSync(file)
+
+  const first = migrate(db)
+  // 首次必须真的加了列，避免「什么都没加」的假绿
+  assert.ok(first.applied.length > 0, JSON.stringify(first))
+  assert.deepEqual(first.warnings, [])
+
   const second = migrate(db)
   assert.deepEqual(second.applied, [])
+  // 第二次必须一条警告都没有：删掉 migrate 里「列已存在就跳过」的那行，
+  // 就会对已存在的列重复执行 ALTER TABLE，7 条全挂进 warnings。
+  assert.deepEqual(second.warnings, [])
+
   db.close()
 })
 

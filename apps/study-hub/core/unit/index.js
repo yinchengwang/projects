@@ -17,27 +17,40 @@ const path = require("node:path")
 const loaderA = require("./loader-a")
 const loaderB = require("./loader-b")
 const loaderC = require("./loader-c")
-const { TRACKS, GROKKING_DB_CARDS, GROKKING_AI_CARDS } = require("../track/tracks")
+const { TRACKS, GROKKING_DB_CARDS, GROKKING_AI_CARDS, trackOfGrokkingCard } = require("../track/tracks")
 
 // 契约 §13：三条顶层轨的**唯一定义处**是 core/track/tracks.js。这里只引用，不另开一份。
 
 /**
  * 列出目录下的 .md 文件名（不递归），按名字排序。
+ *
+ * 两种「读不到」要分开口径：
+ *   - **目录不存在**（ENOENT）→ 静默返回空数组。`learning/units/` 在 Task 10 之前
+ *     根本不存在，不然启动日志会被几十条警告淹没。这一支保持静默。
+ *   - **目录存在却读不到**（权限不足、路径其实是个文件……）→ 把错误**回传**给调用方。
+ *     这一支以前被一并静默，单元会无声无息地从索引里消失，没有任何诊断线索。
+ *
  * @param {string} dir
- * @returns {string[]}
+ * @returns {{names: string[], error: Error|null}}
  */
 function listMarkdown(dir) {
   let names = []
   try {
     names = fs.readdirSync(dir)
   } catch (e) {
-    return []
+    if (e && e.code === "ENOENT") {
+      return { names: [], error: null }
+    }
+    return { names: [], error: e }
   }
-  return names
-    .filter(function (name) {
-      return name.endsWith(".md")
-    })
-    .sort()
+  return {
+    names: names
+      .filter(function (name) {
+        return name.endsWith(".md")
+      })
+      .sort(),
+    error: null,
+  }
 }
 
 /**
@@ -65,7 +78,13 @@ function loadFromUnitsDir(unitsDir, warnings) {
   TRACKS.forEach(function (track) {
     // track 是**对象**，轨道代码取 track.code（不是 track 本身）。
     const dir = path.join(unitsDir, track.code)
-    listMarkdown(dir).forEach(function (name) {
+    const listing = listMarkdown(dir)
+    if (listing.error) {
+      // 目录存在却读不到：必须报出来，否则单元会无声无息地从索引里消失。
+      warnings.push("单元目录读不到：" + dir)
+      return
+    }
+    listing.names.forEach(function (name) {
       const text = readText(path.join(dir, name))
       if (text === null) {
         warnings.push("读不了单元文件：" + name)
@@ -107,7 +126,13 @@ function loadFromBank(bankRoot, warnings) {
   }
   subs.forEach(function (sub) {
     const dir = path.join(bankRoot, sub)
-    listMarkdown(dir).forEach(function (name) {
+    const listing = listMarkdown(dir)
+    if (listing.error) {
+      // 目录存在却读不到：必须报出来，否则单元会无声无息地从索引里消失。
+      warnings.push("题库目录读不到：" + dir)
+      return
+    }
+    listing.names.forEach(function (name) {
       const text = readText(path.join(dir, name))
       if (text === null) {
         warnings.push("读不了题库文件：" + name)
@@ -138,11 +163,10 @@ function loadFromCards(grokkingDir, unitsDir, warnings) {
   const units = []
   if (!grokkingDir) return units
   const cards = []
-  GROKKING_DB_CARDS.forEach(function (stem) {
-    cards.push({ stem: stem, track: "database" })
-  })
-  GROKKING_AI_CARDS.forEach(function (stem) {
-    cards.push({ stem: stem, track: "ai" })
+  // 卡 → 轨的归属只有 core/track/tracks.js 一份（trackOfGrokkingCard）。
+  // 这里不另抄一份映射：将来 tracks.js 新增第三类卡清单，这里不会静默漏掉。
+  GROKKING_DB_CARDS.concat(GROKKING_AI_CARDS).forEach(function (stem) {
+    cards.push({ stem: stem, track: trackOfGrokkingCard(stem) })
   })
   cards.forEach(function (card) {
     const dir = path.join(grokkingDir, card.stem)
@@ -151,7 +175,6 @@ function loadFromCards(grokkingDir, unitsDir, warnings) {
       return
     }
     const res = loaderB.parseCardDirectory(dir, {
-      learningRoot: path.dirname(path.dirname(grokkingDir)),
       track: card.track,
       unitsDir: unitsDir,
     })

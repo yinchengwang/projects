@@ -39,6 +39,33 @@ function str(fm, key) {
 }
 
 /**
+ * 判断文件里有没有**不在开头**的 frontmatter 块（`---` 行 + 内容 + `---` 行）。
+ *
+ * 只认文件里**第一处** `---` 行——frontmatter 如果存在，必然是文件的第一块。
+ * 这样就不会把正文里的分隔线（Markdown 的水平线 `---`）误判成 frontmatter。
+ *
+ * @param {string} src 已统一成 \n 的文件全文
+ * @returns {boolean}
+ */
+function hasFrontmatterLater(src) {
+  const text = String(src === undefined || src === null ? "" : src)
+  // 文件里第一处 `---` 行
+  const first = /(^|\n)---[ \t]*\n/.exec(text)
+  if (!first) return false
+  // 这一处 `---` 在不在文件开头？（first[1] 是它前面吃掉的那个换行）
+  const fenceStart = first.index + first[1].length
+  if (fenceStart === 0) return false
+  // 还得有收尾的 `---` 行，才算一个完整的 frontmatter 块
+  const after = text.slice(first.index + first[0].length)
+  const close = /\n---[ \t]*(?:\n|$)/.exec(after)
+  if (!close) return false
+  const content = after.slice(0, close.index)
+  // 内容要么是空的，要么像 YAML（至少有一行 key: value）
+  if (content.trim() === "") return true
+  return /^[ \t]*[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/m.test(content)
+}
+
+/**
  * 解析一份单元文件，产出 Unit。
  *
  * @param {string} text 文件全文
@@ -64,6 +91,14 @@ function parseUnitFile(text, opts) {
   if (match) {
     fm = parseFrontmatter(match[1])
     body = src.slice(match[0].length)
+  } else if (src.charAt(0) === "\uFEFF") {
+    // 文件带 BOM：frontmatter 明明在，但正则锚在字符串开头，BOM 把它顶掉了。
+    warnings.push("单元文件带 BOM，请去掉 BOM 再试")
+  } else if (hasFrontmatterLater(src)) {
+    // frontmatter 存在但不在文件开头（前面有空行 / 别的内容）。
+    // 顶格要求是对的，不放宽；但报错文案要能看出真实原因——
+    // P4 的供给流水线会自动写单元文件，BOM / 前导空行出现概率不低。
+    warnings.push("frontmatter 必须顶格，前面不能有空行")
   } else {
     warnings.push("缺少 frontmatter")
   }
