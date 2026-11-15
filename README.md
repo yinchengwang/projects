@@ -1,6 +1,6 @@
 # projects — C/C++ 算法工程实践
 
-> StillEvolving 四仓体系中的**工程仓**：`engine/` 产出生产级作品。
+> code 四仓体系中的**工程仓**：`engine/` 产出生产级作品。
 > **学习轨（learning）与参考轨（reference）已切出为独立仓**，本仓不再承载学习笔记与第三方源码镜像。
 
 [![CI](https://img.shields.io/badge/CI-github%20actions-blue)](.github/workflows/ci.yml)
@@ -240,7 +240,7 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 > ### ⛔ 禁止 `git submodule update --init --recursive`（作用域是 `reference` 仓）
 >
-> **在 `reference` 仓内**（本仓相对路径 `../../reference/`，即 `C:\code\reference`）
+> **在 `reference` 仓内**（本仓相对路径 `../reference/`，即 `C:\code\reference`）
 > 执行 `git submodule update --init --recursive` 会一次性拉起其 **95 个第三方库 submodule**，
 > 体积约 **25 GB / 53.6 万文件**，极易把磁盘与 CI 时间拖垮。
 > 需要哪个库就用 `scripts/fetch-reference.sh --name <名字>` 按 catalog 单独拉取。
@@ -294,11 +294,11 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 | 仓 | 获取方式 | 路径 | 角色 |
 |---|---|---|---|
-| StillEvolving | 父仓 | `../` | 只放四仓关系，不放业务代码 |
+| code | 父仓 | `../` | 只放四仓关系，不放业务代码 |
 | projects | submodule | `./`（本仓） | 工程仓（引擎 + 小程序 + 项目级文档 + agent 规约） |
 | learning | submodule | [`../learning/`](../learning/) | 学习仓（笔记 + 脚手架 + 题解 + 进度） |
 | ai-docs | submodule | [`../ai-docs/`](../ai-docs/) | AI 工作文档仓（模板与方法论） |
-| reference | 独立仓 + 清单拉取 | [`../../reference/`](../../reference/) | 第三方源码镜像 + 源码笔记（**不进 submodule 树**） |
+| reference | submodule + `update=none` | [`../reference/`](../reference/) | 第三方源码镜像 + 源码笔记（内部上游按需拉取） |
 
 ### 归属判定表
 
