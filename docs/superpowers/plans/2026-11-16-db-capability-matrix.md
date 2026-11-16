@@ -1,87 +1,107 @@
-# 两套数据库能力差异矩阵（Stage B0 只读盘点）
+# Stage B：路线 B 实施设计（engine/db 为唯一主核）
 
-盘点日期：2026-11-16。只读核验，未运行任何构建或测试。所有结论均以源码为证据，不采信 README 或计划文档的自我宣称。
+> **状态：**用户已选择 B。本文件是实施前路线与门禁草案；除 Stage A 已完成的仓库重构外，Stage B 代码/服务/数据迁移尚未开始。
+>
+> **关键决策：**`engine/db` 成为唯一主数据库内核；`engine/src/db` 冻结并永久保留为历史实现（未来删除或恢复维护须另行设计、用户批准）。
 
-## 判定口径
+## 1. 背景与已核实事实
 
-| 档位 | 含义 |
+Stage B0 能力矩阵及路线 B 工程面复核已发现：`engine/src/db` 外围协议/RAG/分布式目录并不等于可用服务能力。PG/MySQL query handlers 未接执行器、SDK 不解析返回结果、RAG 检索路径多有 TODO、Raft transport 发送部分留空；REST/vdb/vector_api 与 src/db 向量/WAL/checkpoint 深度耦合。另一方面，`engine/db` 的单机存储/事务/索引核心有完整独立门禁与近期实测。
+
+| 项 | 证据/状态 |
 |---|---|
-| **实测通过** | 有对应测试且已实际跑绿（旧 DB 侧 2026-11-16 跑过 `make check`） |
-| **可用（静态）** | 读源码判定可端到端工作，但本次未运行验证 |
-| **有代码但未完成** | 关键函数为 TODO / 空桩 / 简化实现，或调用链断裂 |
-| **缺失** | 无实现 |
+| `engine/db` | 90 个测试程序、`make check` 输出 117 PASS / 0 FAIL（2026-11-16）；strict `-Werror`、deps 门禁。JSONB 源码已提交，但只 standalone tests，通过源码搜索未发现其接入 `db_exec`/SQL。 |
+| `engine/src/db` | 494 个 C 源文件/约 21 万行、289 个测试文件；本轮对核心路径做了源码级缺口核验：WAL recovery 入口缺 `wal_replay` 定义、MVCC commit/abort 空实现、vacuum 空转、Catalog 未从持久化启动加载、BTree 搜索/插入/扫描未完成、SQL WHERE 明确拒绝。本轮未运行主库 CMake/CTest。 |
+| `engine/src/db` 工程面 | wire handlers / SDK / RAG / Raft transport 多为 stub 或未接线；REST 向量 API 深度依赖 src/db 向量私有实现；sharding `migrate_manager` 直接使用 src/db KV。薄代码容易挪并不代表实际功能可用。 |
+| 旧数据 | `engine/db` 根无 `.db/.wal/.bin`，Git 无跟踪数据库数据；约 576 MB 全在 ignored `test/tmp/`。当前初步指向测试/bench/debug 产物，但每个文件尚需逐项核实用途；未授权删除。 |
+| README / 目录 | Stage A 已完成：code 聚合仓、四仓 submodule、README、`update=none` clean-clone 验证都已推送。 |
 
-⚠️ 本次只核验源码，未运行主库 CMake/CTest。因此「可用（静态）」不等于实测通过。
+## 2. 唯一内核与仓目录策略
 
-## 一、核心存储层
+```text
+projects/engine/db/       # 唯一维护的 DB 核心：继续开发与默认门禁
+projects/engine/src/db/   # 冻结历史实现：保留目录、源码、测试、CMake 和历史
+```
 
-| 能力 | engine/db（冻结） | engine/src/db（主库） | 关键证据 |
-|---|---|---|---|
-| Buffer pool / 页管理 | **实测通过** | **有代码但未完成** | 主库 `bufmgr.c:603-625` 命中路径不递增 refcount，pin/unpin 语义不可靠；`buf_write` 仅在 `db_file != NULL` 时落盘（902），CLI 用 `buf_init("")` 导致脏页永不持久化；`disk_write_page` 无 fsync。旧 DB `test_pager.c` 覆盖 10000 页逐出/读回/随机访问全通过 |
-| WAL 写入 | **实测通过** | **可用（静态）** | 主库 `wal_write_record`(406-502)/`wal_flush`(730-754 含 fsync) 完整 |
-| **WAL 崩溃恢复** | **实测通过** | **缺失（链路断裂）** | 主库 `wal_recover.c:56` 声明 `extern int wal_replay(...)`，**全仓无定义**；CLI/启动路径**零调用** `db_startup_recover`。旧 DB `test_crash.c`（20 轮断电恢复）、`test_ckpt_recovery_time.c` 全通过 |
-| 事务状态机 | **实测通过** | **有代码但未完成** | 主库 `mvcc_mark_committed`(mvcc.c:144-150) 与 `mvcc_mark_aborted`(155-159) **均为空实现**；`mvcc_get_status`(164-170) **恒返回 IN_PROGRESS**。后果：可见性规则永远等不到 COMMITTED，已删除行仍可见 |
-| **MVCC 可见性** | **实测通过** | **有代码但未完成** | 旧 DB `test_mvcc.c`（RC/RR、版本、abort、dead 判定）、`test_mvcc_it.c` 全通过。主库 `heap_visibility.c:150` 版本链遍历 TODO |
-| **Vacuum / 空间回收** | **实测通过** | **有代码但未完成** | 主库 `vacuum_relation`(vacuum.c:105-162) 全 TODO 返回空 stats；`vacuum_count_dead_tuples` 恒 0（303-308）；`vacuum_freeze_all` 空转（197-207）。旧 DB `test_vacuum_compact` 实测 removed=750、compacted=22、freed=29583 |
-| Heap AM 元组头 | **实测通过** | **有代码但未完成** | 主库 `heap_insert` **不写 xmin**（heapam.c:334-336 `(void)current_xid`，注释「kv_record_t 无 xmin 字段」）；`heap_update` 是 delete+insert（527-557）；`heap_page_prune` 直接 `return 0`（277-282） |
-| Catalog 持久化 | **实测通过** | **有代码但未完成** | 主库 catalog 是纯内存 hash（catalog.c:83-93）；`catalog_init`(143-160) 不加载任何系统表，注释自承「生产环境应从持久化存储加载」。`catalog_persist`/`catalog_recover` 存在但**生产代码零调用**。旧 DB `test_catalog.c` 覆盖元数据读回、重开持久化、损坏检测 |
-| BTree AM | **实测通过** | **有代码但未完成** | 主库 `bt_page_get_item`(81-98) 循环内 `(void)key` 从不比较；`btinsert`(185-194) 仅 `btpo_count++` 不落键值；`bt_getnext`(344-350) 把整数当指针返回；无分裂（179-183）；`bt_key_matches` 恒 true（382-383）。旧 DB `test_btree.c` 覆盖 10 万条插入/查找/范围扫描/删除/分裂 |
+- 新 DB 功能、唯一对外主 API、旧数据目标落点、未来默认 build/test/CI 都以 `engine/db` 为准。
+- `engine/src/db` 不被删除、不机械搬入 `engine/db`；其模块只能先审计实际行为和依赖，再决定适配、重写、仅存参考或舍弃。
+- 不让主核链接两套 pager/WAL/MVCC/catalog/BTree，不形成并行事务/持久化路径。
+- `engine/db` 当前公开 `include/db.h` 和 `StorageAM/IndexAM` 作为新能力适配的稳定边界；接口若不足，先设计/测试窄适配层，而不是在两个 DB 内核之间私用私有头文件。
 
-## 二、查询层
+## 3. 分阶段实施路线
 
-| 能力 | engine/db | engine/src/db | 关键证据 |
-|---|---|---|---|
-| SQL 解析 | 可用 | **可用（静态）** | 主库 Bison/flex 预生成文件已提交，`sql_parse()`(sql_parse.c:21)；语法覆盖 CREATE/INSERT/UPDATE/DELETE/DROP/SELECT |
-| **WHERE 谓词** | **实测通过** | **缺失（显式拒绝）** | 主库 `sql_driver.c:894`（SELECT）、`1369`（UPDATE）、`1535`（DELETE）三处均直接报错「WHERE 暂不支持」；烟测 `test_driver_smoke.cpp:275-288` 强制断言拒绝。旧 DB `test_query.c`、`test_cbo.c`、`test_agg_sqlite.c`（25 条聚合 SQL 与 SQLite 逐格全等）全通过 |
-| 聚合 / GROUP BY | **实测通过** | 未确认 | 旧 DB `test_agg_sqlite.c` 25 条全等 |
-| 优化器 | 规则 CBO，实测通过 | **有代码但未完成** | 主库 `optimizer_optimize`(optimizer.c:958) 无任何 SQL 侧调用者；`sql/optimizer.c:23-33` 四条规则标「TODO 桩」=false |
+### B0：资产、测试与数据基线（只读）
 
-## 三、模态
+**输出：**
+- 能力矩阵逐项区分：主核实测通过 / src/db 实测可用 / 源码存在未测 / stub/TODO / 缺失 / 仅设计；记录真实调用路径、build profile、对应测试及最近结果。
+- `engine/db/test/tmp/` 全量文件清单：相对路径、字节数、mtime、文件类型/页头初识别、相关测试或 benchmark 源文件、是否能由确定命令+输入重建、是否需迁移。
+- 与文档所称约 576 MB 的差异复核；WAL 和主 DB 配对检查，不按扩展名单独处置。
+- 引擎服务化需求：明确首期只是嵌入式单进程，还是要 TCP server；旧 DB 目前无 socket/auth/ACL，连接是进程内共享实例，活跃事务上限 64、snapshot XIP 上限 128、模态语句有全局 recursive mutex。这些硬边界不能因迁移外层代码而消失。
 
-| 模态 | engine/db | engine/src/db | 关键证据 |
-|---|---|---|---|
-| **blob**（对象→帧→页） | **实测通过** | 有代码但未完成 | 旧 DB `test_blob.c`(11 项)、`test_blob_am.c`(7 项)、`test_blob_it.c` 全通过 |
-| **图** | **实测通过**（含崩溃恢复、BFS 多跳、真实下推） | 部分可用 | 主库 BFS 真队列实现（traverse.c:268）；但 **PageRank 是错的**（traverse.c:672-676 仅把自身得分回写给自己，未做入边汇聚）却已暴露为 SQL 函数 `GRAPH_PAGERANK`；`scan_begin` 恒 NULL（graph_engine.c:299-306）。旧 DB `test_graph.c`/`test_graph_am.c`/`test_graph_crash.c`/`test_graph_it.c` 全通过 |
-| **向量** | **实测通过**（HNSW recall@10=0.999、KNN、重启一致、崩溃恢复） | 核心可用，外围简化 | 主库 `faiss_hnsw_index_add` 是真 FAISS 算法；但**索引持久化零调用**（`save_index`/`load_index` 全仓无调用者，`table_close` 直接 drop）；WAL 回放未接（`vector_engine.c:350` 只 open）；标量过滤「假设所有结果都满足条件」（2243-2246）；混合检索 BM25 占位（2305-2312）；精排 stub |
-| **全文** | **实测通过**（BM25 对照线性扫描逐位全等、多段合并、tombstone、崩溃恢复、页读可证） | 有代码但未完成 | 旧 DB `test_ft_*` 十余个测试全通过 |
-| **空间** | **实测通过**（R-tree、精确 KNN、窗口查询、崩溃恢复） | **有代码但危险** | 主库 `rtree_remove`(427-433) 空桩「暂不支持删除」；`spatial_engine_tuple_delete`(442-452) **写入空文件 —— 删除任一条目会清空整库**；子节点满时不分裂（341-359）；`scan_begin` 恒 NULL |
-| **时序** | **实测通过**（dod/RLE/Gorilla 三压缩、封窗 60 页→4 页、TTL 整分区回收、崩溃恢复、中途崩溃一致性） | 写入可用，读取不可用 | 主库 scan 恒 NULL（ts_engine.c:281-290）；三处 bucket 聚合「返回空结果」（ts_sql_functions.c:99/171/213）；压缩未集成 |
-| **文档 / JSON** | 编解码实测通过，**未接入 SQL** | 简化实现，JSONB 未接入 SQL | 两侧相同结论：JSONB 都未进 SQL。主库 `pipeline $match` 全部放行（doc_pipeline.c:982-994）；JSONPath 过滤表达式直接跳过（jsonpath.c:503-505）；`sql_driver.c:120-137` 类型映射无 jsonb |
-| KV | 缺失 | **可用（静态）** | 主库页式 KV 基于 buffer pool，**WAL 真实**（kv.c:396-416 打开即回放，`kv_replay_wal` 943）；TTL 有实现但 Windows 用 `clock()`（CPU 时间而非墙钟，kv_ttl.c:50-52）；LSM `lsm_tree_get` 只查 MemTable（776 TODO）、无调用者 |
-| 列存 / 流式 / RDF / 时空 | — | 低可用度 | 列存 `col_tuple_insert` 恒 -1（414-419）无 scan；流式窗口函数 not implemented |
+**验证与安全：**只读扫文件/源码/配置；检查数据库内容时只能用确认不会改写源文件的只读方法或只读副本。不得在原文件上启动可能触发 recovery/WAL/checkpoint 的 DB 程序。不可证明可重建的数据默认保留。
 
-## 四、工程能力
+**退出门：**所有用户数据/未知产物逐项定类；用户批准需要迁移的数据范围、备份路径和可清理范围。没有批准就不开始 B2 导出，也不删除 `test/tmp/`。
 
-| 能力 | engine/db | engine/src/db |
-|---|---|---|
-| 分布式 / 分片 / Raft / 2PC | **明确不做**（DESIGN.md:19-28 列为非目标） | 有代码（distributed/consensus/sharding），完成度未核验 |
-| 协议层（PG wire / MySQL wire） | 无 | 有（protocol/，PG v3.0 + MySQL 4.1+） |
-| RAG | 无 | 有（executor/rag/），部分为预留 |
-| 多语言 SDK | 无 | 有（sdk/） |
+### B1：`engine/src/db` 模块资产分诊（只读）
 
-## 五、规模与门禁
+每个候选模块以源码调用链、目标 profile、测试断言为证据，分成：
 
-| 项 | engine/db | engine/src/db |
-|---|---|---|
-| C 源文件 | 134 | 494 |
-| 源码行数 | 约 6.8 万 | 约 21 万 |
-| 测试文件 | 90 个测试程序 | 289 个 |
-| 构建门禁 | `-Werror` 零警告强制 | 非 MSVC 下不启用 `-Werror` |
-| 依赖方向门禁 | `tools/check_deps.sh`（L0–L4 分层，硬约束） | CMake 目标依赖，无分层方向检查 |
-| 最近实测 | 2026-11-16 `make check`：117 PASS / 0 FAIL | **本次未运行** |
+1. **真实且验证过、边界清楚**：可作为移植候选；迁移后仍需在主核测试。
+2. **真实但未验证 / profile 默认未启用**：先独立 build/test，不能仅凭源码判定。
+3. **stub / 空返回 / TODO / 未接线**：不视为现成资产；只有用户明确要该能力时才在主核重新设计实现。
+4. **深耦合**：依赖 src/db 的 `wal_t`、`Relation`、`BufferDesc`、vector private plan 等内部类型；必须重写适配，不能直接链接。
 
-## 六、结论
+重点：
+- protocol codec 可研究报文格式；实际 query handlers 是 stub，连接执行入口须新建。
+- mmdb_sdk 是未完成的 POSIX 客户端，不是完整 wire client。
+- REST/Vector API 的路由/业务实现与 src/db vector 内核耦合，不能直接保留为跨内核通用 API。
+- RAG 算子框架虽多用 `void*`，但真实检索/embedding/txn 是否接通须逐路径核验。
+- Raft/percolator 等自包含逻辑可以逐项评估；transport 的 socket send、heartbeat、snapshot 等 TODO 不作为可用复制能力。
+- sharding 中 `migrate_manager` 使用 src/db KV，单独设计新的抽象/导入导出 adapter。
 
-1. **主库的「核心路径」恰恰是最不完整的部分。** 崩溃恢复（`wal_replay` 无定义）、事务状态（空实现）、vacuum（全 TODO）、Catalog 持久化（零调用）、BTree（不存键值）—— 这五项合起来意味着主库**当前不存在可用的「写到读再到崩溃恢复」端到端流程**。
-2. **旧 DB 恰好在这五项上全部实测通过**，且有 90 个测试程序、117 条 PASS 支撑。
-3. 主库的优势在**广度和工程面**：分布式/共识/协议/SDK/RAG 这些旧 DB 明确不做。
-4. 两侧 JSONB 都未接入 SQL，处于同等状态；旧 DB 的 JSONB 编解码/path/overflow 已有实测通过的 standalone 测试。
-5. 「以 `engine/src/db` 为唯一主内核」这一既定决策，与「旧 DB 有更完整的核心存储层」这一事实**存在实质冲突**，需要重新裁决。
+**退出门：**逐项写出拟迁、重写、只保留设计、舍弃及理由；未审计项标 unknown，不默认迁入主核。
 
-## 七、需要用户决定的三条路线
+### B2：定义旧 DB 的工程接入目标与最小服务闭环
 
-- **路线 A：维持 src/db 为主内核**，则必须先补齐其崩溃恢复/事务/vacuum/Catalog/BTree 五处核心缺口（工作量约等于重写存储层），旧 DB 仅作参考。
-- **路线 B：以 engine/db 核心存储层为主**，把 src/db 的工程面（协议、分布式、SDK、RAG）向下适配到旧 DB 的接口。旧 DB 的 SPI（StorageAM/IndexAM）已有清晰契约。
-- **路线 C：按能力分层共用**，抽出共同的 pager/WAL/txn 底座（以实测通过的那套为准），上层各取所需。代价是两套上层代码都要改。
+- 初始建议先保持 `engine/db` 为嵌入式 C API/REPL，不先承诺生产网络服务；确认连接并发/认证需求后再定 wire server 范围。
+- 若需要外部客户端闭环，新的垂直切片至少包含：socket listen/accept、连接/会话状态、协议 framer/parser、认证策略、SQL 执行入口适配 `db_exec`、结构化结果/NULL/SQLSTATE 映射、错误/断连清理、超时/取消、重复打开数据库文件互斥。
+- 首期并发边界必须明确：现有模块路径的全局锁串行、64 活跃事务和 128 snapshot 项上限；不在未测试的情况下宣称高并发或服务生产就绪。
+- 只有单库 C API 场景时，不需要为迁移 src/db 的空壳 server 额外加协议层。
 
-本次只读盘点未做任何选择，也未修改任何代码。
+**退出门：**用户确认服务化目标及支持范围；写下“不支持”的认证、并发、multi-process、分布式功能清单。
+
+### B3：选择并完成一个主核垂直切片
+
+- 候选从 B1 确认为有价值的资产中选；同一轮只选一个子系统（例如纯协议 codec + 最小只读 SQL session，或 RAG 检索逻辑的一个真实算子）。
+- 先在 `engine/db` 对外行为面写失败测试：输入→真实 `db_exec`/C API→结果或错误→关闭/重开数据一致性。
+- 在 `engine/db` 原分层里实现；遵守 L0-L4 方向检查；不把 src/db private headers、对象库或 runtime 状态加入依赖。
+- 每次改动后跑聚焦测试、`make check`（strict build + deps + unit/integration），涉及持久化则另跑 crash/reopen 故障场景。
+- 只有当迁移成本/功能闭环/测试质量经 review 通过，才选下一项；若要复制第二套核心底座，停止并重审路线。
+
+### B4：旧数据逻辑导出/导入（仅对 B0 批准的用户数据执行）
+
+Stage B0 若证实只有可重建测试库且用户确认不保留内容，则本阶段记为 N/A；本身不清理任何文件。若有需保留数据：
+
+1. 用户确认原始只读备份目标、数据列表、容量、源文件 checksum；先复制备份，原件保持不动。
+2. 设计有 schema/version 的导出中间格式，覆盖 SQL 列类型/NULL/主键、模态实体 ID 与 metadata、blob 内容；不支持项必须报错列出。
+3. 导出器只从源副本读取，导出 manifest 含源 DB commit、文件 SHA、table/object counts、每条或分块内容 SHA、错误明细。
+4. 创建新 DB 目标目录（须用户批准具体路径）；将数据导入 `engine/db` 主核对应 schema/API；操作可幂等重跑，不回写源副本。
+5. 独立校验器比较源导出与目标读回的 row/object counts、ID 集合、字段类型/null、规范化内容 hash、blob 长度/hash 和索引重建结果。
+6. 输出逐项迁移差异与未映射数据清单；用户检查并批准后，原始备份和导出包继续保留。本设计不授权删除备份或测试库。
+
+### B5：冻结 src/db 并清理默认开发面
+
+- 更新 `projects/CLAUDE.md`、`projects/README.md`、`engine/README.md`、`engine/db/README.md`：`engine/db` 为唯一活跃 DB，`engine/src/db` 冻结保留。
+- 移除 src/db 子系统**默认** build/test/CI 维护入口须逐项审查；保留历史 CMake 和测试文件在目录内，不删除、不批量搬迁。
+- 若其中模块作为独立可移植资产被迁出，原目录仍保存源历史，README 标记被替代/只读参考。
+- 新的 code/Stage A README 只更新主核路径和 link，不声称 src/db 的桩能力已迁移。
+
+**最终退出门：**用户批准迁移清单；唯一 DB 主线 build/test 可复现；所有纳入迁移的数据通过独立核验；README、CI、CLAUDE.md 对冻结状态一致；`engine/src/db` 与 `engine/db/test/tmp` 仍在磁盘上，任何删除另行授权。
+
+## 4. 当前状态与阻塞
+
+- Stage A 完整 clean clone 已验证：code 本体与 projects/learning/ai-docs 均成功，reference 在普通 update 下跳过，显式覆盖后仅拉 catalog/笔记、不拉 95 个上游源码；总目录 1.5 GB，consistency 38 Python tests 全绿。
+- `m5-verify` 已按用户授权迁到 code 根并 ignore；旧 StillEvolving 本地目录已按单独授权删除；远程 StillEvolving 保留。
+- `engine/db` JSONB 15 文件已提交并推送；strict build、deps、90 test programs / 117 PASS 已验证。JSONPath 整数溢出风险后经 probe 证伪；UTF-8 改为严格；obj_set realloc 失败复核无实际逻辑/内存安全破坏；json_ovf 单帧 alloc-failure 测试通过并明确 caller serialization。
+- Stage B0 数据初盘：`engine/db` 根无数据库文件、git 无跟踪 db/wal/bin；约 576 MB 位于 `test/tmp/`，现有证据大多指测试/bench/debug 产物，但须按 B0 逐文件与 WAL 配对核实。未经用户确认不能清理。
+- 路线 B 下 `engine/db` 已成为主核；`engine/src/db` 是冻结保留对象。**下一步只能继续 B0/B1 只读盘点与服务化范围确认；不得开始迁工程面代码或数据导出，直到相应详细设计/目标路径和数据范围获得用户批准。**
