@@ -2,7 +2,7 @@
 /**
  * m2-e2e.test.js —— M2 端到端：死脚本 / 存量题解 → learning/bank/<track>/<id>.md → 再读回来
  *
- * 全程用临时目录当 learning 仓，绝不碰真实的 C:/code/StillEvolving/learning。
+ * 全程用临时目录当 learning 仓，绝不碰真实的 C:/code/learning。
  * 夹具是真实文件格式的小样本：死脚本 4 道题、题解 4 个文件。
  */
 
