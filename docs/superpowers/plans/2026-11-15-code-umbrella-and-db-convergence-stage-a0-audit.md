@@ -127,7 +127,28 @@ code 聚合仓尚未在 `C:\code` 初始化；远程 `code` 仓的初始内容�
 
 **未完成项（阻塞 Stage A 完整验收）：**
 
-- 完整 clean clone 的 submodule 初始化未验证通过。两次尝试均在 `git submodule update --init --depth 1 projects` 处因本机网络超时被终止（10 分钟上限），`projects` 目录保持为空。因此不能声称「干净 clone 能拉到四个直接 submodule」，只验证到「clone code 仓本身成功、四个 gitlink 与 `.gitmodules` 正确、reference 被正确跳过」。
-- 该未完成项是环境/网络限制，不是配置缺陷的证据；但按计划 Gate，Stage A 尚不能标为完全通过。
+- ~~完整 clean clone 的 submodule 初始化未验证通过~~ → **已于 2026-11-16 补验通过**，详见第九节。
+
+**先前失败记录（保留）**：两次尝试均在 `git submodule update --init --depth 1 projects` 处因本机网络超时被终止（10 分钟上限）。
+
+## 九、完整 clean clone 验证（2026-11-16 补跑通过）
+
+在 `%TEMP%\smoke4` 从零 clone `https://github.com/yinchengwang/code.git`（`--depth 1`），随后逐个子仓初始化：
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| clone code 仓本体 | `git clone --depth 1 ...` | 退出码 0；顶层得到 `.gitattributes` `.gitignore` `.gitmodules` `LICENSE` `README.md` `ai-docs/` `docs/` `learning/` `projects/` `reference/` `repos.yaml` `scripts/` |
+| 初始化 projects | `git submodule update --init --depth 1 projects` | 退出码 0；HEAD `3eda8d939` 与 `.gitmodules` pin 一致；嵌套 `uthash`、`googletest` 显示为未初始化（预期，各仓自理） |
+| 初始化 learning | 同上 | 退出码 0；HEAD `84c400d` 一致 |
+| 初始化 ai-docs | 同上 | 退出码 0；HEAD `7b08d23` 一致 |
+| 裸 `git submodule update --init` | 不带 `-c` 覆盖 | 输出 `Skipping submodule 'reference'`；reference 保持 `-3d2ad47…` 未初始化，目录为空 |
+| bootstrap 式覆盖 | `git -c submodule.reference.update=checkout submodule update --init --depth 1 reference` | 退出码 0；reference 落到 `3d2ad47` |
+| reference 上游是否被误拉 | 统计 `reference/reference/**` 下源码文件 | **0 个** `.c/.h/.cpp`；18 个条目全是分类目录 + `catalog.yml` / `fetch-manifest.txt` / `AUDIT.md` / `README.md`；每个上游库工作树为 0 项 |
+| 总体积 | `du -sh` | **1.5 GB**（远低于 25 GB 全量递归） |
+| 一致性检查 | `python scripts/check_consistency.py` | 退出码 0，输出「四仓一致（6 条告警）」 |
+| Python 单测 | `python -m unittest discover -s scripts` | 38 项全部通过 |
+
+结论：**Stage A 的 clean clone 门禁现已实测通过**。四项关键论断均被验证：code 本体可克隆、三个直接仓可达且 pin 一致、reference 在裸 update 下被正确跳过、显式覆盖可初始化 reference 而不递归其 95 个上游。
+
 
 
