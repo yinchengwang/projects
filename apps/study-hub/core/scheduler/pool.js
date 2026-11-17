@@ -61,6 +61,10 @@ function collectDue(cards, unitsById, opts) {
       }
       return
     }
+    // 契约 §6.0：**同一个单元只算一次**。Set 天然去重，但 dueByTrack 是按卡累加的，
+    // 所以这里必须先查「是不是已经算过」，否则两张卡指向同一单元时会得到 2，
+    // 与 collectPools().counts[track].due（按单元算）= 1 互相矛盾。
+    if (dueUnitIds.has(unitId)) return
     dueUnitIds.add(unitId)
     const track = String(unit.track || "")
     dueByTrack[track] = (dueByTrack[track] || 0) + 1

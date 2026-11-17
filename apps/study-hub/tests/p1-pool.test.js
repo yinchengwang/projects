@@ -162,6 +162,31 @@ test("到期的卡按轨计数，不同轨分开累加", function () {
   assert.strictEqual(r.dueUnitIds.size, 3)
 })
 
+test("dueByTrack 按单元去重：同一单元有两张到期卡时只算一次", function () {
+  // 契约 §6.0：**「到期卡对应的单元在候选池里只算一次」**。
+  // 这条对 `dueUnitIds`（Set）自动成立，但对 `dueByTrack` 不会——
+  // 它是按「卡」累加的。两张卡指向同一单元时，`dueByTrack` 会给 2，
+  // 而 `collectPools().counts[track].due` 会给 1，两个数字互相矛盾。
+  // 实现已改成按单元去重（先查 dueUnitIds 是否已有）。
+  const cards = [
+    { unit_id: "algo:lc-00001", problem_id: "lc-00001", next_review_at: "2020-01-01T00:00:00.000Z", units_since: 0 },
+    { unit_id: "algo:lc-00001", problem_id: "lc-00001-old", next_review_at: "2021-01-01T00:00:00.000Z", units_since: 0 },
+  ]
+  const byId = { "algo:lc-00001": unit("algo:lc-00001", "algorithm") }
+  const r = collectDue(cards, byId, { nowIso: "2026-01-01T00:00:00.000Z", k: 5 })
+  assert.strictEqual(r.dueUnitIds.size, 1)
+  assert.deepStrictEqual(r.dueByTrack, { algorithm: 1 }, "同一单元只许算一次：" + JSON.stringify(r.dueByTrack))
+
+  // 与 collectPools 的 counts.due 必须一致（这是同一条规则的两种算法）
+  const pools = collectPools({
+    units: [unit("algo:lc-00001", "algorithm")],
+    dueUnitIds: r.dueUnitIds,
+    tracks: ["algorithm"],
+  })
+  assert.strictEqual(pools.counts.algorithm.due, 1)
+  assert.strictEqual(pools.counts.algorithm.due, r.dueByTrack.algorithm)
+})
+
 test("没有 dueUnitIds 时也能建池", function () {
   const r = collectPools({
     units: [unit("db:mvcc", "database")],
