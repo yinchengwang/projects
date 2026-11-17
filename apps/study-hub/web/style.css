@@ -632,3 +632,78 @@ td button {
   height: 16px;
   vertical-align: middle;
 }
+
+/* --------------------------------------------------------------------------
+   会话队列：首页的队列式排版
+   状态同时用左边框颜色 + 符号 + 中文药丸承载——不靠颜色单独表意。
+   -------------------------------------------------------------------------- */
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin: 4px 0 0;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--surface);
+  border-left: 3px solid transparent;
+  padding: 10px 14px;
+}
+
+.queue-mark {
+  flex: 0 0 20px;
+  width: 20px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--faint);
+}
+
+.queue-title {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-meta {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.queue-action {
+  flex: 0 0 auto;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+
+/* 已完成：打勾，弱化 */
+.queue-done { border-left-color: var(--ok); }
+.queue-done .queue-mark { color: var(--ok); }
+.queue-done .queue-title { color: var(--muted); text-decoration: line-through; }
+
+/* 正在学：标黄 */
+.queue-current { background: var(--surface-2); border-left-color: var(--warn); }
+.queue-current .queue-mark { color: var(--warn); }
+.queue-current .queue-title { color: var(--fg-strong); font-weight: 600; }
+
+/* 没开始：置灰 */
+.queue-pending { opacity: 0.6; }
+.queue-pending .queue-mark { color: var(--faint); }
+.queue-pending .queue-title { color: var(--muted); }
+
+/* 已跳过 */
+.queue-skipped { opacity: 0.5; }
+.queue-skipped .queue-title { color: var(--faint); text-decoration: line-through; }
