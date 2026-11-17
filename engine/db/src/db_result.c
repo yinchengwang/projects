@@ -69,8 +69,21 @@ int db_result_is_null(const Result *r, int row, int col)
     if (!r->qr->nullbits)
         return 0;
 
-    int bit = row * r->qr->ncols + col;
-    return (r->qr->nullbits[bit / 8] >> (bit % 8)) & 1;
+    /*
+     * 位号一律在 size_t 里算。
+     *
+     * row 可以到 int 上限、ncols 最多 16，`row * ncols + col` 在 int 里
+     * 会溢出成负数 —— 那会让下面的字节下标变成负值，读到堆外。
+     *
+     * nullcap 是第二道防线：它与 cells 同容量。正常路径下
+     * nrows <= nullcap 恒成立，这条检查永不触发；但它能在
+     * "nrows 与位图容量不一致"（例如分配算错）时挡住越界读，
+     * 而不是让调用方拿到一个随机值。
+     */
+    size_t bit = (size_t)row * (size_t)r->qr->ncols + (size_t)col;
+    if (bit >= (size_t)r->qr->nullcap * (size_t)r->qr->ncols)
+        return 0;
+    return (int)((r->qr->nullbits[bit / 8] >> (bit % 8)) & 1u);
 }
 
 void db_result_free(Result *r)

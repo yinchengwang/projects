@@ -71,11 +71,38 @@ void qr_free(QueryResult *r)
 
 /* ---------------- 结果集构造 ---------------- */
 
-/* 位图字节数：每格 1 位，向上取整到字节 */
-static int null_bytes(int ncells)
+/*
+ * 位图字节数：每格 1 位，向上取整到字节。
+ *
+ * 【为什么参数和返回值都是 size_t】
+ * cap 来自 SQL 的 LIMIT，parser 允许到 INT32_MAX；ncols 最多 16。
+ * 所以 cap * ncols 最大可达 2^31 * 16 = 2^35 —— **超出 int**。
+ * 若这里用 int 算，LIMIT 2147483647 + 2 列 会溢出成负数，
+ * 再被 /8 得到 0，calloc 拿到 0 字节，b_push 往 0 字节缓冲后面写 →
+ * 堆越界，free 时崩溃（实测 exit 0xC0000374）。
+ *
+ * 全链路口径统一用 size_t，与 cells 的 `(size_t)cap * (size_t)ncols` 一致。
+ */
+static size_t null_bytes(size_t ncells)
 {
     return (ncells + 7) / 8;
 }
+
+/*
+ * 初始容量的上限。
+ *
+ * 【为什么需要这个 clamp】
+ * nrows_hint 直接来自 SQL 的 LIMIT（exec_scan.c 的 `st->limit`），
+ * parser 允许到 INT32_MAX。原来的代码把它原样当容量：
+ *   cells = calloc(cap * ncols, sizeof(char*))     → 2^31 × 16 × 8 = 274 GB
+ * 也就是一句 `SELECT * FROM t LIMIT 2147483647` 会尝试申请几十上百 GB。
+ *
+ * 容量只是**提示**：b_grow 会按需翻倍。所以把提示压到这个上限，
+ * 既不影响结果（LIMIT 的截断发生在 emit 阶段），也不再因一句
+ * "仿佛不限行"的 LIMIT 触发荒谬的分配；顺带让位图尺寸计算
+ * 稳定落在可控范围，不必依赖 size_t 去兜几十 GB 的乘法。
+ */
+#define BUILDER_CAP_HINT_MAX  65536
 
 int b_init(Builder *b, int ncols, int nrows_hint)
 {
@@ -89,6 +116,8 @@ int b_init(Builder *b, int ncols, int nrows_hint)
         return E_IO;
 
     int cap = nrows_hint > 0 ? nrows_hint : 8;
+    if (cap > BUILDER_CAP_HINT_MAX)
+        cap = BUILDER_CAP_HINT_MAX;
     b->cap = cap;
     b->r->cells = calloc((size_t)cap * (size_t)ncols, sizeof(char *));
     if (!b->r->cells)
@@ -97,8 +126,11 @@ int b_init(Builder *b, int ncols, int nrows_hint)
     /*
      * NULL 位图和 cells 同容量、同索引口径。
      * calloc 已把全部位清零 = "全部非 NULL"，b_push 只在是 NULL 时置 1。
+     *
+     * 乘法两边都先转 size_t：即便有上面的 cap 上限，也不留
+     * "靠调用方保证不溢出"的隐式假设。
      */
-    b->r->nullbits = calloc((size_t)null_bytes(cap * ncols), 1);
+    b->r->nullbits = calloc(null_bytes((size_t)cap * (size_t)ncols), 1);
     if (!b->r->nullbits)
         return E_IO;
     b->r->nullcap = cap;
@@ -109,9 +141,13 @@ int b_init(Builder *b, int ncols, int nrows_hint)
  * 扩容：cells 与 NULL 位图**必须一次提交**。
  *
  * 【为什么不能各扩各的】
- * 两个数组若一个 realloc 成功、另一个失败，QueryResult 里就会留下
- * "cells 已指新缓冲、nullbits 还是旧缓冲"的尺寸不一致状态；
- * 此时若直接返回错误，调用方 qr_free 只会按新容量释放，旧缓冲既漏又可能被误读。
+ * 两个数组若一个分配成功、另一个失败，QueryResult 里就会留下
+ * "cells 已指新缓冲、nullbits 还是旧缓冲"的尺寸/容量不一致状态。
+ * 结论：一次提交最干净。
+ *
+ * 另外一个更硬的约束：cells 里的 cell 指针归 QueryResult 所有，
+ * 换缓冲必须把旧缓冲**整块拷过来**（旧 cell 指针不能丢），
+ * 所以这里不能就地 realloc 一个再管另一个 —— 必须两个都先备好。
  *
  * 所以这里先把两个新缓冲**全部分配好并拷完旧数据**，最后才一次性
  * 写回 cells / nullbits / cap 三个字段。中途任何一步失败只释放临时缓冲，
@@ -122,14 +158,14 @@ static int b_grow(Builder *b)
     int ncap = b->cap * 2;
     size_t ncells_old = (size_t)b->cap * (size_t)b->r->ncols;
     size_t ncells_new = (size_t)ncap * (size_t)b->r->ncols;
-    int old_bytes = null_bytes((int)ncells_old);
-    int new_bytes = null_bytes((int)ncells_new);
+    size_t old_bytes = null_bytes(ncells_old);
+    size_t new_bytes = null_bytes(ncells_new);
 
     char **nc = calloc(ncells_new, sizeof(char *));
     if (!nc)
         return E_IO;
 
-    u8 *nb = calloc((size_t)new_bytes, 1);
+    u8 *nb = calloc(new_bytes, 1);
     if (!nb) {
         free(nc);
         return E_IO;
@@ -138,7 +174,7 @@ static int b_grow(Builder *b)
     /* 拷旧内容：cells 逐个指针，位图整段拷贝（旧位对齐规则与新位一致） */
     memcpy(nc, b->r->cells, ncells_old * sizeof(char *));
     if (b->r->nullbits)
-        memcpy(nb, b->r->nullbits, (size_t)old_bytes);
+        memcpy(nb, b->r->nullbits, old_bytes);
 
     /* 两个新缓冲都已就绪 —— 到这里才允许改 QueryResult */
     free(b->r->cells);

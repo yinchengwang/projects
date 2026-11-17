@@ -378,6 +378,7 @@ int main(void)
         CHECK(db_result_is_null(r, 0, 3) == 0);
         CHECK(db_result_is_null(r, 0, -1) == 0);
         CHECK(db_result_is_null(r, 1, 0) == 0);
+        CHECK(db_result_is_null(r, 1048576, 0) == 0);   /* 1<<20：必须被行上界挡下 */
         db_result_free(r);
     }
     /* 事务控制语句的 qr 为 NULL */
@@ -433,9 +434,11 @@ int main(void)
      *   b_push 写位图时 nrows 仍是旧值（2），若按 `nrows` 判容量/越界，
      *   第 3 行（下标 2）的 NULL 就写不进去 → 本断言红。
      *
-     * 同时这一格 3×2 = 6 个 cell 不是 8 的整数倍，
-     * 位图必须按字节向上取整分配（6 个 cell 也要 1 个字节），
-     * 若漏掉取整就会越界写。
+     * 注意：这一组**测不到**"位图字节数漏掉向上取整"。
+     * 3 行 × 2 列 = 6 格，正确实现是 1 字节；`ncells / 8` 会算成 0 字节，
+     * 但那 1 位的越界写落在分配器自己的对齐填充里，断言看不见（实测存活）。
+     * 该缺陷只有哨兵/ASan 能抓，不是本文件的能力范围 —— 所以下面的注释
+     * 不再声称它覆盖了取整。
      */
     exec_ok("CREATE TABLE capsmall (a INT, b TEXT);");
     exec_ok("INSERT INTO capsmall VALUES (1, 'v1'), (2, NULL), (3, 'v3');");
@@ -464,7 +467,44 @@ int main(void)
     }
 
     /*
-     * (8) 非 Builder 路径构造的结果集：nullbits 为 NULL，必须安全回退 0
+     * (8) 超大 LIMIT 不能把容量提示变成荒谬的分配（C1 回归）
+     *
+     * nrows_hint 直接来自 SQL 的 LIMIT，parser 允许到 INT32_MAX。
+     * 修复前：`null_bytes(cap * ncols)` 在 int 里算，
+     *   LIMIT 2147483647 + 2 列 → cap*ncols 回绕成 -2 → 0 字节位图，
+     *   随后 b_push 往 0 字节缓冲后面写 → 堆越界，free 时崩溃。
+     * 现在 b_init 把容量提示 clamp 到 BUILDER_CAP_HINT_MAX（65536），
+     * 且乘法全走 size_t，这条路径必须正常出结果且 NULL 位正确。
+     *
+     * 用 192 行（12 条 INSERT × 16 行，正好整除）压过原来的 128 行崩溃点。
+     */
+    exec_ok("CREATE TABLE biglimit (a INT, b INT);");
+    for (int i = 0; i < 192; i += 16) {
+        char sql[512];
+        size_t off = 0;
+        off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                "INSERT INTO biglimit VALUES ");
+        for (int j = 0; j < 16; j++) {
+            off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                    "%s(%d, NULL)", j ? "," : "", i + j + 1);
+        }
+        exec_ok(sql);
+    }
+    {
+        Result *r = NULL;
+        CHECK(db_exec(db, "SELECT * FROM biglimit LIMIT 2147483647;", &r) == DB_OK);
+        CHECK(db_result_rows(r) == 192);
+        CHECK(db_result_cols(r) == 2);
+        /* 首尾两行的 NULL 位都要对（跨过原来的崩溃行号） */
+        CHECK(db_result_is_null(r, 0, 1) == 1);
+        CHECK(db_result_is_null(r, 191, 1) == 1);
+        CHECK(db_result_is_null(r, 0, 0) == 0);
+        CHECK(db_result_is_null(r, 191, 0) == 0);
+        db_result_free(r);
+    }
+
+    /*
+     * (9) 非 Builder 路径构造的结果集：nullbits 为 NULL，必须安全回退 0
      *
      * exec_write.c 里 VACUUM 手工 calloc 一个 6 列 1 行的统计结果集，
      * 它的 cells 全是格式化数字、不存在 NULL 格，所以不建位图。

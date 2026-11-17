@@ -54,9 +54,12 @@ typedef struct Db {
  *
  * cells 把 SQL NULL 和用户真实文本 'NULL' 都写成同一个字符串，
  * 调用方无法区分 —— 这是信息丢失，不是输出格式问题。
- * nullbits 是 row-major 的**位图**（每格 1 位），只存"这格是否为 NULL"：
+ * nullbits 是 row-major 的**位图**（每格 1 位），只存"这格是否为 NULL"。
  *
- *   nullbits[row * ncols + col] 的位号 = (row * ncols + col) % 8
+ * 位号（bit index）= row * ncols + col，与 cells 的下标口径完全一致。
+ * 注意它是**位号**不是字节下标：访问方式为
+ *
+ *     nullbits[bit / 8] >> (bit % 8) & 1
  *
  * 索引口径必须和 cells **完全一致**（都是 row * ncols + col），
  * 否则某一格的 NULL 位会挂到别的格上。db_result_is_null 查的就是它。
@@ -95,6 +98,11 @@ typedef struct QueryResult {
      * b_push 写位图发生在 nrows++ **之前**，此时 nrows 还是旧行数；
      * 若按 nrows 判断容量，满容量的最后一行永远写不进位图。
      * 所以位图的容量必须是 cells 的 cap，和 cells 同一口径。
+     *
+     * 【读侧用得上它】
+     * db_result_is_null 用它做第二道越界防线：`bit < nullcap * ncols`。
+     * 正常路径下 nrows <= nullcap 恒成立、这条永不触发；
+     * 但它能在"nrows 与位图容量不一致"时挡住堆外读，而不是返回随机值。
      */
     int   nullcap;
 } QueryResult;
