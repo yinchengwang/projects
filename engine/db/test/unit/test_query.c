@@ -3,6 +3,7 @@
  *
  * 9 大项：建表/插入/查询/WHERE/三值逻辑/LIMIT/更新/删除/错误处理
  * 外加 4d：db_result_is_null —— NULL 与字面 "NULL" 的可观察区分（B3 首个切片）
+ * 外加 (9)：批量 INSERT 行数不再受 16 行限制（B3 第二个切片）
  */
 
 #include <stdio.h>
@@ -299,8 +300,9 @@ int main(void)
      * 所以不带 LIMIT 的 SELECT 起点是 64 行 —— 要真的触发 b_grow，
      * 结果必须超过 64 行，翻倍到 128。
      *
-     * 这里插 80 行（5 条 INSERT × 16 行，单条上限 SQL_MAX_ROWS=16），
-     * 每 7 行一个 NULL：位图在 grow 之后仍必须逐位对齐，
+     * 这里插 80 行（5 条 INSERT × 16 行；16 只是本用例选的分批大小，
+     * 单条 INSERT 的行数已没有上限），每 7 行一个 NULL：
+     * 位图在 grow 之后仍必须逐位对齐，
      * 若 b_grow 漏拷或漏初始化新增位，第 65 行往后会错位。
      */
     exec_ok("CREATE TABLE wide (id INT, v INT);");
@@ -504,7 +506,73 @@ int main(void)
     }
 
     /*
-     * (9) 非 Builder 路径构造的结果集：nullbits 为 NULL，必须安全回退 0
+     * (9) 批量 INSERT：单条语句的行数不受 16 行限制
+     *
+     * 【原来是什么样】
+     * Stmt 里是 `Expr *vals[16][16]` 定长数组，parser 到第 17 行就报
+     * 「VALUES 行数超限」，整条语句一行都不插。批量导入 20 行数据
+     * 会被整条拒绝，且错误信息不说是 16、也不说怎么绕。
+     *
+     * 【现在的要求】
+     * 单条 INSERT 的行数按 SQL 文本长度自然增长；列的个数仍受
+     * SQL_MAX_COLS（16）约束 —— 那是行内表示与执行器缓冲的共享上限。
+     */
+    exec_ok("CREATE TABLE bulk (id INT NOT NULL, v INT);");
+
+    /* 20 行一批（> 原来的 16 行上限） */
+    {
+        char sql[1024];
+        size_t off = 0;
+        off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                "INSERT INTO bulk VALUES ");
+        for (int i = 1; i <= 20; i++)
+            off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                    "%s(%d, %d)", i > 1 ? "," : "", i, i * 10);
+        CHECK(affected(sql) == 20);
+        CHECK(count_rows("SELECT id FROM bulk;") == 20);
+    }
+
+    /* 100 行一批，且每 7 行一个 NULL —— 验证批量的 NULL 位也正确 */
+    for (int batch = 0; batch < 2; batch++) {
+        char sql[4096];
+        size_t off = 0;
+        off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                "INSERT INTO bulk VALUES ");
+        for (int i = 0; i < 100; i++) {
+            int id = 100 + batch * 100 + i;
+            off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                    "%s(%d, %s)", i ? "," : "",
+                                    id, (id % 7 == 0) ? "NULL" : "1");
+        }
+        CHECK(affected(sql) == 100);
+    }
+    CHECK(count_rows("SELECT id FROM bulk;") == 220);
+    {
+        Result *r = NULL;
+        CHECK(db_exec(db, "SELECT id, v FROM bulk WHERE id >= 100;", &r) == DB_OK);
+        CHECK(db_result_rows(r) == 200);
+        for (int i = 0; i < 200; i++) {
+            int id = 100 + i;
+            CHECK(db_result_is_null(r, i, 0) == 0);
+            CHECK(db_result_is_null(r, i, 1) == ((id % 7 == 0) ? 1 : 0));
+        }
+        db_result_free(r);
+    }
+
+    /* 列数上限仍然生效（16 列）—— 这是与批量行数无关的另一条线 */
+    CHECK(err_of("CREATE TABLE wide_cols (a INT, b INT, c INT, d INT, e INT, "
+                 "f INT, g INT, h INT, i INT, j INT, k INT, l INT, m INT, "
+                 "n INT, o INT, p INT, q INT);") == DB_E_PARSE);
+
+    /* 行内值个数不一致 → 整条语句失败，一行都不插 */
+    {
+        int before = count_rows("SELECT id FROM bulk;");
+        CHECK(err_of("INSERT INTO bulk VALUES (9001, 1), (9002, 2, 3);") == DB_E_PARSE);
+        CHECK(count_rows("SELECT id FROM bulk;") == before);
+    }
+
+    /*
+     * (10) 非 Builder 路径构造的结果集：nullbits 为 NULL，必须安全回退 0
      *
      * exec_write.c 里 VACUUM 手工 calloc 一个 6 列 1 行的统计结果集，
      * 它的 cells 全是格式化数字、不存在 NULL 格，所以不建位图。

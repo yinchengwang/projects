@@ -22,6 +22,7 @@
 
 #include "query/parser_priv.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -178,6 +179,48 @@ int p_parse_set_isolation(Parser *p, Stmt *st)
     return E_PARSE_DUMMY;
 }
 
+/*
+ * 保证 vals 至少有 need 行可用；不够就翻倍扩。
+ *
+ * 【为什么行数组与行内容分开分配】
+ *   vals        → Expr **[]  行指针数组（这里扩它）
+ *   vals[i]     → Expr *[SQL_MAX_COLS]  单行的值槽（扩行时逐行分配）
+ *
+ * 行内容按 **SQL_MAX_COLS 固定**分配：列数上限没有变（16），
+ * 这样 `vals[i][c]` 的用法与改前完全一致，执行器一行代码都不用动。
+ * 只有行数是动态的 —— 那才是本次要解的限制。
+ *
+ * 扩出来的新行必须清零再交出去：free_stmt 靠"行指针非 NULL"判断
+ * 该行有没有分配过，未清零的野指针会被当成有效行去 free。
+ */
+static bool vals_reserve(Stmt *st, int need)
+{
+    if (need <= st->vals_cap)
+        return true;
+
+    int ncap = st->vals_cap > 0 ? st->vals_cap : SQL_ROWS_INIT;
+    while (ncap < need) {
+        /* 翻倍时防溢出：加到 INT_MAX 就别再加了 */
+        if (ncap > INT_MAX / 2) {
+            ncap = need;
+            break;
+        }
+        ncap *= 2;
+    }
+
+    Expr ***nv = realloc(st->vals, (size_t)ncap * sizeof(*nv));
+    if (!nv)
+        return false;
+
+    /* 新增的行槽清零 —— free_stmt 以 NULL 判断"这行没分配" */
+    memset(nv + st->vals_cap, 0,
+           (size_t)(ncap - st->vals_cap) * sizeof(*nv));
+
+    st->vals = nv;
+    st->vals_cap = ncap;
+    return true;
+}
+
 int p_parse_insert(Parser *p, Stmt *st)
 {
     st->kind = ST_INSERT;
@@ -205,10 +248,28 @@ int p_parse_insert(Parser *p, Stmt *st)
         return E_PARSE_DUMMY;
     }
     for (;;) {
-        if (st->nrows >= SQL_MAX_ROWS) {
-            p_fail(p, "VALUES 行数超限");
+        /*
+         * 【这里原来是一道硬上限】
+         *
+         * 原文是 `if (st->nrows >= SQL_MAX_ROWS) p_fail("VALUES 行数超限")`，
+         * 配合 Stmt 里的定长二维数组。后果：批量导入 20 行被整条拒绝，
+         * 而且是**语法错误**，调用方连"该拆成几条"都无从知道。
+         *
+         * 现在行数按需增长，只受内存限制。列的个数仍受 SQL_MAX_COLS，
+         * 理由见 Stmt.vals 的注释（执行器侧的行表示还没放开）。
+         */
+        if (!vals_reserve(st, st->nrows + 1)) {
+            p_fail(p, "内存不足");
             return E_PARSE_DUMMY;
         }
+        if (!st->vals[st->nrows]) {
+            st->vals[st->nrows] = calloc(SQL_MAX_COLS, sizeof(Expr *));
+            if (!st->vals[st->nrows]) {
+                p_fail(p, "内存不足");
+                return E_PARSE_DUMMY;
+            }
+        }
+
         if (!p_expect_punct(p, "("))
             return E_PARSE_DUMMY;
 

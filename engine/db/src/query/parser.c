@@ -102,9 +102,30 @@ void free_stmt(Stmt *st)
     }
     for (int i = 0; i < st->ngroupby; i++)
         free(st->groupby[i]);
-    for (int r = 0; r < st->nrows; r++)
-        for (int c = 0; c < st->ncols; c++)
-            free(st->vals[r][c]);
+
+    /*
+     * INSERT 值矩阵：行数动态（见 Stmt.vals 的注释）。
+     *
+     * 按 **vals_cap** 遍历而不是 nrows：解析中途失败时 nrows 还没 ++，
+     * 但那一行可能已经放过几个 Expr 了 —— 用 nrows 会漏掉它们。
+     * 每个槽里的 Expr 无论是否 release 过都要 free（p_expr_new 是 calloc，
+     * 失败时不会被写进槽里）。
+     *
+     * 行内只有前 ncols 个槽是有效的；但列数不一致的行可能在更靠前的
+     * 槽就填过值（之后才报"各行的值个数不一致"），所以按 SQL_MAX_COLS
+     * 全宽扫一遍最稳，代价是每行 16 次判空。
+     */
+    if (st->vals) {
+        for (int r = 0; r < st->vals_cap; r++) {
+            if (!st->vals[r])
+                continue;
+            for (int c = 0; c < SQL_MAX_COLS; c++)
+                free(st->vals[r][c]);
+            free(st->vals[r]);
+        }
+        free(st->vals);
+    }
+
     free(st->where);
     free(st->set_expr);
     memset(st, 0, sizeof(*st));

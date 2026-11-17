@@ -8,7 +8,15 @@
 
 #define SQL_NAME_MAX 64
 #define SQL_MAX_COLS 16
-#define SQL_MAX_ROWS 16
+
+/*
+ * 单条 INSERT 的初始行容量（**不是上限**）。
+ *
+ * 行数现在按需翻倍增长（见 Stmt.vals 的注释），这个常量只决定
+ * 第一次分配多少行。取 16 是因为它正好覆盖"手写小批量插入"
+ * 的绝大多数情况，省掉一次 realloc；真正的批量导入会自然扩到更大。
+ */
+#define SQL_ROWS_INIT 16
 
 typedef enum {
     EX_LIT = 0,
@@ -89,9 +97,36 @@ typedef struct {
     int   ngroupby;
 
     /* INSERT */
-    Expr *vals[SQL_MAX_ROWS][SQL_MAX_COLS];
-    int   nrows;
-    int   ncols;                    /* INSERT: 每行的值个数；CREATE: 列数 */
+    /*
+     * 值矩阵：**行数动态**，列数固定。
+     *
+     * 【为什么行数是动态的】
+     * 原来是 `Expr *vals[SQL_MAX_ROWS][SQL_MAX_COLS]` 定长二维数组，
+     * 单条 INSERT 到第 17 行就报「VALUES 行数超限」，整条语句一行都不插。
+     * 批量导入 20 行数据因此被整条拒绝 —— 这是用户可见的缺陷，
+     * 而且 `sizeof(Stmt)` 里有 2 KB 是这个定长数组，Stmt 又开在栈上。
+     *
+     * 现在 vals 是 "行指针数组"，每行按需分配：
+     *   vals[i]  → Expr *[ncols]
+     * 所以 `vals[i][c]` 的语法在调用方（exec_write.c）**一字不改**。
+     *
+     * 【为什么列数仍然定长】
+     * SQL_MAX_COLS（16）不只是解析器的上限：执行器的行缓冲是
+     * `DbValue row[SQL_MAX_COLS]`、TableCtx 的列副本是
+     * `ColDesc cols_buf[SQL_MAX_COLS]`、批量接口的列数组也是 16。
+     * 放宽列数要同时改执行器、SPI 与所有模态的行表示 ——
+     * 那是另一个切片，不该和"批量行数"混在一起。
+     *
+     * 【谁负责释放】
+     * free_stmt() 按 vals_cap 遍历 vals 数组：已分配的行要 free 行内
+     * 每个 Expr 再 free 行本身；未分配的行（NULL）跳过。
+     * 用 cap 而不是 nrows 遍历，是为了覆盖"解析到一半失败"的中间态：
+     * 那时 nrows 还没 ++，但行内可能已经放过几个 Expr。
+     */
+    Expr    ***vals;                /* vals[nrows_cap][ncols] */
+    int       vals_cap;             /* vals 已分配的行数容量 */
+    int       nrows;
+    int       ncols;                /* INSERT: 每行的值个数；CREATE: 列数 */
 
     /* UPDATE */
     char  set_col[SQL_NAME_MAX];

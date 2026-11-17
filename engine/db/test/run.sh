@@ -35,8 +35,19 @@ for t in test/unit/test_*.c test/integration/test_*.c; do
     [ -e "$t" ] || continue
     found=1
     name=$(basename "$t" .c)
+
+    # test_stmt_alloc 自带分配器计数：链接时把 malloc 家族重定向到
+    # 它内部的 __wrap_* 实现。这是**唯一**需要额外链接参数的文件，
+    # 所以按名字分支，不给其他测试加负担。
+    extra=""
+    case "$name" in
+        test_stmt_alloc)
+            extra="-Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free"
+            ;;
+    esac
+
     printf '%s ... ' "$name"
-    if $CC $CFLAGS -o "build/$name" "$t" $OBJS $LDFLAGS; then
+    if $CC $CFLAGS -o "build/$name" "$t" $OBJS $LDFLAGS $extra; then
         if "./build/$name"; then
             echo " [PASS]"
         else
