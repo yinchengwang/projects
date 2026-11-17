@@ -164,6 +164,73 @@ function sortByOverdue(cards, nowIso) {
   })
 }
 
+/**
+ * 次数通道判定：units_since >= k。
+ * 公式不动，只是多一条触发条件（契约 §6.4）。
+ * @param {{units_since?: number}} card
+ * @param {number} k 阈值 K
+ * @returns {boolean}
+ */
+function isDueByCount(card, k) {
+  const limit = Number(k)
+  if (!Number.isFinite(limit) || limit <= 0) return false
+  const since = Number(card && card.units_since)
+  if (!Number.isFinite(since)) return false
+  return since >= limit
+}
+
+/**
+ * 所有卡的 units_since += n。
+ * 返回新数组，不改原数组、不改原对象。
+ * @param {Array<object>} cards
+ * @param {number} [n]
+ * @returns {Array<object>}
+ */
+function bumpUnitsSince(cards, n) {
+  const step = n === undefined || n === null ? 1 : Math.trunc(Number(n))
+  return (cards || []).map(function (card) {
+    const out = Object.assign({}, card)
+    const since = Number(out.units_since)
+    out.units_since = (Number.isFinite(since) ? since : 0) + step
+    return out
+  })
+}
+
+/**
+ * grade 的变体：跑完 SM-2 更新后把 units_since 归零，并把 unit_id 带走。
+ * @param {object} card
+ * @param {number} quality 0~5
+ * @param {{nowIso?: string, k?: number}} opts
+ * @returns {object}
+ */
+function gradeWithCount(card, quality, opts) {
+  const options = opts || {}
+  const graded = grade(card, quality, options.nowIso)
+  graded.units_since = 0
+  const src = card || {}
+  const unitId = src.unit_id === undefined || src.unit_id === null ? "" : String(src.unit_id)
+  if (unitId !== "") {
+    graded.unit_id = unitId
+  } else if (src.problem_id) {
+    // 老卡只有 problem_id：带前缀的（db:mvcc / ai:cnn）原样用，
+    // 不带前缀的（lc-00007）按算法轨补前缀
+    const legacy = String(src.problem_id)
+    graded.unit_id = legacy.indexOf(":") >= 0 ? legacy : "algo:" + legacy
+  }
+  return graded
+}
+
+/**
+ * 双触发判定：日期通道 ∨ 次数通道。
+ * @param {object} card
+ * @param {string} nowIso
+ * @param {number} k
+ * @returns {boolean}
+ */
+function isDueEither(card, nowIso, k) {
+  return isDue(card, nowIso) || isDueByCount(card, k)
+}
+
 module.exports = {
   DEFAULT_EASE: DEFAULT_EASE,
   MIN_EASE: MIN_EASE,
@@ -171,4 +238,8 @@ module.exports = {
   qualityFromOutcome: qualityFromOutcome,
   isDue: isDue,
   sortByOverdue: sortByOverdue,
+  isDueByCount: isDueByCount,
+  bumpUnitsSince: bumpUnitsSince,
+  gradeWithCount: gradeWithCount,
+  isDueEither: isDueEither,
 }
