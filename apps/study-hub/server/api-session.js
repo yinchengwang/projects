@@ -21,7 +21,7 @@ const { detectPython } = require("../judge/sandbox.js")
 const { buildPlan } = require("../core/scheduler/plan.js")
 const { gradeWithCount, bumpUnitsSince } = require("../core/review/sm2.js")
 const { resolveUnitId } = require("../core/scheduler/pool.js")
-const { TRACKS } = require("../core/track/tracks.js")
+const { TRACKS, TRACK_CODES } = require("../core/track/tracks.js")
 const { parseRounds } = require("../core/sync/rounds.js")
 
 /* ---------- settings 键 ---------- */
@@ -682,13 +682,19 @@ function buildRoutes(ctx) {
       const body = await readJsonBody(req)
       const store = ctx.store
 
+      // **先校验完再写**：这个接口一次性改四组设置，任何一组不合法就整单拒绝，
+      // 不能「前几组已经写进去、后面的组报 400」—— 那会让设置页显示的值与实际生效的值
+      // 对不上（实测：{session_count:7, track_weights:{algorithm:-1}} 返回 400，
+      // session.default_count 却已经被改成 7）。
+      const writes = []
+
       if (body.session_count !== undefined && body.session_count !== null) {
         const n = Number(body.session_count)
         if (!Number.isInteger(n) || n < DEFAULT_SESSION_MIN || n > DEFAULT_SESSION_MAX) {
           ctx.sendJson(res, 400, { error: "会话长度必须是 1~10 的整数" })
           return
         }
-        store.setSetting(KEY_SESSION_COUNT, String(n))
+        writes.push([KEY_SESSION_COUNT, String(n)])
       }
 
       if (body.track_weights !== undefined && body.track_weights !== null) {
@@ -704,9 +710,14 @@ function buildRoutes(ctx) {
             ctx.sendJson(res, 400, { error: "轨权重必须是不小于 0 的数字" })
             return
           }
+          // 未知轨代码一律拒绝：静默接受会在 settings 表里留下没人读的键
+          if (TRACK_CODES.indexOf(codes[i]) === -1) {
+            ctx.sendJson(res, 400, { error: "未知的轨道代码：" + codes[i] })
+            return
+          }
         }
         codes.forEach(function (code) {
-          store.setSetting(weightKey(code), String(Number(weights[code])))
+          writes.push([weightKey(code), String(Number(weights[code]))])
         })
       }
 
@@ -722,9 +733,13 @@ function buildRoutes(ctx) {
             ctx.sendJson(res, 400, { error: "轨开关必须是布尔值" })
             return
           }
+          if (TRACK_CODES.indexOf(codes[i]) === -1) {
+            ctx.sendJson(res, 400, { error: "未知的轨道代码：" + codes[i] })
+            return
+          }
         }
         codes.forEach(function (code) {
-          store.setSetting(enabledKey(code), enabled[code] ? "1" : "0")
+          writes.push([enabledKey(code), enabled[code] ? "1" : "0"])
         })
       }
 
@@ -734,8 +749,13 @@ function buildRoutes(ctx) {
           ctx.sendJson(res, 400, { error: "次数阈值 K 必须是大于等于 1 的整数" })
           return
         }
-        store.setSetting(KEY_COUNT_K, String(k))
+        writes.push([KEY_COUNT_K, String(k)])
       }
+
+      // 全部校验通过，才真正落盘
+      writes.forEach(function (pair) {
+        store.setSetting(pair[0], pair[1])
+      })
 
       ctx.sendJson(res, 200, settingsPayload(ctx, envProbe()))
     },
