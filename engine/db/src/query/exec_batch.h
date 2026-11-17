@@ -52,7 +52,7 @@ typedef struct {
 
 /* ---------------- 批的自身（exec_batch.c） ---------------- */
 
-int  batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u16 needed);
+int  batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u64 needed);
 void batch_ctx_free(BatchCtx *bc);
 void batch_reset(BatchCtx *bc);
 int  batch_add_row(BatchCtx *bc, const DbValue *row);
@@ -73,6 +73,6 @@ int  eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols, int ncols,
                 u8 *dst, int depth);
 
 /* 收集一条语句要用到的列（位图） */
-void collect_needed(const Expr *e, u16 *needed);
+void collect_needed(const Expr *e, u64 *needed);
 
 #endif /* DB_QUERY_EXEC_BATCH_H */

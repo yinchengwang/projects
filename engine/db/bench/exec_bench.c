@@ -353,7 +353,7 @@ static void measure_phases(Db *kdb, const char *sql, const char *table,
      * 与上面火山的第 [3] 段**逐项对应** —— 比值才有意义。
      */
     if (where && tc.am->batch_scan && tc.am->batch_decode) {
-        u16 needed = 0;
+        u64 needed = 0;
         collect_needed(where, &needed);
 
         BatchCtx bc;

@@ -122,7 +122,8 @@ int graph_am_build_edges(Graph *g, StorageAM *out, GraphAmCtx *ctx);
  * 节点表的总列数上限。
  *
  * 节点表 = node_id + 属性列 → 最多 1 + GR_MAX_COLS = 16 列。
- * 这和执行器的行缓冲 DbValue row[SQL_MAX_COLS]（16 列）正好对齐。
+ * 执行器的行缓冲是 DbValue row[SQL_MAX_COLS]；SQL_MAX_COLS 提升到 32 后
+ * 这里仍有 16 列的余量（约束从"等于"变成"不超过"）。
  *
  * 这里不写 SQL_MAX_COLS 是为了不让 modalities/ 依赖 query/ ——
  * 层次要保持"向下"，不能因为一个常量就把查询层拖进来。

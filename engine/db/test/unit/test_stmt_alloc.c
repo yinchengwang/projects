@@ -187,17 +187,27 @@ int main(void)
     /*
      * ---- 4) 失败路径：列数超限 ----
      *
-     * 17 列 > SQL_MAX_COLS。解析到第 17 个值时报错，
-     * 该行前 16 个槽已经填了 Expr。free_stmt 必须扫**全宽**
+     * SQL_MAX_COLS+1 列。解析到第 SQL_MAX_COLS+1 个值时报错，
+     * 该行前 SQL_MAX_COLS 个槽已经填了 Expr。free_stmt 必须扫**全宽**
      * （SQL_MAX_COLS）而不是 ncols —— 此时 ncols 还是 0（首行失败），
      * 按 ncols 扫会一个都不 free（实测漏 80 处/5 轮）。
+     *
+     * ⚠️ 列数用宏拼，不写死 17：上限改成 32 之后，
+     * 写死的 17 列就变成合法语句了 —— 这条断言会静默失效。
      */
     {
+        char sql[1024];
+        size_t off = 0;
+        off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                "INSERT INTO t VALUES (");
+        for (int c = 0; c <= SQL_MAX_COLS; c++)
+            off += (size_t)snprintf(sql + off, sizeof(sql) - off,
+                                    "%s%d", c ? "," : "", c + 1);
+        snprintf(sql + off, sizeof(sql) - off, ");");
+
         for (int i = 0; i < 5; i++)
-            CHECK(roundtrip_fail(
-                "INSERT INTO t VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17);",
-                "列数超限") == 0);
-        printf("  [4] 失败路径（17 列超限）× 5 轮：无泄漏\n");
+            CHECK(roundtrip_fail(sql, "列数超限") == 0);
+        printf("  [4] 失败路径（%d 列超限）× 5 轮：无泄漏\n", SQL_MAX_COLS + 1);
     }
 
     /*

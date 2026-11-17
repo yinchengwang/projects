@@ -75,7 +75,7 @@ void qr_free(QueryResult *r)
  * 位图字节数：每格 1 位，向上取整到字节。
  *
  * 【为什么参数和返回值都是 size_t】
- * cap 来自 SQL 的 LIMIT，parser 允许到 INT32_MAX；ncols 最多 16。
+ * cap 来自 SQL 的 LIMIT，parser 允许到 INT32_MAX；ncols 最多 SQL_MAX_COLS。
  * 所以 cap * ncols 最大可达 2^31 * 16 = 2^35 —— **超出 int**。
  * 若这里用 int 算，LIMIT 2147483647 + 2 列 会溢出成负数，
  * 再被 /8 得到 0，calloc 拿到 0 字节，b_push 往 0 字节缓冲后面写 →

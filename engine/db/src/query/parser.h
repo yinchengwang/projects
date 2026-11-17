@@ -7,7 +7,33 @@
 #include "storage/value.h"
 
 #define SQL_NAME_MAX 64
-#define SQL_MAX_COLS 16
+
+/*
+ * 单表 / 单语句的列数上限。
+ *
+ * 【为什么是 32 而不是 16】
+ * 16 是早期"够用就行"的取法，它同时卡住了两件不相干的事：
+ * 真实表的宽度，和索引个数（exec_create_index 复用了这个常量）。
+ *
+ * 32 不是随便挑的：磁盘行格式的上限是 **REC_MAX_COLS = 32**
+ * （storage/record.h），所以在 32 以内，行编码/解码完全不用改。
+ * 超过 32 要动 record 的布局数组，那是另一件事。
+ *
+ * 【提升它的代价（已实测）】
+ * 所有 `DbValue row[SQL_MAX_COLS]` 的栈缓冲翻倍 —— DbValue 是 320 字节
+ * （主要是内联的 256 字节文本区），所以一个 32 列的 row 占 10 KB。
+ * 栈最深的 exec_select_agg 会因此从 ~22 KB 涨到 ~30 KB。
+ * Windows 默认线程栈 1 MB，这个量级仍然安全；但不要再往上加了 ——
+ * 真要支持更宽的表，得把行缓冲改成堆分配。
+ *
+ * 【与模态的关系】
+ * 图模态的 GR_MAX_COLS = 15 是**落盘格式**（决定 gstore 的 rec_size），
+ * 它的约束是 "1 + 属性列 ≤ 执行器行缓冲"。32 下这条依然成立
+ * （从"正好相等"变成"留有余量"），所以这个常量提升不影响任何模态的
+ * 磁盘格式 —— 磁盘上的行布局由 storage/record.h 的 REC_MAX_COLS 管，
+ * 那个值本来就是 32。
+ */
+#define SQL_MAX_COLS 32
 
 /*
  * 单条 INSERT 的初始行容量（**不是上限**）。

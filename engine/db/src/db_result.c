@@ -72,7 +72,7 @@ int db_result_is_null(const Result *r, int row, int col)
     /*
      * 位号一律在 size_t 里算。
      *
-     * row 可以到 int 上限、ncols 最多 16，`row * ncols + col` 在 int 里
+     * row 可以到 int 上限、ncols 最多 SQL_MAX_COLS，`row * ncols + col` 在 int 里
      * 会溢出成负数 —— 那会让下面的字节下标变成负值，读到堆外。
      *
      * nullcap 是第二道防线：它与 cells 同容量。正常路径下

@@ -87,9 +87,12 @@ void batch_ctx_free(BatchCtx *bc)
  * `SELECT id, grp FROM t WHERE val >= 900` 只需要 3 列，
  * 第四列（TEXT）根本不用进批：省掉它的数组分配，也省掉每行拷贝它的文本。
  *
- * needed 是列号的位图（ncols ≤ 16，u16 够用）。
+ * needed 是列号的位图。**用 u64**：列数上限 SQL_MAX_COLS 是 32，
+ * 而 u16 只表示到第 15 列 —— 用它会让 16..31 列永远被判成
+ * "用不上"，于是那些列不分配 nulls/ints 缓冲，批式投影解引用 NULL
+ * 直接段错误（2026-11-18 提列数上限时实测踩到）。
  */
-int batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u16 needed)
+int batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u64 needed)
 {
     memset(bc, 0, sizeof(*bc));
     bc->ncols = ncols;
@@ -418,10 +421,10 @@ static int fill_batch_rowwise(const TableCtx *tc, BatchCtx *bc, AmScan *scan,
 static int exec_select_batch(Db *db, Stmt *st, TableCtx *tc, Builder *b)
 {
     /* 只把用得上的列放进批 */
-    u16 needed = 0;
+    u64 needed = 0;
     if (st->star) {
         for (int c = 0; c < tc->ncols && c < SQL_MAX_COLS; c++)
-            needed |= (u16)(1u << c);
+            needed |= (u64)1u << c;
     } else {
         for (int i = 0; i < st->ntargets; i++)
             collect_needed(st->targets[i], &needed);

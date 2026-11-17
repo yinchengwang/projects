@@ -271,14 +271,14 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols, int ncols,
 
 /* ---------------- 用到哪些列 ---------------- */
 
-void collect_needed(const Expr *e, u16 *needed)
+void collect_needed(const Expr *e, u64 *needed)
 {
     if (!e)
         return;
     switch (e->kind) {
     case EX_COL:
         if (e->col_idx >= 0 && e->col_idx < SQL_MAX_COLS)
-            *needed |= (u16)(1u << e->col_idx);
+            *needed |= (u64)1u << e->col_idx;
         break;
     case EX_UN:
         collect_needed(e->l, needed);

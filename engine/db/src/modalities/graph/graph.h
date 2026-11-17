@@ -99,7 +99,7 @@ typedef struct {
  * 属性列数上限。
  *
  * 15 而不是 16 —— 因为节点表在 SQL 里还要多占一列（node_id），
- * 而执行器的一行缓冲是 DbValue row[SQL_MAX_COLS]（16 列）。
+ * 而执行器的一行缓冲是 DbValue row[SQL_MAX_COLS]。
  * 16 + 1 = 17 > 16 → 越界。
  *
  * 所以：属性列 ≤ 15，节点表总列数 ≤ 16，与执行器的行缓冲对齐。

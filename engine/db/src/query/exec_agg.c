@@ -365,13 +365,13 @@ int exec_select_agg(Db *db, Stmt *st, TableCtx *tc, Builder *b,
                                     &need_depth);
 
     /* 需要的列：聚合的列 + 分组列（+ 列式 WHERE 用的列） */
-    u16 needed = 0;
+    u64 needed = 0;
     for (int i = 0; i < ac.naggs; i++) {
         if (ac.aggs[i].col >= 0)
-            needed |= (u16)(1u << ac.aggs[i].col);
+            needed |= (u64)1u << ac.aggs[i].col;
     }
     for (int i = 0; i < ac.ngroupby; i++)
-        needed |= (u16)(1u << ac.groupcol[i]);
+        needed |= (u64)1u << ac.groupcol[i];
     if (colwhere)
         collect_needed(st->where, &needed);
 
