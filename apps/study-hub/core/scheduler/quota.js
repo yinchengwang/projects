@@ -131,28 +131,36 @@ function allocateQuota(input) {
   // 第一步：minPerTrack 保底（默认 0，等于不保底），剩下的名额按有效权重分
   let alloc = {}
   if (minPerTrack > 0) {
-    const wants = live.map(function (row) {
-      return { key: row.track, want: Math.min(minPerTrack, row.candidates) }
+    // 保底阶段：按声明顺序**尽力**给到 minPerTrack（受候选数限制），名额用完就停；
+    // 然后剩下的名额继续按有效权重分给还有空位的轨——**一个名额都不许丢**。
+    // （历史 bug：名额不够保底时这里「每轨只给 1 个」、剩下的直接丢掉，
+    //   候选有 30 个却只排出 3 个。现在保证 Σquota = min(n, Σcandidates)。）
+    let left = n
+    live.forEach(function (row) {
+      const take = Math.min(minPerTrack, row.candidates, left)
+      alloc[row.track] = take
+      left -= take
     })
-    const reserved = wants.reduce(function (acc, w) {
-      return acc + w.want
-    }, 0)
-    if (reserved >= n) {
-      // 名额不够保底：按声明顺序每轨先给一个
-      let left = n
-      wants.forEach(function (w) {
-        if (left > 0) {
-          alloc[w.key] = 1
-          left -= 1
-        } else {
-          alloc[w.key] = 0
-        }
+    while (left > 0) {
+      const receivers = live.filter(function (row) {
+        return (alloc[row.track] || 0) < row.candidates
       })
-    } else {
-      const rest = largestRemainder(weightItems, n - reserved)
-      wants.forEach(function (w) {
-        alloc[w.key] = w.want + rest[w.key]
+      if (receivers.length === 0) break
+      const give = largestRemainder(
+        receivers.map(function (row) {
+          return { key: row.track, weight: row.weight }
+        }),
+        left
+      )
+      let moved = 0
+      receivers.forEach(function (row) {
+        const room = row.candidates - (alloc[row.track] || 0)
+        const take = Math.min(give[row.track] || 0, room)
+        alloc[row.track] = (alloc[row.track] || 0) + take
+        moved += take
       })
+      if (moved === 0) break
+      left -= moved
     }
   } else {
     alloc = largestRemainder(weightItems, n)

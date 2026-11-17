@@ -164,3 +164,71 @@ test("没有轨道：needMore 为 true", function () {
   assert.strictEqual(r.needMore, true)
   assert.deepStrictEqual(r.quota, {})
 })
+
+test("minPerTrack ≥ 2 且名额够保底时，剩下的名额不许丢（配额和恒等于 n）", function () {
+  // 历史 bug：名额不够保底时旧实现「每轨只给 1 个」，把剩下的名额直接丢掉——
+  // 三轨各 10 个候选、n=4、minPerTrack=2 时只排出 3 个，还谎称「可学的单元不够」。
+  // 契约 §6.1「保底」的真实含义是「先保底，再按余数法分剩下的」。
+  const r = allocateQuota({
+    n: 4,
+    minPerTrack: 2,
+    tracks: [
+      { track: "algorithm", weight: 0.4, due: 0, candidates: 10 },
+      { track: "database", weight: 0.3, due: 0, candidates: 10 },
+      { track: "ai", weight: 0.3, due: 0, candidates: 10 },
+    ],
+  })
+  const sum = Object.keys(r.quota).reduce(function (acc, k) {
+    return acc + r.quota[k]
+  }, 0)
+  assert.strictEqual(sum, 4, "候选有 30 个，绝不能只排 3 个：" + JSON.stringify(r.quota))
+  assert.deepStrictEqual(r.quota, { algorithm: 2, database: 2, ai: 0 })
+  assert.deepStrictEqual(r.reasons, [], "名额够排满时不该报「不够」：" + JSON.stringify(r.reasons))
+})
+
+test("配额恒等于 min(n, Σ候选)，且每轨配额不超候选数（不变式）", function () {
+  // 穷举一批输入，只验两条不变式，不验具体分配值：
+  //   1. Σquota === min(n, Σcandidates)  —— 名额不许丢，也不许凭空多出来
+  //   2. quota[t] ≤ candidates[t]        —— 不许超过候选数
+  const W = [0, 0.1, 0.4, 0.9]
+  const C = [0, 1, 2, 5, 20]
+  const N = [1, 2, 3, 5, 7]
+  const MP = [0, 1, 2, 3]
+  const names = ["algorithm", "database", "ai"]
+  let cases = 0
+  N.forEach(function (n) {
+    MP.forEach(function (mp) {
+      W.forEach(function (w0) {
+        C.forEach(function (c0) {
+          C.forEach(function (c1) {
+            C.forEach(function (c2) {
+              cases += 1
+              const r = allocateQuota({
+                n: n,
+                minPerTrack: mp,
+                tracks: [
+                  { track: "algorithm", weight: w0, due: 0, candidates: c0 },
+                  { track: "database", weight: w0, due: 0, candidates: c1 },
+                  { track: "ai", weight: w0, due: 0, candidates: c2 },
+                ],
+              })
+              const sum = names.reduce(function (acc, t) {
+                return acc + (r.quota[t] || 0)
+              }, 0)
+              const expect = Math.min(n, c0 + c1 + c2)
+              assert.strictEqual(
+                sum,
+                expect,
+                "n=" + n + " mp=" + mp + " C=[" + c0 + "," + c1 + "," + c2 + "] → " + JSON.stringify(r.quota)
+              )
+              assert.ok((r.quota.algorithm || 0) <= c0, "algorithm 超候选")
+              assert.ok((r.quota.database || 0) <= c1, "database 超候选")
+              assert.ok((r.quota.ai || 0) <= c2, "ai 超候选")
+            })
+          })
+        })
+      })
+    })
+  })
+  assert.ok(cases > 0)
+})
