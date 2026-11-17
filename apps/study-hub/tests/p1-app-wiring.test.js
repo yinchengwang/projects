@@ -182,3 +182,13 @@ test("GET /api/next 仍然 200，但标了 deprecated", async function () {
     )
   })
 })
+
+test("createApp 的返回值保留 P0 的 unitSnapshot 字段", async function () {
+  // P0 的 Task 9 把 unitSnapshot 加进 createApp 的返回值（纯粹是加法）。
+  // Task 10 的「返回值整块替换」若不带上它，这个字段会被静默删掉 ——
+  // 全仓没有消费者，所以测试不红、也没人察觉，但那是**已交付的能力**。
+  await withApp(async function (_base, app) {
+    assert.ok(app.unitSnapshot, "unitSnapshot 字段不许丢")
+    assert.ok(app.unitSnapshot.byId, "要有 byId 索引")
+  })
+})

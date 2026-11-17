@@ -343,6 +343,8 @@ function createApp(opts) {
     store: store,
     provider: provider,
     learning: learning,
+    // P0：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
+    unitSnapshot: unitSnapshot,
     // M6：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
     llm: llm,
     // P1：新增字段，纯粹是加法——会话与设置这两组路由的装配结果。
