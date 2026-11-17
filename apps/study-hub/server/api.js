@@ -263,8 +263,19 @@ function buildRoutes(ctx) {
         problems: problems,
       })
 
+      // P1 起这个接口废弃了，但**不删**：旧页面还能用，返回体里标一下。
+      const deprecated = {
+        deprecated: true,
+        deprecatedNote: "这个接口已经废弃，P1 起请改用 /api/session/next。",
+      }
+
       if (!action) {
-        ctx.sendJson(res, 200, { action: null, reviewQueueLength: 0 })
+        ctx.sendJson(res, 200, {
+          action: null,
+          reviewQueueLength: 0,
+          deprecated: deprecated.deprecated,
+          deprecatedNote: deprecated.deprecatedNote,
+        })
         return
       }
 
@@ -286,6 +297,8 @@ function buildRoutes(ctx) {
           itemId: action.itemId || "",
         },
         reviewQueueLength: action.reviewQueueLength,
+        deprecated: deprecated.deprecated,
+        deprecatedNote: deprecated.deprecatedNote,
       })
     },
   })

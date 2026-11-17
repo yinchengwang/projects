@@ -203,9 +203,12 @@ function createServer(opts) {
 
 /**
  * 装配整个应用。
- * @param {{dbPath?: string, learningRoot?: string, env?: object}} opts
+ * @param {{dbPath?: string, learningRoot?: string, env?: object, localBank?: string|null, llmClient?: object|null, envProbe?: Function}} opts
  *   dbPath：SQLite 文件路径，默认 data/app.db；传 ":memory:" 用内存库
  *   learningRoot：learning 仓根目录；不传则读环境变量
+ *   localBank：显式传 null 表示「不加载工程仓内置题库」（测试隔离用）
+ *   llmClient：注入固定 LLM 客户端（测试用假客户端，不联网）
+ *   envProbe：注入环境探针，返回 {python, numpy}；不传则进程内探一次并缓存
  */
 function createApp(opts) {
   const options = opts || {}
@@ -315,6 +318,17 @@ function createApp(opts) {
     })
   )
 
+  // P1：会话与设置接口（server/api-session.js）。
+  // 只做加法——旧路由一条都不删，/api/next 保留但标 deprecated。
+  const sessionRoutes = require("./api-session.js").buildRoutes({
+    store: store,
+    provider: provider,
+    learning: learning,
+    sendJson: sendJson,
+    envProbe: options.envProbe,
+  })
+  routes.push.apply(routes, sessionRoutes)
+
   const server = createServer({ routes: routes })
 
   return {
@@ -329,10 +343,10 @@ function createApp(opts) {
     store: store,
     provider: provider,
     learning: learning,
-    // P0：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
-    unitSnapshot: unitSnapshot,
     // M6：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
     llm: llm,
+    // P1：新增字段，纯粹是加法——会话与设置这两组路由的装配结果。
+    sessionRoutes: sessionRoutes,
   }
 }
 
