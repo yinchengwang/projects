@@ -67,20 +67,30 @@ function patchJson(url, body) {
   return sendJson(url, "PATCH", body)
 }
 
+/** 发 JSON（PUT）——P1 的会话设置用它写回 */
+function putJson(url, body) {
+  return sendJson(url, "PUT", body)
+}
+
 /**
  * 全局状态：页面之间共享的当前题目 / 当前轮次。
  * language / draft / result 是 M1/M3 留下来的：代码草稿与上一次的判题结果
  * 按题号存着，切页签、切题再切回来都不丢。
  */
-const state = Object.assign((window.AlgoPlan && window.AlgoPlan.state) || {}, {
-  problemId: null,
-  currentRoundId: null,
-  // 今日页推的轮次条目 id：跳到轮次页时高亮那一行
-  focusItemId: null,
-  language: "cpp",
-  draft: {},
-  result: {},
-})
+const state = Object.assign(
+  (window.StudyHub && window.StudyHub.state) || (window.AlgoPlan && window.AlgoPlan.state) || {},
+  {
+    problemId: null,
+    currentRoundId: null,
+    // 今日页推的轮次条目 id：跳到轮次页时高亮那一行
+    focusItemId: null,
+    language: "cpp",
+    draft: {},
+    result: {},
+    // P1：会话页记着当前会话的 id，切页回来不丢
+    sessionId: null,
+  }
+)
 
 /** 切页 */
 function go(key) {
@@ -89,30 +99,106 @@ function go(key) {
   render()
 }
 
+/**
+ * 最小 hash 解析器（契约 §9.2）。
+ *
+ *   ""                        → { page: "session", params: {}, query: {} }
+ *   "#/"                      → { page: "session", ... }
+ *   "#/settings"              → { page: "settings", ... }
+ *   "#/unit/algo%3Alc-00007" → { page: "unit", params: { id: "algo:lc-00007" }, ... }
+ *   "#/library?track=database"→ { page: "library", query: { track: "database" }, ... }
+ *
+ * P1 只用到 page；params / query 是给 P2 的单元页与单元库留的。
+ * @param {string} [hash] 不传就取 location.hash
+ * @returns {{page: string, params: object, query: object}}
+ */
+function parseHash(hash) {
+  // 不传就看 location.hash（浏览器里用）；Node 桩里没有 location，就按空串处理
+  const raw =
+    hash === undefined || hash === null
+      ? typeof location !== "undefined" && location && typeof location.hash === "string"
+        ? location.hash
+        : ""
+      : String(hash)
+  const text = raw.charAt(0) === "#" ? raw.slice(1) : raw
+  const qIndex = text.indexOf("?")
+  const pathPart = qIndex === -1 ? text : text.slice(0, qIndex)
+  const queryPart = qIndex === -1 ? "" : text.slice(qIndex + 1)
+
+  const query = {}
+  new URLSearchParams(queryPart).forEach(function (value, key) {
+    query[key] = value
+  })
+
+  const segments = pathPart.split("/").filter(function (part) {
+    return part !== ""
+  })
+  const page = segments.length > 0 ? segments[0] : "session"
+  const params = {}
+  if (segments.length > 1) params.id = decodeURIComponent(segments[1])
+  if (segments.length > 2) {
+    params.rest = segments.slice(2).map(function (part) {
+      return decodeURIComponent(part)
+    })
+  }
+  return { page: page, params: params, query: query }
+}
+
+/**
+ * 按 hash 定当前页。页没注册就不动（返回 false）。
+ * @param {string} [hash] 不传就取 location.hash
+ * @returns {boolean} 有没有定成功
+ */
+function applyHash(hash) {
+  const raw =
+    hash === undefined || hash === null
+      ? typeof location !== "undefined"
+        ? location.hash
+        : ""
+      : String(hash)
+  const parsed = parseHash(raw)
+  if (!window.StudyHub.pages[parsed.page]) return false
+  activeTab = parsed.page
+  return true
+}
+
 /** 页面注册表 + 公共工具 */
-window.AlgoPlan = Object.assign(window.AlgoPlan || {}, {
+window.StudyHub = Object.assign(window.StudyHub || {}, {
   el: el,
   getJson: getJson,
   postJson: postJson,
   patchJson: patchJson,
+  putJson: putJson,
   state: state,
-  pages: (window.AlgoPlan && window.AlgoPlan.pages) || {},
+  pages:
+    (window.StudyHub && window.StudyHub.pages) || (window.AlgoPlan && window.AlgoPlan.pages) || {},
   go: go,
   // 公共界面构件：ui.js 在浏览器里挂 window.AlgoPlanUI；Node 下没有，
   // 页面脚本会自己 require 一份——两边是同一份实现。
   ui: (typeof window !== "undefined" && window.AlgoPlanUI) || null,
 })
 
-/** 顶栏的四个标签 */
+// 别名：老页面脚本（today / answer / review / rounds）与 web/diagnose.js
+// 靠 window.AlgoPlan 拿公共工具——P1 不改它们一行，靠这个别名继续工作。
+window.AlgoPlan = window.StudyHub
+
+/**
+ * 顶栏的标签。
+ *
+ * P1 只上**已交付**的页面：本次学习（session）、诊断（diagnose）、设置（settings）。
+ * 单元库（library）P2 交付、供给（supply）P4 交付——到那一期再把标签加进来，
+ * 不提前挂一个点开是「页面没注册」的标签。
+ *
+ * 过渡期：today / answer / review / rounds 四个旧页仍注册在 pages 里（不删），
+ * 只是从标签栏里摘掉了（不再有导航入口）。
+ */
 const TABS = [
-  { key: "today", label: "今日" },
-  { key: "answer", label: "作答" },
-  { key: "review", label: "复习" },
-  { key: "rounds", label: "轮次" },
+  { key: "session", label: "本次学习" },
   { key: "diagnose", label: "诊断" },
+  { key: "settings", label: "设置" },
 ]
 
-let activeTab = "today"
+let activeTab = "session"
 
 /**
  * 渲染序号。每次 render() 自增，用来挡掉异步竞态：
@@ -149,7 +235,7 @@ async function render() {
   const seq = ++renderSeq
   const view = document.getElementById("view")
   if (!view) return
-  const page = window.AlgoPlan.pages[activeTab]
+  const page = window.StudyHub.pages[activeTab]
   if (!page) {
     view.textContent = ""
     view.appendChild(el("div", { class: "panel", text: "页面没注册：" + activeTab }))
@@ -175,6 +261,17 @@ async function render() {
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", function () {
+    // 先按 hash 定页（`#/` 默认就是本次学习），再画标签栏与页面
+    applyHash()
+    renderTabs(activeTab)
+    render()
+  })
+}
+
+// hash 变了就切页（浏览器里才有 location / addEventListener；Node 桩里没有）
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("hashchange", function () {
+    if (!applyHash()) return
     renderTabs(activeTab)
     render()
   })
@@ -229,6 +326,10 @@ if (typeof module !== "undefined" && module.exports) {
     truncate: answerPage.truncate,
     TONE_BY_VERDICT: answerPage.TONE_BY_VERDICT,
     PANEL_TEXT_LIMIT: answerPage.PANEL_TEXT_LIMIT,
+    // P1：最小 hash 解析器、标签清单
+    parseHash: parseHash,
+    applyHash: applyHash,
+    TABS: TABS,
     // 以下只给测试用：让 DOM 冒烟测试能驱动真实的渲染路径
     __test: {
       state: state,
