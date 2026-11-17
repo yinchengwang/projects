@@ -277,3 +277,40 @@ test("openDb 必须跑 migrateUnitIds：老库里没 unit_id 的行，打开后�
   assert.strictEqual(prefixed, undefined, "带冒号的 problem_id 不该被回填成 algo:db:mvcc")
   db.close()
 })
+
+test("进程重启级持久化：关掉库再打开，会话与队列都还在（契约 §12 的「关掉浏览器再打开」）", function () {
+  // P1 全套测试此前**没有任何一条**验证进程重启级的持久化：
+  // p1-db-session / p1-api-session / p1-app-wiring 全用 `:memory:`，
+  // 而 `:memory:` 天然「重启即空」，所以「队列还在」这条验收线其实没被验过。
+  // 这条用**真文件**：开 → 写 → 关 → 再开 → 读。
+  const file = path.join(tmpDir("study-hub-p1-persist-"), "persist.db")
+
+  const db1 = openDb(file)
+  const s1 = createStore(db1)
+  s1.insertSession({
+    id: "sess-1",
+    started_at: "2026-01-01T00:00:00.000Z",
+    planned_count: 2,
+    done_count: 1,
+    tracks: ["algorithm", "database"],
+  })
+  s1.replaceQueue("sess-1", [
+    { unit_id: "algo:lc-00001", seq: 1, state: "done" },
+    { unit_id: "db:mvcc", seq: 2, state: "current" },
+  ])
+  db1.close()
+
+  // 「关掉浏览器再打开」= 关库再开同一个文件
+  const db2 = openDb(file)
+  const s2 = createStore(db2)
+  const session = s2.getSession("sess-1")
+  assert.ok(session, "会话要还在")
+  assert.deepStrictEqual(session.tracks, ["algorithm", "database"], "tracks 要从 JSON 还原成数组")
+  assert.strictEqual(Number(session.done_count), 1)
+  const queue = s2.listQueue("sess-1")
+  assert.strictEqual(queue.length, 2, "队列要还在")
+  assert.strictEqual(queue[0].state, "done")
+  assert.strictEqual(queue[1].state, "current")
+  assert.strictEqual(s2.countQueueDone("sess-1"), 1)
+  db2.close()
+})
