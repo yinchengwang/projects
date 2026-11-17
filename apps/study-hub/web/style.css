@@ -707,3 +707,48 @@ td button {
 /* 已跳过 */
 .queue-skipped { opacity: 0.5; }
 .queue-skipped .queue-title { color: var(--faint); text-decoration: line-through; }
+
+/* --------------------------------------------------------------------------
+   设置页：一行一条设置项
+   -------------------------------------------------------------------------- */
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.setting-row:last-child { border-bottom: none; }
+
+.setting-name {
+  flex: 0 0 92px;
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.setting-input {
+  background: var(--surface-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  font-size: 13.5px;
+  width: 104px;
+}
+
+.setting-input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.setting-hint {
+  flex: 1 1 220px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
