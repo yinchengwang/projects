@@ -271,6 +271,40 @@ test("store.listAttemptSummaries 不带 code 列", function () {
   assert.strictEqual(rows[0].code, undefined)
 })
 
+test("store.listAttemptSummaries 带 track 与 unit_id（P1 起，契约 §4.3）", function () {
+  // P3 的诊断页按 unit_id 归单元。缺了它就只能退回 problem_id，
+  // 而 problem_id 不带前缀 —— 「mvcc」会被误归成算法轨的「algo:mvcc」。
+  const store = freshStore()
+  store.insertAttempt({
+    problem_id: "mvcc",
+    unit_id: "db:mvcc",
+    track: "database",
+    ts: "2026-11-10T08:00:00.000Z",
+    language: "python",
+    code: "",
+    verdict: "pass",
+  })
+  store.insertAttempt({
+    problem_id: "lc-00001",
+    ts: "2026-11-10T09:00:00.000Z",
+    language: "cpp",
+    code: "",
+    verdict: "pass",
+  })
+  const rows = store.listAttemptSummaries()
+  const db = rows.filter(function (r) {
+    return r.problem_id === "mvcc"
+  })[0]
+  const algo = rows.filter(function (r) {
+    return r.problem_id === "lc-00001"
+  })[0]
+  assert.strictEqual(db.unit_id, "db:mvcc")
+  assert.strictEqual(db.track, "database")
+  // 老链路不传 unit_id / track：unit_id 为 null，track 缺省成 algorithm
+  assert.strictEqual(algo.unit_id, null)
+  assert.strictEqual(algo.track, "algorithm")
+})
+
 test("store.countAttemptsByDay 按天分组", function () {
   const store = freshStore()
   addAttempt(store, "lc-00001", "2026-11-10T08:00:00.000Z", "pass")

@@ -440,11 +440,17 @@ function createStore(db) {
      * 列出全部作答的摘要（诊断统计用）。
      * **不带 code 列**——诊断只需要知道「哪题、什么时候、什么结果」，
      * 把源码全捞进内存没必要，几百条流水就是几百份源码。
-     * @returns {Array<{id: number, problem_id: string, ts: string, verdict: string}>}
+     *
+     * P1 起返回项**新增 `track` 与 `unit_id`**（契约 §4.3）：P3 的诊断页按 `unit_id`
+     * 归单元，缺了它就只能退回 `problem_id`，而 `problem_id` 不带前缀 ——
+     * 「db:mvcc」会被误归成算法轨的「algo:mvcc」。
+     * @returns {Array<{id: number, problem_id: string, ts: string, verdict: string, track: string, unit_id: string|null}>}
      */
     listAttemptSummaries: function () {
       return db
-        .prepare("SELECT id, problem_id, ts, verdict FROM attempts ORDER BY problem_id ASC, ts ASC, id ASC")
+        .prepare(
+          "SELECT id, problem_id, ts, verdict, track, unit_id FROM attempts ORDER BY problem_id ASC, ts ASC, id ASC"
+        )
         .all()
         .map(function (row) {
           // node:sqlite 返回的是 null 原型对象，转成普通对象方便比较与序列化
@@ -453,6 +459,8 @@ function createStore(db) {
             problem_id: String(row.problem_id),
             ts: String(row.ts),
             verdict: String(row.verdict),
+            track: String(row.track || "algorithm"),
+            unit_id: row.unit_id === null || row.unit_id === undefined ? null : String(row.unit_id),
           }
         })
     },
