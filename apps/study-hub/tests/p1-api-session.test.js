@@ -373,6 +373,50 @@ test("PUT /api/settings 拒绝非法值，四条错各给一句中文", async fu
   })
 })
 
+test("PUT /api/settings 是「全有或全无」：任一组非法则一个键都不写", async function () {
+  // 这个接口一次性改四组设置。若边校验边写，就会出现「前面的组写进去了、
+  // 后面的组报 400」——设置页显示的值与实际生效的值对不上。
+  // 实测（改前）：{session_count:7, track_weights:{algorithm:-1}} 返回 400，
+  // 但 session.default_count 已经被改成 7。
+  await withServer(async function (base, store) {
+    await fetch(base + "/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_count: 5 }),
+    })
+    assert.strictEqual(store.getSetting("session.default_count"), "5")
+
+    const res = await fetch(base + "/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_count: 7, track_weights: { algorithm: -1 } }),
+    })
+    assert.strictEqual(res.status, 400)
+    assert.strictEqual(
+      store.getSetting("session.default_count"),
+      "5",
+      "整单被拒时，先前合法的那一组也不许写进去"
+    )
+  })
+})
+
+test("PUT /api/settings 拒绝未知轨道代码，且不留残留键", async function () {
+  await withServer(async function (base, store) {
+    const res = await fetch(base + "/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ track_weights: { 不存在的轨: 0.5 } }),
+    })
+    assert.strictEqual(res.status, 400)
+    const body = await res.json()
+    assert.ok(body.error.indexOf("未知的轨道代码") !== -1, body.error)
+    const leftovers = Object.keys(store.allSettings()).filter(function (key) {
+      return key.indexOf("track.weight.不存在的轨") === 0
+    })
+    assert.deepStrictEqual(leftovers, [], "不许留下没人读的键：" + leftovers.join(","))
+  })
+})
+
 test("重复提交同一个单元：不重复记账，给中文说明", async function () {
   // submit 里有「队列项已是 done 就直接返回」的分支（幂等），原 15 条用例**未覆盖**。
   // 干跑实测：把那条分支的 verdict: null 改成 "pass" 依然全绿（变异体存活）。
