@@ -15,15 +15,20 @@
 
 | 领域 | 说明 | 代码位置 |
 |------|------|----------|
-| **数据库内核** | 存储引擎、SQL 解析/执行、事务与 MVCC、Catalog | `engine/src/db/` |
-| **向量数据库** | 27 个 ANN 索引实现 + 15 个传统索引实现 | `engine/src/db/index/` |
-| **RAG 系统** | 检索增强生成、混合检索、Graph RAG、多模态分块 | `engine/src/db/executor/rag/` |
-| **分布式系统** | 分片路由、Raft 共识、2PC 分布式事务 | `engine/src/db/{sharding,consensus,distributed}/` |
+| **数据库内核** | 存储引擎、SQL 解析/执行、事务与 MVCC、Catalog | `engine/db/`（主核）；`engine/src/db/`（冻结，历史参考） |
+| **向量数据库** | 主核：HNSW 向量索引与 KNN 检索；冻结内核：27 个 ANN 索引 + 15 个传统索引实现 | 主核 `engine/db/src/modalities/vector/`；冻结 `engine/src/db/index/` |
+| **RAG 系统** | 检索增强生成、混合检索、Graph RAG、多模态分块（冻结内核的 db 执行器下；框架真实，检索/embedding/generate 步骤为占位或 TODO） | `engine/src/db/executor/rag/` |
+| **分布式系统** | 分片路由、Raft 共识、2PC 分布式事务（冻结内核，多为真实未验证或 stub） | `engine/src/db/{sharding,consensus,distributed}/` |
 | **算法工程** | 生产级排序、K-Means、量化压缩 | `engine/src/algo-prod/` |
 
 ---
 
 ## 🏗️ 核心能力
+
+> **阅读提示**：第 1–4 节描述的是 `engine/src/db/`（PostgreSQL 风格 CMake 内核）的资产。
+> 该内核已于 **2026-11-16 冻结**，仅作机制研究与历史参考；其中大量模块为「真实未验证」或 stub，
+> 分级依据见 `docs/superpowers/plans/2026-11-16-srcdb-asset-triage.md`。
+> **当前唯一长期维护的数据库主内核是第 5 节的 `engine/db/`。**
 
 ### 1. 存储引擎（PostgreSQL 风格）
 
@@ -69,10 +74,21 @@
 - **分布式事务**：2PC 两阶段提交（`engine/src/db/distributed/txn/`）、Percolator（`engine/src/db/distributed/percolator/`）
 - **高可用**：副本复制（`engine/src/db/replication/`）、全局时间戳（`engine/src/db/distributed/tso/`）
 
-### 5. 独立多模态数据库内核（`engine/db/`）
+### 5. 多模态数据库主内核（`engine/db/`）
 
-一个**从零手写**的多模态数据库内核，与 `engine/src/db/`（PostgreSQL 风格内核）是两个独立项目：
-前者用 Makefile 构建、**不入 CMake 图**，后者是本仓 CMake 工程轨的主体。
+本仓的**唯一长期维护的数据库主内核**，一个**从零手写**的多模态数据库内核，与 `engine/src/db/`（PostgreSQL 风格内核）是两个独立项目：
+前者用 Makefile 构建、**不入 CMake 图**，是当前主核；后者（CMake 工程轨内核）已冻结保留、仅作历史参考。
+
+**主核门禁**（改完必跑，`-Werror` 零警告是硬要求）：
+
+```bash
+export PATH="/c/mingw64/bin:$PATH"
+cd engine/db
+mingw32-make clean && mingw32-make all   # 严格编译
+sh tools/check_deps.sh                   # L0–L4 依赖方向
+sh test/run.sh                           # unit + integration
+mingw32-make check                       # 全套
+```
 
 | 项 | 值 | 核实方式 |
 |---|-----|----------|
@@ -199,8 +215,10 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 ### 使用 CLI
 
-`engine/src/db/cli/` 编译出 `db_cli` 可执行程序（canonical SQL 路径）；
-向量数据库对外 API 为 `engine/src/db/api/vdb_api.c`，用法见 `docs/arch/vdb-cli/README.md`。
+主核的交互入口是 `engine/db/src/main.c` 的 REPL（`mingw32-make` 产物，见 `engine/db/README.md`）。
+
+> **冻结内核的 CLI（历史参考）**：`engine/src/db/cli/` 曾编译出 `db_cli`，向量 API 为 `engine/src/db/api/vdb_api.c`。
+> `engine/src/db` 已于 2026-11-16 冻结，这些入口不再作为主线，用法见 `docs/arch/vdb-cli/README.md`。
 
 ---
 

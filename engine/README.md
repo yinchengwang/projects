@@ -4,18 +4,21 @@
 
 ## 数据库主线
 
-本轨道内的**唯一长期维护的数据库内核**是 [`src/db/`](src/db/)（PostgreSQL 风格的 CMake 工程）：
+本轨道内的**唯一长期维护的数据库内核**是 [`db/`](db/)（从零手写的独立多模态内核，自带 Makefile、L0–L4 分层依赖门禁与独立测试协议）：
 
-- 构建与测试走根工程的 CMake + CTest（见下节）
-- 模态经 storage registry 接入，测试在 `../engine/test/db/`
+- 构建与测试走 `db/` 自带的 MinGW Make + shell 测试（见 `db/README.md`），**不入根工程 CMake 图**，这是有意的例外
+- 严格 `-Werror` 零警告门禁，改完必跑 `sh tools/check_deps.sh`
+- 主核的公开 API 是 `db/include/db.h`
 
-并列的 [`db/`](db/) 是**从零手写的独立多模态内核**（自带 Makefile、分层门禁、独立测试）。它已**冻结**：
+并列的 [`src/db/`](src/db/) 是 PostgreSQL 风格的 CMake 工程内核。它已**冻结**：
 
-- 保留目录、源码、设计文档与历史测试，作为机制研究与历史参考
-- **不是**主数据库，不进入默认构建与 CI
-- 需要读取或迁移其中数据时按 `db/README.md` 的说明单独处理；恢复维护或删除须另行批准
+- 保留目录、源码、CMake、测试与设计文档，作为机制研究与历史参考
+- **不是**主数据库主线，不再作为新功能、默认门禁与 CI 的落点
+- 其中确有价值的能力须按「在主核现有接口内重实现/适配」的方式逐项迁移；恢复维护或删除须另行批准
 
 ## 构建与测试
+
+> 本节的 CMake 命令覆盖 `src/` `tools/` `test/` 等子工程；**主数据库 `db/` 不在该图内**，它的构建与测试命令见 `db/README.md`。
 
 ```bash
 # Configure & build
@@ -28,6 +31,16 @@ ctest --test-dir ../build/engineering -R <name> --output-on-failure
 
 # Coverage (GCC/lcov)
 cmake -B ../build/engineering -S . -DENABLE_COVERAGE=ON
+```
+
+```bash
+# 主数据库内核（engine/db）—— 需 MinGW + Git Bash
+export PATH="/c/mingw64/bin:$PATH"
+cd db
+mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror，零警告
+sh tools/check_deps.sh                   # L0–L4 依赖方向门禁
+sh test/run.sh                           # unit + integration
+mingw32-make check                       # 全套
 ```
 
 编译产物输出到 `build/engine/`，测试/运行产物输出到 `test-results/engine/`。

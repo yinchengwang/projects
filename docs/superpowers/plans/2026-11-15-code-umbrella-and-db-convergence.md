@@ -1,12 +1,30 @@
 # `code` 顶层聚合与单数据库收敛实施计划
 
-> **执行要求：**本计划是供后续执行的分阶段路线图；不得把“写计划”当作目录迁移、git 操作或 DB 变更授权。Stage A 必须完整验收后，才能启动 Stage B。代码任务使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans`；跨仓提交必须逐仓处理。
+> **⚠️ 状态：Stage A 已完成；Stage B 部分已于 2026-11-16 作废。**
+>
+> Stage A（目录重构）已执行完毕并通过门禁。Stage B 的路线在 2026-11-16 发生翻转：
+> 主核由 `engine/src/db` 改为 `engine/db`，冻结对象反过来变成 `engine/src/db`。
+>
+> **因此本文档 Stage B 起的全部内容（Task B0–B5、阶段编号、验收门）不再是当前执行依据**，
+> 仅为历史记录保留。当前 Stage B 的执行依据是：
+>
+> - 设计：`docs/superpowers/specs/2026-11-15-code-umbrella-and-db-convergence-design.md`（§6 已按翻转后口径订正）
+> - 实施设计：`docs/superpowers/plans/2026-11-16-db-capability-matrix.md`（B0–B5 的当前定义）
+> - 分阶段产出：`2026-11-16-db-testtmp-inventory.md`（B0 数据盘点）、`2026-11-16-srcdb-asset-triage.md`（B1 资产审计）、`2026-11-16-stageb2-embedded-scope.md`（B2 服务形态决策）
+>
+> **编号冲突警告**：本文档 Task B3 是「执行旧数据批次迁移和无损校验」，
+> 而当前 B3 是「选择并完成一个主核垂直切片」（首个切片见 `2026-11-16-db-result-null-api.md`）。
+> 两者同名不同实，引用时以本文档之外的新文档为准。
+>
+> ---
+>
+> **执行要求（Stage A，已完成，仅供追溯）：**本计划是供后续执行的分阶段路线图；不得把“写计划”当作目录迁移、git 操作或 DB 变更授权。Stage A 必须完整验收后，才能启动 Stage B。代码任务使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans`；跨仓提交必须逐仓处理。
 
-**目标：**先把 `C:\code` 建成四个自有仓的顶层 Git 聚合仓并更新所有相关 README；验收后再以 `engine/src/db` 为唯一主内核，冻结但保留 `engine/db`，并通过经过校验的逻辑导出/导入保全旧数据。
+**目标（历史口径，Stage A 部分仍然有效）：**先把 `C:\code` 建成四个自有仓的顶层 Git 聚合仓并更新所有相关 README；~~验收后再以 `engine/src/db` 为唯一主内核，冻结但保留 `engine/db`，并通过经过校验的逻辑导出/导入保全旧数据。~~（**已作废**：翻转后主核为 `engine/db`）
 
-**架构：**Stage A 只重组工作区关系：`code` 直接挂载 `projects`、`learning`、`ai-docs`、`reference`，reference 内部上游仍按需拉取。Stage B 在目录阶段验收之后单独盘点能力与数据，逐项将确认需要的能力适配到 `engine/src/db`，验证数据迁移，再将 `engine/db` 标为冻结参考；不删除该目录。
+**架构（历史口径）：**Stage A 只重组工作区关系：`code` 直接挂载 `projects`、`learning`、`ai-docs`、`reference`，reference 内部上游仍按需拉取。~~Stage B 在目录阶段验收之后单独盘点能力与数据，逐项将确认需要的能力适配到 `engine/src/db`，验证数据迁移，再将 `engine/db` 标为冻结参考；不删除该目录。~~（**已作废**，见顶部状态说明）
 
-**技术栈：**Git / submodule；Python 标准库一致性工具；Git Bash shell；CMake + CTest（工程主 DB）；MinGW Make + shell 测试（冻结前读取/导出旧 DB 时，须按旧项目工具链）。
+**技术栈：**Git / submodule；Python 标准库一致性工具；Git Bash shell；CMake + CTest（`engine/src/db`，冻结前适用）；MinGW Make + shell 测试（`engine/db`，当前主核门禁）。
 
 ## 全局约束
 
@@ -132,9 +150,14 @@
 
 ---
 
-# Stage B — `engine/src/db` 唯一主内核，冻结保留 `engine/db`
+# ~~Stage B — `engine/src/db` 唯一主内核，冻结保留 `engine/db`~~（已作废，2026-11-16）
 
-> **硬依赖：**Stage A 最终 Gate 未通过时，不得执行 Stage B 的任何数据或代码迁移任务。Stage B 是后续独立评估与迁移阶段，不以本计划授权破坏性操作。
+> **⚠️ 本节起全部任务作废。** 路线已翻转为 `engine/db` 为唯一主核、`engine/src/db` 冻结保留。
+> 当前 B0–B5 的定义见 `2026-11-16-db-capability-matrix.md`。以下内容仅作历史追溯，**不得**按此执行。
+>
+> 下方文字不改写，保留作废时刻的原貌，以便对照翻转前后差异。
+>
+> **硬依赖（历史）：**Stage A 最终 Gate 未通过时，不得执行 Stage B 的任何数据或代码迁移任务。Stage B 是后续独立评估与迁移阶段，不以本计划授权破坏性操作。
 
 ## Task B0：建立 DB 能力与数据资产基线
 
@@ -214,13 +237,13 @@
 - projects 的 15 个 JSONB 文件不再是未跟踪：要么按用户决定已测试、提交、推送；若测试失败，Stage A gate 未通过，不能删除 StillEvolving。
 - m5-verify 的归属已明确并按批准方案保留/迁移。
 
-### Stage B 通过条件
+### Stage B 通过条件（历史口径，已作废）
 
-- 只维护 `engine/src/db`；`engine/db` 处于冻结状态但目录、历史和原始数据备份保留。
+- ~~只维护 `engine/src/db`；`engine/db` 处于冻结状态但目录、历史和原始数据备份保留。~~（翻转后：只维护 `engine/db`）
 - 所有批准迁移的数据具有导出/导入 manifest、独立核验报告和用户确认。
-- 所有批准适配能力有主库 public-behavior tests 和实际 build/test 证据。
+- 所有批准适配能力有主核 public-behavior tests 和实际 build/test 证据。
 - 不支持/未迁移项全部明确列出；没有以静默忽略换取“迁移完成”。
 
 ## 现在的执行边界
 
-本计划编写阶段不运行本文件中的迁移、build、export/import、git add/commit/push、gitdir 移动或目录删除命令。后续执行必须从 Stage A0 开始；Stage A 通过前不得进入 Stage B。
+**Stage A 已完成。** Stage B 的执行依据已不在本文件——见 `2026-11-16-db-capability-matrix.md` 与 `2026-11-16-db-result-null-api.md`。

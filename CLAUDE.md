@@ -184,6 +184,10 @@ db/sql ──→ db/storage, db/catalog, db/rel, db/heapam, db/btreeam
 
 ## 数据库存储引擎
 
+> **冻结内核参考**：以下「数据库存储引擎」「多模态存储引擎」「GUC」「initdb / pg_ctl / db_server」等章节描述的是
+> `engine/src/db/`（PostgreSQL 风格 CMake 内核）。该内核**已冻结**（2026-11-16 路线翻转），仅作机制研究与历史参考，
+> 不再是主数据库主线。当前主核的架构与纪律见「子项目规则 › 主数据库内核（`engine/db/`）」。
+
 实现了 PostgreSQL 风格的存储架构，详见 [docs/storage-architecture.md](docs/storage-architecture.md)。
 
 核心模块：
@@ -363,12 +367,16 @@ log_level = 'info'
 
 ## 子项目规则
 
-### 独立多模态内核（`engine/db/`）
+### 主数据库内核（`engine/db/`）
 
-`engine/db/` 是一个**从零手写的多模态数据库内核**，与 `engine/src/db/`（PostgreSQL 风格内核）
-是两个独立项目。它**自带 `Makefile`，不在 CMake 构建图内**（根 `CMakeLists.txt` 只引入 `engine/`，
+`engine/db/` 是本仓**唯一长期维护的数据库主内核**，一个**从零手写的多模态数据库内核**（2026-11-16 路线翻转后确认）。
+它**自带 `Makefile`，不在 CMake 构建图内**（根 `CMakeLists.txt` 只引入 `engine/`，
 `engine/CMakeLists.txt` 只引入 `src/` `tools/` `test/`，均不含 `db/`）——这是有意的例外，
 因为它有自己独立的分层门禁、编译门禁与测试协议。
+
+并列的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已**冻结保留**：目录、源码、CMake、测试与设计文档原位保存，
+仅作机制研究与历史参考。新 DB 功能、对外主 API、默认门禁都以 `engine/db` 为准；
+`engine/src/db` 中的能力若确有价值，须按「在主核现有接口内重实现/适配」逐项迁移，恢复维护或删除须另行批准。
 
 **构建与测试（需 MinGW 工具链 + Git Bash）：**
 
