@@ -91,6 +91,20 @@ int         db_result_cols(const Result *r);
 int         db_result_affected(const Result *r);
 const char *db_result_colname(const Result *r, int col);
 const char *db_result_value(const Result *r, int row, int col);
+
+/*
+ * 该格是否为 SQL NULL（1 = 是，0 = 不是）。
+ *
+ * 【为什么需要它】
+ * db_result_value 把 NULL 和用户文本 'NULL' 都返回成字符串 "NULL"，
+ * 调用方无法区分。本函数查结果集内的 NULL 位图，是区分两者的唯一手段；
+ * db_result_value 的行为保持不变（向后兼容）。
+ *
+ * 无效输入（NULL Result、无结果集、越界行列、负索引）返回 0，
+ * 遵循其余 accessor 的"无害默认值"惯例。
+ */
+int         db_result_is_null(const Result *r, int row, int col);
+
 void        db_result_free(Result *r);
 
 /* 错误描述 */

@@ -56,6 +56,9 @@ static void qr_free_inner(QueryResult *r)
             free(r->cells[i]);
         free(r->cells);
     }
+    free(r->nullbits);
+    r->nullbits = NULL;
+    r->nullcap = 0;
 }
 
 void qr_free(QueryResult *r)
@@ -67,6 +70,12 @@ void qr_free(QueryResult *r)
 }
 
 /* ---------------- 结果集构造 ---------------- */
+
+/* 位图字节数：每格 1 位，向上取整到字节 */
+static int null_bytes(int ncells)
+{
+    return (ncells + 7) / 8;
+}
 
 int b_init(Builder *b, int ncols, int nrows_hint)
 {
@@ -84,18 +93,59 @@ int b_init(Builder *b, int ncols, int nrows_hint)
     b->r->cells = calloc((size_t)cap * (size_t)ncols, sizeof(char *));
     if (!b->r->cells)
         return E_IO;
+
+    /*
+     * NULL 位图和 cells 同容量、同索引口径。
+     * calloc 已把全部位清零 = "全部非 NULL"，b_push 只在是 NULL 时置 1。
+     */
+    b->r->nullbits = calloc((size_t)null_bytes(cap * ncols), 1);
+    if (!b->r->nullbits)
+        return E_IO;
+    b->r->nullcap = cap;
     return OK;
 }
 
+/*
+ * 扩容：cells 与 NULL 位图**必须一次提交**。
+ *
+ * 【为什么不能各扩各的】
+ * 两个数组若一个 realloc 成功、另一个失败，QueryResult 里就会留下
+ * "cells 已指新缓冲、nullbits 还是旧缓冲"的尺寸不一致状态；
+ * 此时若直接返回错误，调用方 qr_free 只会按新容量释放，旧缓冲既漏又可能被误读。
+ *
+ * 所以这里先把两个新缓冲**全部分配好并拷完旧数据**，最后才一次性
+ * 写回 cells / nullbits / cap 三个字段。中途任何一步失败只释放临时缓冲，
+ * QueryResult 保持扩容前原样，调用方按原有路径清理即可。
+ */
 static int b_grow(Builder *b)
 {
     int ncap = b->cap * 2;
-    char **nc = realloc(b->r->cells, (size_t)ncap * (size_t)b->r->ncols * sizeof(char *));
+    size_t ncells_old = (size_t)b->cap * (size_t)b->r->ncols;
+    size_t ncells_new = (size_t)ncap * (size_t)b->r->ncols;
+    int old_bytes = null_bytes((int)ncells_old);
+    int new_bytes = null_bytes((int)ncells_new);
+
+    char **nc = calloc(ncells_new, sizeof(char *));
     if (!nc)
         return E_IO;
-    memset(nc + (size_t)b->cap * (size_t)b->r->ncols, 0,
-           (size_t)(ncap - b->cap) * (size_t)b->r->ncols * sizeof(char *));
+
+    u8 *nb = calloc((size_t)new_bytes, 1);
+    if (!nb) {
+        free(nc);
+        return E_IO;
+    }
+
+    /* 拷旧内容：cells 逐个指针，位图整段拷贝（旧位对齐规则与新位一致） */
+    memcpy(nc, b->r->cells, ncells_old * sizeof(char *));
+    if (b->r->nullbits)
+        memcpy(nb, b->r->nullbits, (size_t)old_bytes);
+
+    /* 两个新缓冲都已就绪 —— 到这里才允许改 QueryResult */
+    free(b->r->cells);
+    free(b->r->nullbits);
     b->r->cells = nc;
+    b->r->nullbits = nb;
+    b->r->nullcap = ncap;
     b->cap = ncap;
     return OK;
 }
@@ -147,6 +197,21 @@ int b_push(Builder *b, const DbValue *vals)
 
         b->r->cells[base + i] = cell;
     }
+
+    /*
+     * 填 NULL 位：与 cells 同一 row-major 索引。
+     * 位图容量是 cap（不是 nrows）—— 此刻 nrows 仍是旧行数，
+     * 按 nrows 判界会把满容量的最后一行误判越界。
+     */
+    if (b->r->nullbits) {
+        for (int i = 0; i < b->r->ncols; i++) {
+            if (!vals[i].is_null)
+                continue;
+            int bit = base + i;
+            b->r->nullbits[bit / 8] |= (u8)(1u << (bit % 8));
+        }
+    }
+
     b->r->nrows++;
     return OK;
 }

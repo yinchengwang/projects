@@ -239,6 +239,38 @@ db_blob_write()   { latch_lock(); ... latch_unlock(); }
 **只有一把锁 = 不可能死锁** —— 没有锁顺序问题。
 细粒度化（多把锁）才会重新引入这个问题，那时才需要定顺序规则。
 
+## 结果集 API：NULL 与字面 `"NULL"` 的区分
+
+结果集的 cell 一律是**格式化后的字符串**，SQL NULL 写成字面 `"NULL"`。
+这让 `db_result_value` 可以直接返回 `const char*`，代价是：
+
+> 数据库里的 NULL 和用户真实存的文本 `'NULL'`，在 `db_result_value` 里**完全同形**。
+
+两个 API 配合使用才能区分：
+
+| API | 返回值 | 用途 |
+|---|---|---|
+| `db_result_value(r, row, col)` | 该格的字符串（NULL → `"NULL"`） | 取显示值，向后兼容，行为不受 NULL 位图影响 |
+| `db_result_is_null(r, row, col)` | `1` = 该格是 SQL NULL；`0` = 不是 | 判断"这格到底是 NULL 还是文本" |
+
+```c
+/* 正确用法：先判 NULL，再取值 */
+if (db_result_is_null(r, i, c)) {
+    printf("(NULL)");                    // 真 NULL
+} else {
+    printf("%s", db_result_value(r, i, c));   // 可能是文本 'NULL'
+}
+```
+
+**契约要点：**
+
+- `db_result_is_null` 对**无效输入一律返回 0**（NULL Result、无结果集、空结果、负索引、越界行列），
+  沿用其余 accessor 的「无害默认值」惯例；列范围与行范围**各自独立**检查。
+- `db_result_value` 的行为**一字不改** —— 旧调用方不会因此回归。
+- 底层实现是 `QueryResult` 上一张 row-major 的 NULL 位图（`nullbits`，每格 1 位，
+  索引口径与 cells 完全一致：`row * ncols + col`）。非 Builder 路径构造的结果集
+  （如 VACUUM 的统计输出）不建位图，accessor 按「无位图 → 0」安全回退。
+
 ## 常用命令
 
 ```sh

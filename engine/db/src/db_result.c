@@ -55,6 +55,24 @@ const char *db_result_value(const Result *r, int row, int col)
     return r->qr->cells[row * r->qr->ncols + col];
 }
 
+int db_result_is_null(const Result *r, int row, int col)
+{
+    if (!r || !r->qr || row < 0 || row >= r->qr->nrows)
+        return 0;
+    if (col < 0 || col >= r->qr->ncols)
+        return 0;
+
+    /*
+     * 没有位图 = 该结果集不存在 NULL 格（非 Builder 路径构造的结果集，
+     * 见 query/exec.h 的 QueryResult 注释）。按"无害默认值"回退 0。
+     */
+    if (!r->qr->nullbits)
+        return 0;
+
+    int bit = row * r->qr->ncols + col;
+    return (r->qr->nullbits[bit / 8] >> (bit % 8)) & 1;
+}
+
 void db_result_free(Result *r)
 {
     if (!r)

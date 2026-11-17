@@ -49,6 +49,28 @@ typedef struct Db {
 /*
  * 结果集：物化。cell 一律是格式化后的字符串（NULL 值存 "NULL"），
  * 这样公开 API 的 db_result_value 可以直接返回 const char*。
+ *
+ * 【nullbits：NULL 与字面 "NULL" 的分离】
+ *
+ * cells 把 SQL NULL 和用户真实文本 'NULL' 都写成同一个字符串，
+ * 调用方无法区分 —— 这是信息丢失，不是输出格式问题。
+ * nullbits 是 row-major 的**位图**（每格 1 位），只存"这格是否为 NULL"：
+ *
+ *   nullbits[row * ncols + col] 的位号 = (row * ncols + col) % 8
+ *
+ * 索引口径必须和 cells **完全一致**（都是 row * ncols + col），
+ * 否则某一格的 NULL 位会挂到别的格上。db_result_is_null 查的就是它。
+ *
+ * 【为什么不改成结构化 cell】
+ * 改 cell 结构会动 db_result_value 的返回值、动所有调用方的假设；
+ * 加一张旁路位图则是纯增量，旧 API 行为一字不改（向后兼容）。
+ *
+ * 【允许为 NULL】
+ * 非 Builder 路径（exec_write.c 的各条写语句、VACUUM 统计）直接
+ * calloc sizeof(QueryResult) 后手工填 cells，这些结果集里不会有 NULL 格
+ * （写语句只有 affected，VACUUM 的 6 格全是格式化数字），
+ * 所以它们的 nullbits 允许保持 NULL，db_result_is_null 按"无位图"回退 0。
+ * 只有 Builder（b_init/b_push）构造的查询结果集才一定有真实位图。
  */
 typedef struct QueryResult {
     int   ncols;
@@ -56,6 +78,25 @@ typedef struct QueryResult {
     int   affected;      /* 非 SELECT 语句的受影响行数 */
     char **colnames;
     char **cells;        /* nrows * ncols */
+
+    /*
+     * NULL 位图，row-major，每格 1 位。容量是 cap 而不是 nrows ——
+     * 它跟 cells 一起在 b_grow 扩容，这样 b_push 可以只翻自己那一位，
+     * 不需要另外维护"位图当前有效长度"。
+     *
+     * 允许为 NULL（见上文：非 Builder 路径的结果集没有 NULL 格）。
+     */
+    u8   *nullbits;
+
+    /*
+     * 位图已分配的**格容量**（不是字节数）。
+     *
+     * 【为什么 nrows 不能当容量用】
+     * b_push 写位图发生在 nrows++ **之前**，此时 nrows 还是旧行数；
+     * 若按 nrows 判断容量，满容量的最后一行永远写不进位图。
+     * 所以位图的容量必须是 cells 的 cap，和 cells 同一口径。
+     */
+    int   nullcap;
 } QueryResult;
 
 /*
