@@ -213,10 +213,132 @@ function openDb(filePath) {
   SCHEMA.forEach(function (stmt) {
     db.exec(stmt)
   })
-  // 老库补列。必须在建表之后跑：新库由 SCHEMA 直接建成带新列的形状，
-  // 老库的表已经存在（CREATE TABLE IF NOT EXISTS 不会改它），只能靠 ALTER 补齐。
-  migrate(db)
+  // P0 的 migrate(db)：补列（列不存在就 ALTER TABLE ADD COLUMN）
+  if (typeof migrate === "function") {
+    migrate(db)
+  }
+  // P1 的 migrateUnitIds(db)：补列兜底 + 会话两张表 + 老行回填 unit_id
+  migrateUnitIds(db)
   return db
+}
+
+/**
+ * 会话行 → 会话对象（tracks 从 JSON 字符串还原成数组）。
+ * @param {object|null} row
+ * @returns {object|undefined}
+ */
+function toSession(row) {
+  if (!row) return undefined
+  let tracks = []
+  try {
+    const parsed = JSON.parse(String(row.tracks || "[]"))
+    if (Array.isArray(parsed)) {
+      tracks = parsed.map(function (t) {
+        return String(t)
+      })
+    }
+  } catch (err) {
+    tracks = []
+  }
+  return {
+    id: String(row.id),
+    started_at: String(row.started_at),
+    ended_at: row.ended_at === null || row.ended_at === undefined ? null : String(row.ended_at),
+    planned_count: Number(row.planned_count || 0),
+    done_count: Number(row.done_count || 0),
+    tracks: tracks,
+  }
+}
+
+/**
+ * P1 的数据迁移（幂等）：
+ *   1. 补齐 P0 该加的列（列不存在就 ALTER TABLE ADD COLUMN）
+ *   2. 确保 sessions / session_queue 两张表在（DDL 抄自契约 §4.2）
+ *   3. 给老行回填 unit_id（'algo:' || problem_id）
+ *
+ * 第 2 步是兜底：P0 的 SCHEMA 里已经有这两张表，CREATE TABLE IF NOT EXISTS 是幂等的，
+ * 不会改动 P0 建出来的表；万一 P0 的 migrate 没跑到，P1 自己也活得下来。
+ * @param {import("node:sqlite").DatabaseSync} db
+ * @returns {{applied: string[], warnings: string[]}}
+ */
+function migrateUnitIds(db) {
+  const applied = []
+  const warnings = []
+
+  const columnNames = function (table) {
+    try {
+      return db
+        .prepare("PRAGMA table_info(" + table + ")")
+        .all()
+        .map(function (row) {
+          return String(row.name)
+        })
+    } catch (err) {
+      warnings.push("读不到 " + table + " 的列信息：" + String(err && err.message ? err.message : err))
+      return []
+    }
+  }
+
+  const ensureColumn = function (table, column, ddl) {
+    if (columnNames(table).indexOf(column) !== -1) return
+    db.exec(ddl)
+    applied.push(ddl)
+  }
+
+  ensureColumn("attempts", "unit_id", "ALTER TABLE attempts ADD COLUMN unit_id TEXT")
+  ensureColumn(
+    "attempts",
+    "track",
+    "ALTER TABLE attempts ADD COLUMN track TEXT NOT NULL DEFAULT 'algorithm'"
+  )
+  ensureColumn(
+    "attempts",
+    "assert_total",
+    "ALTER TABLE attempts ADD COLUMN assert_total INTEGER NOT NULL DEFAULT 0"
+  )
+  ensureColumn(
+    "attempts",
+    "assert_passed",
+    "ALTER TABLE attempts ADD COLUMN assert_passed INTEGER NOT NULL DEFAULT 0"
+  )
+  ensureColumn("review_cards", "unit_id", "ALTER TABLE review_cards ADD COLUMN unit_id TEXT")
+  ensureColumn(
+    "review_cards",
+    "units_since",
+    "ALTER TABLE review_cards ADD COLUMN units_since INTEGER NOT NULL DEFAULT 0"
+  )
+
+  const sessionTables = [
+    `CREATE TABLE IF NOT EXISTS sessions (
+       id            TEXT PRIMARY KEY,
+       started_at    TEXT NOT NULL,
+       ended_at      TEXT,
+       planned_count INTEGER NOT NULL DEFAULT 0,
+       done_count    INTEGER NOT NULL DEFAULT 0,
+       tracks        TEXT NOT NULL DEFAULT ''
+     )`,
+    `CREATE TABLE IF NOT EXISTS session_queue (
+       session_id TEXT NOT NULL,
+       unit_id    TEXT NOT NULL,
+       seq        INTEGER NOT NULL,
+       state      TEXT NOT NULL DEFAULT 'pending',
+       PRIMARY KEY (session_id, unit_id)
+     )`,
+  ]
+  sessionTables.forEach(function (ddl) {
+    db.exec(ddl)
+  })
+
+  const backfill = [
+    "UPDATE attempts SET unit_id = 'algo:' || problem_id WHERE unit_id IS NULL AND problem_id NOT LIKE '%:%'",
+    "UPDATE review_cards SET unit_id = 'algo:' || problem_id WHERE unit_id IS NULL AND problem_id NOT LIKE '%:%'",
+  ]
+  backfill.forEach(function (sql) {
+    db.exec(sql)
+    applied.push(sql)
+  })
+
+  return { applied: applied, warnings: warnings }
 }
 
 /**
@@ -257,11 +379,13 @@ function createStore(db) {
     insertAttempt: function (attempt) {
       const result = db
         .prepare(
-          `INSERT INTO attempts(problem_id, ts, language, code, verdict, passed_cases, total_cases, duration_ms, mode)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO attempts(problem_id, unit_id, track, ts, language, code, verdict, passed_cases, total_cases, duration_ms, mode, assert_total, assert_passed)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           String(attempt.problem_id),
+          attempt.unit_id === undefined || attempt.unit_id === null ? null : String(attempt.unit_id),
+          String(attempt.track || "algorithm"),
           String(attempt.ts),
           String(attempt.language),
           String(attempt.code || ""),
@@ -269,7 +393,9 @@ function createStore(db) {
           Number(attempt.passed_cases || 0),
           Number(attempt.total_cases || 0),
           Number(attempt.duration_ms || 0),
-          String(attempt.mode || "solve")
+          String(attempt.mode || "solve"),
+          Number(attempt.assert_total || 0),
+          Number(attempt.assert_passed || 0)
         )
       return Number(result.lastInsertRowid)
     },
@@ -348,26 +474,47 @@ function createStore(db) {
     /* ---------- review_cards ---------- */
 
     upsertReviewCard: function (card) {
+      // 缺省时保留旧值：老链路（/api/review/:id/grade）不传这两个字段，
+      // 传 NULL 会把新链路的 unit_id 与 units_since 抹掉。
+      const existing = db
+        .prepare("SELECT unit_id, units_since FROM review_cards WHERE problem_id = ?")
+        .get(String(card.problem_id))
+      const unitId =
+        card.unit_id === undefined || card.unit_id === null || String(card.unit_id) === ""
+          ? existing && existing.unit_id
+            ? String(existing.unit_id)
+            : null
+          : String(card.unit_id)
+      const unitsSince =
+        card.units_since === undefined || card.units_since === null
+          ? existing
+            ? Number(existing.units_since || 0)
+            : 0
+          : Math.max(0, Math.trunc(Number(card.units_since)))
       db.prepare(
-        `INSERT INTO review_cards(problem_id, easiness, interval_days, repetitions, last_quality, last_at, next_review_at, lapses)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO review_cards(problem_id, unit_id, easiness, interval_days, repetitions, last_quality, last_at, next_review_at, lapses, units_since)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(problem_id) DO UPDATE SET
+           unit_id = excluded.unit_id,
            easiness = excluded.easiness,
            interval_days = excluded.interval_days,
            repetitions = excluded.repetitions,
            last_quality = excluded.last_quality,
            last_at = excluded.last_at,
            next_review_at = excluded.next_review_at,
-           lapses = excluded.lapses`
+           lapses = excluded.lapses,
+           units_since = excluded.units_since`
       ).run(
         String(card.problem_id),
+        unitId,
         Number(card.easiness),
         Number(card.interval_days),
         Number(card.repetitions),
         card.last_quality === null || card.last_quality === undefined ? null : Number(card.last_quality),
         card.last_at === null || card.last_at === undefined ? null : String(card.last_at),
         String(card.next_review_at),
-        Number(card.lapses || 0)
+        Number(card.lapses || 0),
+        unitsSince
       )
     },
 
@@ -379,6 +526,26 @@ function createStore(db) {
       return db
         .prepare("SELECT * FROM review_cards WHERE next_review_at <= ? ORDER BY next_review_at ASC")
         .all(String(nowIso))
+    },
+
+    /**
+     * 列出全部复习卡（含 unit_id / units_since）。
+     * 次数通道要靠它算到期集合，不能只按日期查。
+     * @returns {object[]}
+     */
+    listReviewCards: function () {
+      return db.prepare("SELECT * FROM review_cards ORDER BY problem_id ASC").all()
+    },
+
+    /**
+     * 次数通道：units_since >= k 的卡片（日期没到也可能到期）。
+     * @param {number} k 阈值 K
+     * @returns {object[]}
+     */
+    listDueCardsByCount: function (k) {
+      return db
+        .prepare("SELECT * FROM review_cards WHERE units_since >= ? ORDER BY units_since DESC, problem_id ASC")
+        .all(Number(k))
     },
 
     countReviewCards: function () {
@@ -538,7 +705,7 @@ function createStore(db) {
       return Number(row.n)
     },
 
-    /* ---------- sessions（P0 新增） ---------- */
+    /* ---------- sessions ---------- */
 
     insertSession: function (s) {
       db.prepare(
@@ -550,55 +717,64 @@ function createStore(db) {
         s.ended_at === undefined || s.ended_at === null ? null : String(s.ended_at),
         Number(s.planned_count || 0),
         Number(s.done_count || 0),
-        String(s.tracks || "")
+        JSON.stringify(Array.isArray(s.tracks) ? s.tracks : [])
       )
     },
 
     updateSession: function (id, patch) {
+      const p = patch || {}
       const sets = []
       const args = []
-      ;["ended_at", "planned_count", "done_count", "tracks"].forEach(function (key) {
-        if (!patch || patch[key] === undefined) return
-        sets.push(key + " = ?")
-        args.push(patch[key] === null ? null : String(patch[key]))
-      })
+      if (p.ended_at !== undefined) {
+        sets.push("ended_at = ?")
+        args.push(p.ended_at === null ? null : String(p.ended_at))
+      }
+      if (p.planned_count !== undefined) {
+        sets.push("planned_count = ?")
+        args.push(Number(p.planned_count))
+      }
+      if (p.done_count !== undefined) {
+        sets.push("done_count = ?")
+        args.push(Number(p.done_count))
+      }
+      if (p.tracks !== undefined) {
+        sets.push("tracks = ?")
+        args.push(JSON.stringify(Array.isArray(p.tracks) ? p.tracks : []))
+      }
       if (sets.length === 0) return
       args.push(String(id))
       db.prepare("UPDATE sessions SET " + sets.join(", ") + " WHERE id = ?").run(...args)
     },
 
     getSession: function (id) {
-      return db.prepare("SELECT * FROM sessions WHERE id = ?").get(String(id))
+      return toSession(db.prepare("SELECT * FROM sessions WHERE id = ?").get(String(id)))
     },
 
     listSessions: function (limit) {
-      const sql = "SELECT * FROM sessions ORDER BY started_at DESC"
-      if (limit === undefined || limit === null) {
-        return db.prepare(sql).all()
-      }
-      return db.prepare(sql + " LIMIT ?").all(Number(limit))
+      const n = limit === undefined || limit === null ? 50 : Math.max(0, Math.trunc(Number(limit)))
+      return db
+        .prepare("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?")
+        .all(n)
+        .map(toSession)
     },
 
     getLatestOpenSession: function () {
-      return db
+      const row = db
         .prepare("SELECT * FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
         .get()
+      return toSession(row)
     },
 
-    /* ---------- session_queue（P0 新增） ---------- */
+    /* ---------- session_queue ---------- */
 
     replaceQueue: function (sessionId, items) {
-      db.prepare("DELETE FROM session_queue WHERE session_id = ?").run(String(sessionId))
+      const sid = String(sessionId)
+      db.prepare("DELETE FROM session_queue WHERE session_id = ?").run(sid)
       const stmt = db.prepare(
         "INSERT INTO session_queue(session_id, unit_id, seq, state) VALUES(?, ?, ?, ?)"
       )
       ;(items || []).forEach(function (item) {
-        stmt.run(
-          String(sessionId),
-          String(item.unit_id),
-          Number(item.seq || 0),
-          String(item.state || "pending")
-        )
+        stmt.run(sid, String(item.unit_id), Number(item.seq), String(item.state || "pending"))
       })
     },
 
@@ -606,22 +782,30 @@ function createStore(db) {
       return db
         .prepare("SELECT * FROM session_queue WHERE session_id = ? ORDER BY seq ASC")
         .all(String(sessionId))
+        .map(function (row) {
+          return {
+            session_id: String(row.session_id),
+            unit_id: String(row.unit_id),
+            seq: Number(row.seq),
+            state: String(row.state),
+          }
+        })
     },
 
     updateQueueItem: function (sessionId, unitId, patch) {
+      const p = patch || {}
       const sets = []
       const args = []
-      if (patch && patch.state !== undefined) {
+      if (p.state !== undefined) {
         sets.push("state = ?")
-        args.push(String(patch.state))
+        args.push(String(p.state))
       }
-      if (patch && patch.seq !== undefined) {
+      if (p.seq !== undefined) {
         sets.push("seq = ?")
-        args.push(Number(patch.seq))
+        args.push(Number(p.seq))
       }
       if (sets.length === 0) return
-      args.push(String(sessionId))
-      args.push(String(unitId))
+      args.push(String(sessionId), String(unitId))
       db.prepare(
         "UPDATE session_queue SET " + sets.join(", ") + " WHERE session_id = ? AND unit_id = ?"
       ).run(...args)
@@ -689,4 +873,5 @@ module.exports = {
   openDb: openDb,
   createStore: createStore,
   migrate: migrate,
+  migrateUnitIds: migrateUnitIds,
 }
