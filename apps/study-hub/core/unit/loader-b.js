@@ -14,6 +14,8 @@ const path = require("node:path")
 const { createUnit } = require("./unit")
 // 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41）：这里引用，不另抄。
 const { trackOf } = require("../track/tracks.js")
+const { cardNeedsNumpy } = require("../track/tracks.js")
+const { detectNumpy } = require("../../judge/sandbox.js")
 
 /** 两段正文之间的分隔线。 */
 const SECTION_BREAK = "\n\n---\n\n"
@@ -84,6 +86,15 @@ function parseCardDirectory(dirAbs, opts) {
     const scriptAbs = path.join(options.unitsDir, track, stem + ".assert.py")
     if (!fs.existsSync(scriptAbs)) {
       warnings.push("断言脚本还没写：" + scriptRel + "（P2 判题时报 compile_error）")
+  // 缺 numpy 的卡读得懂、跑不动——把原因写进 warnings，UI 上要显示出来，
+  // 不许让用户对着一个 ModuleNotFoundError 发懵。
+  const numpyAvailable =
+    opts && opts.env && typeof opts.env.numpy === "boolean"
+      ? opts.env.numpy
+      : detectNumpy(null).available
+  if (cardNeedsNumpy(stem) && !numpyAvailable) {
+    warnings.push("这张卡需要 numpy，本机没装，暂时跑不了")
+  }
     }
   }
 

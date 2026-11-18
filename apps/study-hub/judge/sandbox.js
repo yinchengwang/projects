@@ -53,12 +53,13 @@ const PYTHON_CANDIDATES = [
 ]
 
 /** 探测结果缓存，避免每次判题都 spawn 一遍探测 */
-const detectionCache = { compiler: undefined, python: undefined }
+const detectionCache = { compiler: undefined, python: undefined, numpy: undefined }
 
 /** 清空探测缓存（测试用） */
 function resetDetectionCache() {
   detectionCache.compiler = undefined
   detectionCache.python = undefined
+  detectionCache.numpy = undefined
 }
 
 /**
@@ -151,6 +152,41 @@ function detectPython(override) {
  * @param {{pythonOverride?: string|null}} [options]
  * @returns {{compiler: object|null, python: object|null}}
  */
+/**
+ * 探测 numpy 是否可用。
+ * AI 轨的 13 张卡与 clustering 卡都 import numpy，缺了它们整张卡跑不了。
+ * 缺 numpy 不是错误状态，只是「这张卡暂时跑不了」——由调用方决定怎么降级。
+ * @param {string|null} [override] 指定解释器，形如 "python" 或 "py -3"
+ * @returns {{available: boolean, version: string}}
+ */
+function detectNumpy(override) {
+  if (detectionCache.numpy !== undefined) return detectionCache.numpy
+  const python = detectPython(override || null)
+  if (!python) {
+    detectionCache.numpy = { available: false, version: "" }
+    return detectionCache.numpy
+  }
+  const run = spawnSync(
+    python.cmd,
+    python.args.concat(["-c", "import numpy; print(numpy.__version__)"]),
+    {
+      timeout: DETECT_TIMEOUT_MS,
+      encoding: "utf8",
+      windowsHide: true,
+    }
+  )
+  const stdout = String((run && run.stdout) || "")
+  if (run && !run.error && run.status === 0 && stdout.trim() !== "") {
+    detectionCache.numpy = {
+      available: true,
+      version: stdout.trim().split("\n")[0].trim(),
+    }
+  } else {
+    detectionCache.numpy = { available: false, version: "" }
+  }
+  return detectionCache.numpy
+}
+
 function resolveToolchain(options) {
   const opts = options || {}
   return {
@@ -535,6 +571,7 @@ module.exports = {
   killTree: killTree,
   runCommand: runCommand,
   resetDetectionCache: resetDetectionCache,
+  detectNumpy: detectNumpy,
   clampTimeoutMs: clampTimeoutMs,
   isSafeRelPath: isSafeRelPath,
   copyIntoSandbox: copyIntoSandbox,

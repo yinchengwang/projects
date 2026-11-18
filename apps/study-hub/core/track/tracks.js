@@ -119,10 +119,48 @@ function labelOf(code) {
  * @param {string} stem 卡目录名
  * @returns {"database"|"ai"|null} 不属本轮三轨范围时返回 null
  */
+/**
+ * grokking 卡的清单（接口契约 §14.1 冻结）。
+ * database 16 张 + ai 13 张 = 29 张，是本轮三轨的卡片范围。
+ */
+const GROKKING_CARDS = {
+  database: [
+    "anti_patterns", "backup_recovery", "cache_strategy", "cap_theorem",
+    "clustering", "index_design", "lock_manager", "mvcc", "newsql",
+    "normalization", "nosql", "query_optimization", "replication",
+    "sharding", "sql_fundamentals", "transaction",
+  ],
+  ai: [
+    "cnn", "decision_tree", "dimensionality_reduction", "gradient_boosting",
+    "linear_regression", "logistic_regression", "ml_fundamentals",
+    "neural_network", "nlp", "random_forest", "recommendation", "rnn", "svm",
+  ],
+}
+
+/**
+ * 依赖 numpy 的卡：clustering + 全部 13 张 AI 卡（契约 §14.1）。
+ * 缺 numpy 时这些卡读得懂、跑不动。
+ */
+const NUMPY_CARDS = [
+  "clustering", "cnn", "decision_tree", "dimensionality_reduction",
+  "gradient_boosting", "linear_regression", "logistic_regression",
+  "ml_fundamentals", "neural_network", "nlp", "random_forest",
+  "recommendation", "rnn", "svm",
+]
+
+/**
+ * 这张卡要不要 numpy。
+ * @param {string} stem
+ * @returns {boolean}
+ */
+function cardNeedsNumpy(stem) {
+  return NUMPY_CARDS.indexOf(String(stem === null || stem === undefined ? "" : stem)) !== -1
+}
+
 function trackOfGrokkingCard(stem) {
-  const name = String(stem === undefined || stem === null ? "" : stem)
-  if (GROKKING_DB_CARDS.indexOf(name) !== -1) return "database"
-  if (GROKKING_AI_CARDS.indexOf(name) !== -1) return "ai"
+  const s = String(stem === null || stem === undefined ? "" : stem)
+  if (GROKKING_CARDS.database.indexOf(s) !== -1) return "database"
+  if (GROKKING_CARDS.ai.indexOf(s) !== -1) return "ai"
   return null
 }
 
@@ -130,6 +168,9 @@ module.exports = {
   TRACKS: TRACKS,
   TRACK_CODES: TRACK_CODES,
   GROKKING_DB_CARDS: GROKKING_DB_CARDS,
+  GROKKING_CARDS: GROKKING_CARDS,
+  NUMPY_CARDS: NUMPY_CARDS,
+  cardNeedsNumpy: cardNeedsNumpy,
   GROKKING_AI_CARDS: GROKKING_AI_CARDS,
   trackOf: trackOf,
   trackOfIdPrefix: trackOfIdPrefix,
