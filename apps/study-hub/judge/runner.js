@@ -16,7 +16,16 @@ const path = require("node:path")
 
 const { normalizeCases } = require("../core/judge-spec/cases.js")
 const { compareOutput } = require("../core/judge-spec/compare.js")
-const { createSandbox, runCommand, resolveToolchain } = require("./sandbox.js")
+const { validateAsserts, compareByMode } = require("./asserts.js")
+const {
+  createSandbox,
+  runCommand,
+  resolveToolchain,
+  clampTimeoutMs,
+  copyIntoSandbox,
+  copyDirIntoSandbox,
+  collectArtifacts,
+} = require("./sandbox.js")
 
 /** 支持的语言 */
 const LANGUAGES = ["cpp", "python"]
@@ -58,6 +67,22 @@ const DEFAULT_CASE_TIMEOUT_MS = 2000
 
 /** 编译超时（毫秒）：编译比单个用例慢得多，单独给一份预算 */
 const COMPILE_TIMEOUT_MS = 10000
+
+/**
+ * 卡类判题的脚本超时（毫秒）。脚本要先把 demo 跑一遍，比单跑一个用例慢得多。
+ */
+const SCRIPT_TIMEOUT_MS = 30000
+
+/**
+ * 卡类脚本成功时必须打印的标记（接口契约 §3.5 冻结）。
+ * judgeUnit 靠它把「脚本跑完了」和「脚本真的全过了」区分开。
+ */
+const SCRIPT_PASS_MARK = "全部断言通过"
+
+/**
+ * 卡类脚本失败时打印的前缀（接口契约 §3.5 冻结）。
+ */
+const SCRIPT_FAIL_PREFIX = "断言失败："
 
 /**
  * C++ 编译命令的参数。固定不变（G20）：
@@ -152,6 +177,338 @@ function resolveBinary(dir) {
     if (fs.existsSync(file)) return file
   }
   return path.join(dir, names[0])
+}
+
+/**
+ * 组装 judgeUnit 的结果。字段与既有 judge() 的结果同构，
+ * 额外多出 stdout / stderr（单元页右栏要展示 demo 输出与错误输出）。
+ */
+function makeUnitResult(verdict, passedCases, totalCases, started, failedCase, detail, stdout, stderr, compilerOutput) {
+  const panel = VERDICT_PANEL[verdict]
+  return {
+    verdict: verdict,
+    passedCases: passedCases,
+    totalCases: totalCases,
+    durationMs: Date.now() - started,
+    failedCase: failedCase,
+    message: panel.title + "：" + detail,
+    compilerOutput: compilerOutput || "",
+    stdout: stdout || "",
+    stderr: stderr || "",
+  }
+}
+
+/**
+ * 从脚本的 stdout 里挑出「断言失败：…」那几行，拼成一句中文说明。
+ * @param {string} stdout
+ * @returns {string}
+ */
+function collectFailLines(stdout) {
+  const lines = String(stdout || "").split(/\r?\n/)
+  const picked = []
+  for (const line of lines) {
+    if (line.indexOf(SCRIPT_FAIL_PREFIX) !== -1) picked.push(line.trim())
+  }
+  return picked.join("；")
+}
+
+/**
+ * 组装卡类单元的断言集：隐含断言在前，单元自带断言追加在后。
+ * 隐含两条是契约 §7.4 冻结的：exit 0 + contains 成功标记。
+ * @param {object} unit
+ * @returns {Array<object>}
+ */
+function buildCardAsserts(unit) {
+  const own = Array.isArray(unit && unit.asserts) ? unit.asserts : []
+  return [
+    { type: "exit", expect: 0 },
+    { type: "contains", text: SCRIPT_PASS_MARK },
+  ].concat(own)
+}
+
+/**
+ * 判一个卡类单元：跑它自带的断言脚本。
+ * @param {object} ctx {p, unit, entry, own, started}
+ * @returns {Promise<object>}
+ */
+async function judgeCardScript(ctx) {
+  const p = ctx.p
+  const entry = ctx.entry
+  const started = ctx.started
+  const asserts = buildCardAsserts(ctx.unit)
+  const scriptRel = String(entry.script || "")
+  const learningRoot = p.learningRoot ? String(p.learningRoot) : ""
+
+  if (!scriptRel) {
+    return makeUnitResult("compile_error", 0, asserts.length, started, null,
+      "这张卡没有配断言脚本，判不了", "", "", "")
+  }
+  if (!learningRoot) {
+    return makeUnitResult("compile_error", 0, asserts.length, started, null,
+      "还没连上 learning 仓，卡片判不了", "", "", "")
+  }
+
+  const scriptAbs = path.resolve(learningRoot, scriptRel)
+  if (!fs.existsSync(scriptAbs)) {
+    // 契约 §12：脚本缺失是 compile_error（附中文说明），不是 500
+    return makeUnitResult("compile_error", 0, 0, started, null,
+      "断言脚本不存在：" + scriptRel, "", "", "")
+  }
+
+  const toolchain = p.toolchain || resolveToolchain({})
+  const python = toolchain.python
+  if (!python) {
+    return makeUnitResult("compile_error", 0, asserts.length, started, null,
+      "本机没有找到可用的 Python 解释器（试过 python3 / python / py -3）", "", "", "")
+  }
+
+  const sandbox = p.sandbox || createSandbox()
+  const owned = !p.sandbox
+  const timeoutMs = p.timeoutMs ? clampTimeoutMs(p.timeoutMs) : SCRIPT_TIMEOUT_MS
+
+  try {
+    // demo 目录整个拷进沙箱：demo 会往自己目录里写 .db，
+    // 直接在 learning 仓里跑会污染工作树（G18）。
+    let demoAbs = ""
+    const demoRel = String(entry.demo || "")
+    if (demoRel) {
+      const demoFile = path.resolve(learningRoot, demoRel)
+      const copiedDir = copyDirIntoSandbox(sandbox, path.dirname(demoFile), "demo")
+      demoAbs = path.join(copiedDir, path.basename(demoFile))
+    }
+    const scriptTarget = copyIntoSandbox(sandbox, scriptAbs, path.basename(scriptRel))
+
+    const env = Object.assign({}, process.env, {
+      // Windows 上默认 GBK，脚本里的中文会直接抛 UnicodeEncodeError（G21）
+      PYTHONIOENCODING: "utf-8",
+      STUDY_HUB_DEMO: demoAbs,
+    })
+
+    const run = await runCommand(python.cmd, python.args.concat([scriptTarget]), {
+      cwd: sandbox.dir,
+      timeoutMs: timeoutMs,
+      env: env,
+    })
+
+    const stdout = String(run.stdout || "")
+    const stderr = String(run.stderr || "")
+    const artifacts = collectArtifacts(sandbox, asserts)
+
+    // 契约 §7.4 的 verdict 映射顺序：命中即止
+    if (run.timedOut) {
+      return makeUnitResult("timeout", 0, asserts.length, started, null,
+        "断言脚本超时（超过 " + timeoutMs + "ms）", stdout, stderr, "")
+    }
+    if (/SyntaxError|IndentationError/.test(stderr)) {
+      return makeUnitResult("compile_error", 0, asserts.length, started, null,
+        "断言脚本有语法错误：" + firstNonEmptyLine(stderr), stdout, stderr, stderr)
+    }
+    if (stderr.indexOf("ModuleNotFoundError") !== -1 && /numpy/.test(stderr)) {
+      return makeUnitResult("runtime_error", 0, asserts.length, started, null,
+        "环境缺失：本机没有装 numpy，这张卡暂时跑不了（装上 numpy 即可运行）", stdout, stderr, stderr)
+    }
+    if (stderr.indexOf("Traceback (most recent call last)") !== -1) {
+      return makeUnitResult("runtime_error", 0, asserts.length, started, null,
+        "断言脚本或 demo 崩了：" + firstNonEmptyLine(stderr), stdout, stderr, stderr)
+    }
+    if (run.code === 1) {
+      const detail = collectFailLines(stdout)
+      return makeUnitResult("wrong_answer", 0, asserts.length, started,
+        { index: 0, type: "exit", reason: "断言脚本没有通过" },
+        detail || "断言脚本没有通过（退出码 1）", stdout, stderr, "")
+    }
+    if (run.code !== 0) {
+      return makeUnitResult("runtime_error", 0, asserts.length, started, null,
+        "断言脚本异常退出（退出码 " + run.code + "）", stdout, stderr, stderr)
+    }
+
+    const res = validateAsserts(asserts, {
+      stdout: stdout,
+      stderr: stderr,
+      exitCode: run.code,
+      timedOut: false,
+      artifacts: artifacts,
+    })
+    if (res.failures.length > 0) {
+      return makeUnitResult("wrong_answer", res.passed, res.total, started,
+        res.failures[0], res.failures[0].reason, stdout, stderr, "")
+    }
+    return makeUnitResult("pass", res.passed, res.total, started, null,
+      "全部 " + res.total + " 条断言通过", stdout, stderr, "")
+  } finally {
+    if (owned) sandbox.cleanup()
+  }
+}
+
+/**
+ * 判一个题目类单元：跑用户提交的代码。
+ * @param {object} ctx {p, unit, entry, own, started}
+ * @returns {Promise<object>}
+ */
+async function judgeUserCode(ctx) {
+  const p = ctx.p
+  const entry = ctx.entry
+  const started = ctx.started
+  const own = ctx.own
+  const code = String(p.code === null || p.code === undefined ? "" : p.code)
+  const language = String(p.language || entry.language || "cpp").toLowerCase()
+
+  if (LANGUAGES.indexOf(language) === -1) {
+    return makeUnitResult("compile_error", 0, own.length, started, null,
+      "不支持的语言：" + language + "（只支持 cpp 与 python）", "", "", "")
+  }
+  if (own.length === 0) {
+    return makeUnitResult("wrong_answer", 0, 0, started, null,
+      "这个单元没有测试用例，无法判定是否通过；请先在题库里补齐用例", "", "", "")
+  }
+
+  const toolchain = p.toolchain || resolveToolchain({})
+  const sandbox = p.sandbox || createSandbox()
+  const owned = !p.sandbox
+  const caseTimeoutMs = p.timeoutMs ? clampTimeoutMs(p.timeoutMs) : DEFAULT_CASE_TIMEOUT_MS
+
+  try {
+    let command = ""
+    let args = []
+
+    if (language === "cpp") {
+      const compiler = toolchain.compiler
+      if (!compiler) {
+        return makeUnitResult("compile_error", 0, own.length, started, null,
+          "本机没有找到 g++，无法编译 C++ 代码", "", "", "")
+      }
+      fs.writeFileSync(path.join(sandbox.dir, "main.cpp"), code, "utf8")
+      const compiled = await runCommand(compiler.cmd, CPP_COMPILE_ARGS, {
+        cwd: sandbox.dir,
+        timeoutMs: COMPILE_TIMEOUT_MS,
+      })
+      const compilerOut = [compiled.stderr, compiled.stdout].filter(Boolean).join("\n")
+      if (compiled.timedOut) {
+        return makeUnitResult("compile_error", 0, own.length, started, null,
+          "编译超时（超过 " + COMPILE_TIMEOUT_MS + "ms）", "", "", compilerOut)
+      }
+      if (compiled.code !== 0) {
+        const detail = parseCompilerError(compilerOut)
+        const where = detail.line === null ? "" : "第 " + detail.line + " 行："
+        return makeUnitResult("compile_error", 0, own.length, started, null,
+          where + detail.text, "", "", compilerOut)
+      }
+      command = resolveBinary(sandbox.dir)
+      args = []
+    } else {
+      const python = toolchain.python
+      if (!python) {
+        return makeUnitResult("compile_error", 0, own.length, started, null,
+          "本机没有找到可用的 Python 解释器（试过 python3 / python / py -3）", "", "", "")
+      }
+      fs.writeFileSync(path.join(sandbox.dir, "main.py"), code, "utf8")
+      command = python.cmd
+      args = python.args.concat(["main.py"])
+    }
+
+    const childEnv =
+      language === "python"
+        ? Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8" })
+        : process.env
+
+    const outputAsserts = own.filter(function (a) { return a && a.type === "output" })
+    const otherAsserts = own.filter(function (a) { return a && a.type !== "output" })
+
+    let passed = 0
+    let lastRun = null
+
+    // 逐条 output 断言各跑一次进程；第一条不匹配就停（与既有 judge() 一致）
+    for (let i = 0; i < outputAsserts.length; i += 1) {
+      const a = outputAsserts[i]
+      const run = await runCommand(command, args, {
+        cwd: sandbox.dir,
+        input: a.input === undefined || a.input === null || a.input === "" ? "" : String(a.input) + "\n",
+        timeoutMs: caseTimeoutMs,
+        env: childEnv,
+      })
+      lastRun = run
+      if (run.timedOut) {
+        return makeUnitResult("timeout", passed, own.length, started, null,
+          "第 " + (i + 1) + " 个用例超时：运行超过 " + caseTimeoutMs + "ms 后被强制结束",
+          "", run.stderr, run.stderr)
+      }
+      if (run.code !== 0) {
+        let how
+        if (run.code === null && run.signal) how = "被信号 " + run.signal + " 终止"
+        else if (run.code === null) how = "进程启动失败"
+        else how = "退出码 " + run.code
+        return makeUnitResult("runtime_error", passed, own.length, started, null,
+          "第 " + (i + 1) + " 个用例运行失败（" + how + "）：" + firstNonEmptyLine(run.stderr),
+          "", run.stderr, run.stderr)
+      }
+      const cmp = compareByMode(run.stdout, a.expect, a.cmp || "exact")
+      if (!cmp.equal) {
+        const cutNote = run.truncated ? "（程序输出过长，已截断后比对）" : ""
+        return makeUnitResult("wrong_answer", passed, own.length, started,
+          { index: own.indexOf(a), type: "output", reason: cmp.reason },
+          "第 " + (i + 1) + " 个用例不通过：" + cmp.reason + cutNote,
+          run.stdout, run.stderr, run.stderr)
+      }
+      passed += 1
+    }
+
+    // exit / contains / file 断言对最后一次运行的产物判定
+    if (otherAsserts.length > 0) {
+      if (!lastRun) {
+        lastRun = await runCommand(command, args, {
+          cwd: sandbox.dir,
+          timeoutMs: caseTimeoutMs,
+          env: childEnv,
+        })
+      }
+      if (lastRun.timedOut) {
+        return makeUnitResult("timeout", passed, own.length, started, null,
+          "运行超时：超过 " + caseTimeoutMs + "ms 后被强制结束", "", lastRun.stderr, lastRun.stderr)
+      }
+      const artifacts = collectArtifacts(sandbox, own)
+      const res = validateAsserts(otherAsserts, {
+        stdout: lastRun.stdout,
+        stderr: lastRun.stderr,
+        exitCode: lastRun.code,
+        timedOut: false,
+        artifacts: artifacts,
+      })
+      passed += res.passed
+      if (res.failures.length > 0) {
+        const first = res.failures[0]
+        return makeUnitResult("wrong_answer", passed, own.length, started,
+          { index: own.indexOf(otherAsserts[first.index]), type: first.type, reason: first.reason },
+          first.reason, lastRun.stdout, lastRun.stderr, lastRun.stderr)
+      }
+    }
+
+    return makeUnitResult("pass", passed, own.length, started, null,
+      "全部 " + own.length + " 条断言通过", "", "", "")
+  } finally {
+    if (owned) sandbox.cleanup()
+  }
+}
+
+/**
+ * 判一个学习单元。kind: problem 判用户提交的代码，kind: card 判单元自带的断言脚本，
+ * 两者走同一套「跑 → 收集 → 逐条校验 → verdict」的核心。
+ * @param {{unit: object, code?: string, language?: string, timeoutMs?: number,
+ *          toolchain?: object, sandbox?: object, learningRoot?: string|null}} params
+ * @returns {Promise<object>}
+ */
+async function judgeUnit(params) {
+  const p = params || {}
+  const unit = p.unit || {}
+  const entry = unit.entry || {}
+  const kind = String(unit.kind || "")
+  const graded = String(entry.graded || (kind === "card" ? "script" : "user"))
+  const own = Array.isArray(unit.asserts) ? unit.asserts : []
+  const started = Date.now()
+
+  if (graded === "script") {
+    return judgeCardScript({ p: p, unit: unit, entry: entry, own: own, started: started })
+  }
+  return judgeUserCode({ p: p, unit: unit, entry: entry, own: own, started: started })
 }
 
 /**
@@ -313,8 +670,12 @@ module.exports = {
   VERDICT_PANEL: VERDICT_PANEL,
   DEFAULT_CASE_TIMEOUT_MS: DEFAULT_CASE_TIMEOUT_MS,
   COMPILE_TIMEOUT_MS: COMPILE_TIMEOUT_MS,
+  SCRIPT_TIMEOUT_MS: SCRIPT_TIMEOUT_MS,
+  SCRIPT_PASS_MARK: SCRIPT_PASS_MARK,
+  SCRIPT_FAIL_PREFIX: SCRIPT_FAIL_PREFIX,
   CPP_COMPILE_ARGS: CPP_COMPILE_ARGS,
   judge: judge,
+  judgeUnit: judgeUnit,
   parseCompilerError: parseCompilerError,
   firstNonEmptyLine: firstNonEmptyLine,
   resolveBinary: resolveBinary,
