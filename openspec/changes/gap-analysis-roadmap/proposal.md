@@ -1,7 +1,11 @@
-# Gap-Analysis 路线图 — 变更提案
+# Gap-Analysis 路线图 — 变更提案（P0/P1 路线图**已失效**）
 
 **变更 ID：** gap-analysis-roadmap
 **日期：** 2026-10-16
+**状态（2026-11-18 更新）：** ⚠️ **路线图部分失效** —— 目标载体 `engineering/src/db`
+已于 2026-11-16 冻结；13 篇子报告的研究对象不再是主核。
+**仍有效的部分**：13 篇子报告作为"能力差距"的历史记录 + 主核补能力时的对照参考。
+**处置与证据**：见 `tasks.md` 顶部的裁决段。
 **关联文档：**
 - 设计：`docs/superpowers/specs/2026-10-16-gap-analysis-design.md`
 - 总报告：`docs/gap-analysis/README.md`（58KB / 6 节 / 25 P0 路线图）
