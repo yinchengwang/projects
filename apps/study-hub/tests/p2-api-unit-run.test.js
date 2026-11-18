@@ -307,3 +307,25 @@ test("GET /api/env 返回环境自检结果", async function () {
     })
   })
 })
+
+test("GET /api/env 的 notes 与探测结果一致（缺 numpy 要点名缺什么）", async function () {
+  // 上一条只断言 notes 是非空字符串数组 —— 把 notes 写成固定文案「运行环境正常」也照样绿。
+  // 这条把 notes 与三个 available 标志对上：缺什么就必须点名什么。
+  await withApp(async function (base) {
+    const body = await (await fetch(base + "/api/env")).json()
+    const text = body.notes.join(" ")
+    if (body.numpy.available === false) {
+      assert.ok(text.indexOf("numpy") !== -1, "缺 numpy 时要点名：" + text)
+      assert.ok(text.indexOf("环境正常") === -1, "缺东西时不能说「环境正常」：" + text)
+    }
+    if (body.compiler.available === false) {
+      assert.ok(text.indexOf("g++") !== -1, "缺编译器时要点名：" + text)
+    }
+    if (body.python.available === false) {
+      assert.ok(text.indexOf("Python") !== -1 || text.indexOf("python") !== -1, "缺 Python 时要点名：" + text)
+    }
+    if (body.numpy.available && body.compiler.available && body.python.available) {
+      assert.ok(text.indexOf("正常") !== -1, "全都有时说「运行环境正常」：" + text)
+    }
+  })
+})
