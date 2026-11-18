@@ -28,6 +28,13 @@ const DETECT_TIMEOUT_MS = 5000
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 
 /**
+ * 单次运行的超时硬上限（毫秒）。
+ * 上游（请求参数、settings）可以调小，不许调大到能把服务挂死的程度。
+ * 传进来的 timeoutMs 一律先夹到这里再交给 runCommand。
+ */
+const MAX_TIMEOUT_MS = 60000
+
+/**
  * 杀掉进程树之后仍不退出时的宽限期（毫秒）。
  * 超时了还不收摊，就是进程树杀不动（taskkill 失败、进程卡在不可中断 IO 等），
  * 这时必须强行按超时判定收结果，否则这个请求永远挂着，临时目录也永远删不掉。
@@ -174,6 +181,157 @@ function createSandbox() {
 }
 
 /**
+ * 把传入的超时夹到 [1, MAX_TIMEOUT_MS]。
+ * 非法值（非数字、<= 0）退化成 DEFAULT_TIMEOUT_MS。
+ * @param {number|string|undefined|null} ms
+ * @returns {number}
+ */
+function clampTimeoutMs(ms) {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_MS
+  return Math.min(Math.floor(n), MAX_TIMEOUT_MS)
+}
+
+/**
+ * 沙箱内的相对路径是否安全。
+ * 非法的情况：空串、绝对路径（/ 开头、\ 开头、Windows 盘符）、含 `..` 段。
+ * @param {string} relPath
+ * @returns {boolean}
+ */
+function isSafeRelPath(relPath) {
+  const text = String(relPath === null || relPath === undefined ? "" : relPath)
+  if (text === "") return false
+  if (text.charAt(0) === "/" || text.charAt(0) === "\\") return false
+  if (/^[a-zA-Z]:/.test(text)) return false
+  return !text.split(/[\\/]+/).some(function (seg) {
+    return seg === ".."
+  })
+}
+
+/**
+ * target 是否在 root 目录之内（不含 root 本身）。
+ * @param {string} root
+ * @param {string} target
+ * @returns {boolean}
+ */
+function isInside(root, target) {
+  const r = path.resolve(root)
+  const t = path.resolve(target)
+  if (t === r) return false
+  return t.startsWith(r + path.sep)
+}
+
+/**
+ * 把一个文件复制进沙箱。
+ * 目标已存在则覆盖；父目录不存在则自动创建。
+ * @param {{dir: string}} sandbox
+ * @param {string} fromAbs 源文件的绝对路径
+ * @param {string} relName 相对沙箱目录的目标路径
+ * @returns {string} 目标绝对路径
+ */
+function copyIntoSandbox(sandbox, fromAbs, relName) {
+  const dir = sandbox && sandbox.dir ? sandbox.dir : ""
+  if (!dir) throw new Error("沙箱目录无效")
+  if (!isSafeRelPath(relName)) throw new Error("沙箱相对路径非法：" + String(relName))
+  const target = path.resolve(dir, relName)
+  if (!isInside(dir, target)) throw new Error("沙箱相对路径非法：" + String(relName))
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.copyFileSync(fromAbs, target)
+  return target
+}
+
+/**
+ * 把一个目录整个复制进沙箱（递归）。
+ * 数据库卡的 demo 会在自己目录里写 .db 文件，必须整目录拷进沙箱再跑，
+ * 否则 learning 仓的工作树会被判题污染（G18）。
+ * @param {{dir: string}} sandbox
+ * @param {string} fromDirAbs 源目录的绝对路径
+ * @param {string} relName 相对沙箱目录的目标目录名
+ * @returns {string} 目标目录绝对路径
+ */
+function copyDirIntoSandbox(sandbox, fromDirAbs, relName) {
+  const dir = sandbox && sandbox.dir ? sandbox.dir : ""
+  if (!dir) throw new Error("沙箱目录无效")
+  if (!isSafeRelPath(relName)) throw new Error("沙箱相对路径非法：" + String(relName))
+  const target = path.resolve(dir, relName)
+  if (!isInside(dir, target)) throw new Error("沙箱相对路径非法：" + String(relName))
+  copyTreeInto(fromDirAbs, target)
+  return target
+}
+
+/**
+ * 递归复制目录树（内部用）。
+ * @param {string} src
+ * @param {string} dst
+ */
+function copyTreeInto(src, dst) {
+  fs.mkdirSync(dst, { recursive: true })
+  const entries = fs.readdirSync(src, { withFileTypes: true })
+  for (const entry of entries) {
+    const from = path.join(src, entry.name)
+    const to = path.join(dst, entry.name)
+    if (entry.isDirectory()) {
+      copyTreeInto(from, to)
+    } else if (entry.isFile()) {
+      fs.copyFileSync(from, to)
+    }
+  }
+}
+
+/**
+ * 读沙箱里的产物文件。
+ * 路径越界直接抛错（不许读出沙箱）；文件不存在或不是普通文件返回 null。
+ * @param {{dir: string}} sandbox
+ * @param {string} relPath
+ * @returns {string|null}
+ */
+function readArtifact(sandbox, relPath) {
+  const dir = sandbox && sandbox.dir ? sandbox.dir : ""
+  if (!dir) throw new Error("沙箱目录无效")
+  if (!isSafeRelPath(relPath)) throw new Error("产物路径越界：" + String(relPath))
+  const target = path.resolve(dir, relPath)
+  if (!isInside(dir, target)) throw new Error("产物路径越界：" + String(relPath))
+  let st
+  try {
+    st = fs.statSync(target)
+  } catch (e) {
+    return null
+  }
+  if (!st.isFile()) return null
+  try {
+    return fs.readFileSync(target, "utf8")
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 收集断言集里 file 型的产物内容。
+ * 越界的、缺失的一律跳过（不抛），只有真正读到的才返回。
+ * @param {{dir: string}} sandbox
+ * @param {Array<object>} asserts
+ * @returns {Object<string, string>}
+ */
+function collectArtifacts(sandbox, asserts) {
+  const out = {}
+  const list = Array.isArray(asserts) ? asserts : []
+  for (const a of list) {
+    if (!a || a.type !== "file") continue
+    const rel = String(a.path === null || a.path === undefined ? "" : a.path)
+    if (!isSafeRelPath(rel)) continue
+    let text
+    try {
+      text = readArtifact(sandbox, rel)
+    } catch (e) {
+      continue
+    }
+    if (text === null) continue
+    out[rel] = text
+  }
+  return out
+}
+
+/**
  * 杀整棵进程树。
  * Windows：taskkill /T /F；POSIX：杀整个进程组（spawn 时开了 detached）。
  * taskkill 失败时退回 child.kill()（只能杀直接子进程，聊胜于无）。
@@ -220,7 +378,7 @@ function killTree(child) {
  */
 function runCommand(cmd, args, options) {
   const opts = options || {}
-  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : DEFAULT_TIMEOUT_MS
+  const timeoutMs = clampTimeoutMs(opts.timeoutMs)
   const started = Date.now()
 
   return new Promise(function (resolve) {
@@ -366,6 +524,7 @@ module.exports = {
   DEFAULT_TIMEOUT_MS: DEFAULT_TIMEOUT_MS,
   DETECT_TIMEOUT_MS: DETECT_TIMEOUT_MS,
   MAX_OUTPUT_BYTES: MAX_OUTPUT_BYTES,
+  MAX_TIMEOUT_MS: MAX_TIMEOUT_MS,
   KILL_GRACE_MS: KILL_GRACE_MS,
   PYTHON_CANDIDATES: PYTHON_CANDIDATES,
   detectCompiler: detectCompiler,
@@ -376,4 +535,10 @@ module.exports = {
   killTree: killTree,
   runCommand: runCommand,
   resetDetectionCache: resetDetectionCache,
+  clampTimeoutMs: clampTimeoutMs,
+  isSafeRelPath: isSafeRelPath,
+  copyIntoSandbox: copyIntoSandbox,
+  copyDirIntoSandbox: copyDirIntoSandbox,
+  readArtifact: readArtifact,
+  collectArtifacts: collectArtifacts,
 }
