@@ -95,6 +95,41 @@ test("validateAsserts：contains 在 stdout+stderr 合并串里找", function ()
   assert.strictEqual(bad.failures[0].reason, "输出里没有找到：缺失")
 })
 
+test("validateAsserts：file 内容不一致给的是「产物」文案，不是「输出」", function () {
+  // compareByMode 的 reason 是给 stdout 写的（「输出与期望不一致」），
+  // 直接透传会让用户以为在说 stdout —— 而这条断言看的是产物文件。
+  // 契约 §7.4 的冻结表：file 内容不一致 → 「产物内容与期望不一致」。
+  const out = asserts.validateAsserts([{ type: "file", path: "out.txt", expect: "期望内容" }], {
+    artifacts: { "out.txt": "实际内容" },
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+  })
+  assert.strictEqual(out.passed, 0)
+  assert.strictEqual(out.failures[0].reason, "产物内容与期望不一致")
+})
+
+test("validateAsserts：file 内容一致时通过（别把「一致」也判成失败）", function () {
+  const out = asserts.validateAsserts([{ type: "file", path: "out.txt", expect: "同一内容" }], {
+    artifacts: { "out.txt": "同一内容" },
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+  })
+  assert.strictEqual(out.passed, 1, JSON.stringify(out.failures))
+  assert.deepStrictEqual(out.failures, [])
+})
+
+test("lines：行数相同但某行不同 → 第 K 行不一致", function () {
+  // 原 20 条用例只覆盖了「行数不一致」，**没覆盖「行数相同、内容不同」**
+  // ——干跑实测：把 lines 的逐行比对改成 `if (false)`，测试仍 20/20 全绿。
+  const r = asserts.compareByMode("a\nc", "a\nb", "lines")
+  assert.strictEqual(r.equal, false, "第 2 行不同应当不等")
+  assert.strictEqual(r.reason, "第 2 行与期望不一致")
+})
+
 test("validateAsserts：file 路径越界直接失败", function () {
   const out = asserts.validateAsserts([{ type: "file", path: "../etc/passwd", expect: "x" }], runOf())
   assert.strictEqual(out.failures[0].reason, "产物路径越界：../etc/passwd")

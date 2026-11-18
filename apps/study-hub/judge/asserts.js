@@ -165,7 +165,11 @@ function validateOne(a, run) {
       return { ok: false, reason: "产物文件不存在：" + p }
     }
     const cmp = compareByMode(artifacts[p], a.expect, a.cmp || "exact")
-    return { ok: cmp.equal, reason: cmp.reason }
+    if (cmp.equal) return { ok: true, reason: cmp.reason }
+    // **文案要说是「产物」**：compareByMode 的 reason 是给 stdout 写的（「输出与期望不一致」），
+    // 直接透传会让用户以为在说 stdout，而这条断言看的是产物文件。
+    // 契约 §7.4 的冻结表把 file 型的失败文案定成「产物内容与期望不一致」，照它来。
+    return { ok: false, reason: "产物内容与期望不一致" }
   }
 
   return { ok: false, reason: "未知断言类型：" + String(a.type) }
