@@ -11,7 +11,7 @@
 
 给主核 `engine/db/` 补上三样它现在**没有**的东西：
 
-1. **CI 门禁** —— 主核有 99 个测试文件（68 unit + 31 integration）、零 CI 覆盖。改动可能在本地绿、CI 红，也可能反过来。
+1. **CI 门禁** —— 主核有 95 个测试文件（64 unit + 31 integration）、零 CI 覆盖。改动可能在本地绿、CI 红，也可能反过来。
 2. **编译期模态裁剪** —— 一个 `MM=` 变量，把不需要的模态**在编译期**裁掉，
    产出"只有这一个模态"的二进制。这是"每个模态可单独部署"的**技术前提**。
 3. **链接期独立证明** —— 8 个 smoke 可执行文件，每个只链接"底座 + 一个模态"。
@@ -505,7 +505,7 @@ Windows 下 make 的 `$(shell ...)` 走 cmd.exe（见 `Makefile` L4-20 的注释
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：编译零警告；99 通过 / 0 失败。
+  预期：编译零警告；95 通过 / 0 失败。
 
   ⚠️ **此时还没有 `#if` 裁剪点**，所以 `make MM=vector` 会在链接阶段报
   "undefined reference to db_ft_open" —— **这是预期的**，B3 修。
@@ -977,7 +977,7 @@ Windows 下 make 的 `$(shell ...)` 走 cmd.exe（见 `Makefile` L4-20 的注释
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：99 通过 / 0 失败。
+  预期：95 通过 / 0 失败。
 
   裁剪验证：
 
@@ -1426,7 +1426,7 @@ Windows 下 make 的 `$(shell ...)` 走 cmd.exe（见 `Makefile` L4-20 的注释
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：99 通过 / 0 失败。
+  预期：95 通过 / 0 失败。
 
 - [ ] **B6.3 依赖方向门禁绿**
 

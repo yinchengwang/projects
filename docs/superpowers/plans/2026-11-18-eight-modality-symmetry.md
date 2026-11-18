@@ -607,7 +607,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：零警告；`✓ 依赖方向正确`；**99 个测试全绿**。
+  预期：零警告；`✓ 依赖方向正确`；**95 个测试全绿**。
 
   ⚠️ `heap_am_build` 现在只在 `rel_opener.c` 里被调用 ——
   `exec_scan.c` 不再 include `spi/heap_am.h`，所以 `heap_am.c` 的 include 要跟着改。
@@ -691,7 +691,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：零警告；`✓ 依赖方向正确`；99 全绿。
+  预期：零警告；`✓ 依赖方向正确`；95 全绿。
 
   ⚠️ **`check_deps.sh` 的模态互斥规则现在会遍历到 `relational/`** ——
   它会检查 `relational/` 里有没有 include 别的模态。应该没有（它只依赖
@@ -766,7 +766,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：零警告；`✓ 依赖方向正确`；99 全绿。
+  预期：零警告；`✓ 依赖方向正确`；95 全绿。
 
 - [ ] **C3.5 提交**
 
@@ -841,7 +841,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：零警告；`✓ 依赖方向正确`；**99 个测试全绿**。
+  预期：零警告；`✓ 依赖方向正确`；**95 个测试全绿**。
 
   ⚠️ **`src/repl_*.c` 现在有 6 个**（vec / ft / geo / ts / blob / graph）——
   它们在 `src/` 顶层，`check_deps.sh` 的 `forbid` 规则**不覆盖 `src/` 顶层** ✓。
@@ -1328,7 +1328,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：零警告；`✓ 依赖方向正确`；**全部测试绿**（99 + 新增）。
+  预期：零警告；`✓ 依赖方向正确`；**全部测试绿**（95 + 新增）。
 
 - [ ] **C5.14 提交**
 
@@ -1474,7 +1474,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
 - [ ] **C7.2 A7 执行记录**
 
-  把 C7.13 的 `grep -i json src/query/` 逐行结果写进
+  把 C5.13 的 `grep -i json src/query/` 逐行结果写进
   `engine/db/docs/MODALITIES.md` 的 A7 小节。
 
 - [ ] **C7.3 提交 + 父仓指针**
@@ -1499,7 +1499,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 2. **变更范围** —— `engine/db/src/`（新增 `spi/table_opener.*`、`modalities/relational/`、
    `modalities/blob/`、`modalities/doc/json_*.c`）、`engine/db/src/query/`、
    `engine/db/src/storage/`、`engine/db/include/db.h`、`engine/db/tools/`。
-3. **验证方式** —— C7.8（执行器机械检查）、C7.9 / C7.4 / C7.4（构建 + 门禁 + 99 测试）、
-   C7.9（A3 两路全等）、C7.10（A4 对账）、C7.13（A7 审计）、C7.2 / C7.3（9 profile + 8 smoke）。
+3. **验证方式** —— C1.8（执行器机械检查）、C1.9 / C2.4 / C3.4（构建 + 门禁 + 95 测试）、
+   C5.9（A3 两路全等）、C5.10（A4 对账）、C5.13（A7 审计）、C6.2 / C6.3（9 profile + 8 smoke）。
 4. **后续建议** —— 跨模态事务（v1.7+）；`json_match` 的多值索引（当前数组路径返回 NULL）；
    根目录越界文件仍未清理。

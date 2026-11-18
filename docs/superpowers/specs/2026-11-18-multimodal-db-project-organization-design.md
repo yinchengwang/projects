@@ -277,9 +277,11 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | R-11 | **`storage/gstore*` 是 graph 与 vector **共用**的底座** | `vector_am.c:125` 调 `gstore_cursor_init(vstore_meta(...))` | 它**不属于 graph**，不能搬进 `modalities/graph/`，必须留在 L1 | W-C Task C3 |
 | R-12 | **`test/run.sh` 硬编码了 `build/`** | `OBJS=$(find build -name '*.o' ...)` | 裁剪 profile 的对象在 `build_mm_<m>/` ⇒ `run.sh` 必须读 `OBJ_DIR` 环境变量 | W-B Task B3 |
 | R-13 | **`make bench` 只在 `MM=full` 下可用** | bench 目标链 `vec_bench` / `graph_bench` / `ft_bench` / `geo_bench` / `ts_bench` | 裁剪 profile 下要**显式拒绝**（给出可读信息），而不是让它链接失败 | W-B Task B2 |
-| R-14 | **主核测试是 99 个文件（68 unit + 31 integration）** | `test/run.sh` 的 glob 实测 | `run.sh` 头部注释写的「93 个测试」也已过期 ⇒ 所有基线数字按 99 记 | W-A / W-B 基线 |
+| R-14 | **主核测试是 95 个文件（64 unit + 31 integration）** | `test/run.sh` 的 glob 实测 | `run.sh` 头部注释写的「93 个测试」也已过期 ⇒ 所有基线数字按 95 记 | W-A / W-B 基线 |
 | R-15 | **`SQL_MAX_COLS` 定义在 `query/parser.h`，而 `spi/` 要用它** | 依赖方向是 L3→L3 但**方向反了** | 挪到 `spi/table_opener.h` 或 `common/types.h`，`query/parser.h` 反过来 include | W-C Task C1 |
 | R-16 | **`db.c` 766 行 / `main.c` 670 行 / `db_instance.c` 232 行** | 实测 | 都在 800 行硬规则内，但 `db.c` 已接近上限 ⇒ C-1 往里加 opener 安装点时**不要**再堆代码 | W-C Task C1 |
+| **R-17** | **仓库自己的文档里，主核的测试数与超限文件清单都已过期** | `CLAUDE.md`「主数据库内核」节写「`sh test/run.sh` — **55 个测试文件**，73 处断言」；同节把 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 列为「既有超限文件」 | 实测：`test/unit/` **64** 个 + `test/integration/` **31** 个 = **95** 个测试文件（`run.sh` 的 glob 就是 `test/unit/test_*.c test/integration/test_*.c`）；三个「超限文件」实测 **614 / 766 / 795** 行，**全部 ≤ 800**，早已不超限 | W-A Task 5 |
+| **R-18** | **`test/run.sh` 的头部注释写着「实测 93 个测试里没有任何两个共用同一个 .db 路径」** | `test/run.sh:15` | 实测是 **95** 个。这条注释是**并发安全性的证据**（"各测试互不干扰"），数字错一点不影响结论，但会让复核者对不上 | W-A Task 5 |
 
 ---
 
@@ -292,7 +294,7 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | **D3** | **不重构 L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）；**模态归属的搬迁由 D9 管辖** | §2.1/§2.3：接口面已收敛到 1,313 行薄契约、零 internal 泄漏。**（复审修正）** 原文只写「不重构目录」，但 `storage/` 就是 L1 底座，把 `blob.c` 搬走属底座改动 —— 两个判决会在实施时打架，故收窄为「不动 L1–L3 的**机制与形状**」 |
 | **D4** | **删除** `engine/src/db/` 全树（524 文件 / 173,719 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3.4 倍且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
 | **D5** | **保留 SDK，去冻结化**：摘掉 `faiss_hnsw`/`mm_vector_index`/`sql_engine` 三个链接依赖；`sdk/vectors` 的 HNSW 后端改为 `index_flat.c` 实现真扁平索引；**并把 memctx 移植进 SDK 内部**（§5.6） | §2.8：SDK 6/7 模块是 SQLite 后端，与冻结内核无关；`index_flat.c` 本就是为此预留的占位。**（复审修正）** 原文漏了 memctx —— SDK 的 `MemoryContext` 类型**真的**来自 `include/db/sql/memctx.h`，实现**真的**在 `src/db/sql/memctx.c`，不处理则 `mmsdk` 链接必失败 |
-| **D6** | **主核补 CI** | 主核 50,867 行 / 99 个测试文件（68 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
+| **D6** | **主核补 CI** | 主核 50,867 行 / 95 个测试文件（64 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
 | **D7** | 编译期裁剪用**单一 `MM` 变量**（不是 14 个独立布尔开关） | 2026-10-27 设计明列的反目标：「宏组合爆炸」 |
 | **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,313 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
 | **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,313 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |

@@ -177,7 +177,7 @@
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：`99 个测试：99 通过`（68 unit + 31 integration），0 失败。
+  预期：`95 个测试：95 通过`（64 unit + 31 integration），0 失败。
 
 - [ ] **1.5 写基线文件**
 
@@ -191,8 +191,8 @@
   | 工程轨 ctest 用例数 N | <1.2 输出> |
   | 打开冻结轨后 ctest 用例数 | <1.3 输出> |
   | 冻结轨独占用例数 D | <1.3 − 1.2> |
-  | 主核测试文件数 | 99（68 unit + 31 integration） |
-  | 主核测试结果 | 99 通过 / 0 失败 |
+  | 主核测试文件数 | 95（64 unit + 31 integration） |
+  | 主核测试结果 | 95 通过 / 0 失败 |
   | SDK 用例数 | <ctest -N 里 sdk_* 的条数> |
   | SDK 内存上下文用例数 | 6（memory/ 下 6 个 .cpp） |
 
@@ -787,7 +787,7 @@
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：99 通过 / 0 失败。
+  预期：95 通过 / 0 失败。
 
 - [ ] **4.2 删目录**
 
@@ -948,7 +948,7 @@
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：`✓ 依赖方向正确`；99 通过 / 0 失败。
+  预期：`✓ 依赖方向正确`；95 通过 / 0 失败。
 
 - [ ] **4.11 机械验收：冻结轨真的没了**
 
@@ -1050,11 +1050,30 @@
 
   有命中的就改掉（改成"已退役"或直接删掉该句）。
 
-- [ ] **5.6 提交**
+- [ ] **5.6 订正仓库文档里主核的过期数字**（**计划编写期补入**）
+
+  三处数字都是**实测已过期**的，而它们恰好是"验收基线"性质的描述 —— 错了会让人对不上账：
+
+  | 位置 | 现状 | 实测 | 改成 |
+  |---|---|---|---|
+  | `CLAUDE.md`「主数据库内核」节的构建命令注释 | `sh test/run.sh  # 55 个测试文件，73 处断言` | **95** 个测试文件（`test/unit/` 64 + `test/integration/` 31） | `# 95 个测试文件` |
+  | `CLAUDE.md` 同节的「单文件 ≤ 800 行」条 | 「既有超限文件 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 记在 v1.3 账上」 | 三个文件实测 **614 / 766 / 795** 行，**都已 ≤ 800** | 删掉这个「既有超限文件」从句（或改成「v1.3 账上的历史超限已全部消除」） |
+  | `engine/db/test/run.sh:15` 头部注释 | 「实测 93 个测试里没有任何两个共用同一个 .db 路径」 | **95** 个 | 改成 95 |
+
+  ⚠️ **`run.sh` 那行注释是并发安全性的证据**（"各测试互不干扰"）——
+  数字错一点不影响结论，但复核者会拿它跟 `run.sh` 的实际收集数对账，对不上就会怀疑别的。
+
+  ```powershell
+  cd C:\code\projects
+  Select-String -Path CLAUDE.md -Pattern '55 个测试文件|既有超限文件'
+  Select-String -Path engine/db/test/run.sh -Pattern '93 个测试'
+  ```
+
+- [ ] **5.7 提交**
 
   ```powershell
   git add CLAUDE.md AGENTS.md engine/CMakeLists.txt docs/ engine/db/
-  git commit -m "docs: 冻结轨退役后的文档同步（引擎章节改为只描述主核）"
+  git commit -m "docs: 冻结轨退役后的文档同步（引擎章节改为只描述主核，并订正主核的测试数与超限清单）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
 
@@ -1130,7 +1149,7 @@
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
   ```
 
-  预期：`✓ 依赖方向正确`；99 通过 / 0 失败。
+  预期：`✓ 依赖方向正确`；95 通过 / 0 失败。
 
 - [ ] **6.7 A7：SDK 内存上下文 6 个用例全绿**
 
@@ -1154,7 +1173,7 @@
   | A3 | ctest 用例数 == 基线 N−1 | | | |
   | A4 | SDK 无冻结轨引用 | grep 零命中 | | |
   | A5 | 主核零变化 | `git diff --stat` 空 | | |
-  | A6 | 主核构建 + 99 测试绿 | ✓ 依赖方向正确 | | |
+  | A6 | 主核构建 + 95 测试绿 | ✓ 依赖方向正确 | | |
   | A7 | SDK 内存上下文 6 用例 | 全 PASS | | |
   | A8 | 依赖方向门禁 | `check_deps.sh` ✓ | | |
 
