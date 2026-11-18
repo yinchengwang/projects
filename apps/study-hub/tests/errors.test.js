@@ -280,11 +280,23 @@ test("/api（不带尾斜杠）返回与 /api/nope 一致的 JSON 404", async fu
 
 test("静态文件读失败时按错误类型分流（EPERM 走 500，服务不挂）", async function () {
   const fs = require("node:fs")
-  const original = fs.readFileSync
+  /*
+   * 【为什么 patch 的是 openSync 而不是 readFileSync】
+   *
+   * 静态文件的读取路径已经从 existsSync → statSync → readFileSync
+   * 改成了 openSync → fstatSync → readSync（消除 TOCTOU 窗口）。
+   * 这个测试要验的是"IO 错误按类型分流"，不是"必须调哪个函数" ——
+   * 所以注入点要跟着实现走，落在 openSync 上。
+   *
+   * 注：改实现导致旧注入点失效，是这类测试的固有脆弱性。
+   * 更稳的写法是把 fs 当依赖注入，但那要改 createServer 的签名；
+   * 这里用最小的代价把注入点对齐。
+   */
+  const original = fs.openSync
   const capture = captureConsoleError()
   try {
-    // 模拟 Windows 上文件被独占锁定：readFileSync 抛 EPERM
-    fs.readFileSync = function (file) {
+    // 模拟 Windows 上文件被独占锁定：openSync 抛 EPERM
+    fs.openSync = function (file) {
       if (String(file).indexOf("style.css") !== -1) {
         const err = new Error("EPERM: operation not permitted, open '" + file + "'")
         err.code = "EPERM"
@@ -301,7 +313,7 @@ test("静态文件读失败时按错误类型分流（EPERM 走 500，服务不�
       assert.strictEqual(ok.status, 200)
     })
   } finally {
-    fs.readFileSync = original
+    fs.openSync = original
     capture.restore()
   }
 })

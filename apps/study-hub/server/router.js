@@ -69,11 +69,19 @@ function createRouter() {
   }
 
   /**
-   * @returns {{route: object, params: object}|{methodNotAllowed: true}|null}
-   *   route 命中；methodNotAllowed 表示路径对但方法不对；null 表示没这个路径
+   * @returns {{route: object, params: object}|{methodNotAllowed: true, allowed: string[]}|null}
+   *   route 命中；methodNotAllowed 表示路径对但方法不对（allowed 是该路径支持的
+   *   方法集合，供 405 响应填 Allow 头）；null 表示没这个路径
+   *
+   * 【为什么要把 allowed 一起返回】
+   * RFC 7231 §6.5.5：405 响应**必须**带 Allow 头列出该资源支持的方法。
+   * 不带的话，客户端/抓包工具只能靠猜；而 router 是唯一知道"这条路径上
+   * 有哪些路由注册过"的地方，所以在这里收集最省事、也最不会漏。
    */
   function find(method, urlPath) {
     let pathMatched = false
+    /** @type {string[]} */
+    const allowed = []
     for (const route of routes) {
       const params = route.match(urlPath)
       if (params === null) continue
@@ -81,8 +89,9 @@ function createRouter() {
       if (route.method === method) {
         return { route: route, params: params }
       }
+      if (allowed.indexOf(route.method) < 0) allowed.push(route.method)
     }
-    if (pathMatched) return { methodNotAllowed: true }
+    if (pathMatched) return { methodNotAllowed: true, allowed: allowed }
     return null
   }
 

@@ -26,14 +26,52 @@ const MIME = {
 /**
  * 回 JSON 响应。
  */
-function sendJson(res, status, body) {
+function sendJson(res, status, body, extraHeaders) {
   const text = JSON.stringify(body)
-  res.writeHead(status, {
+  const headers = {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(text),
     "cache-control": "no-store",
-  })
+  }
+  if (extraHeaders) Object.assign(headers, extraHeaders)
+  res.writeHead(status, headers)
   res.end(text)
+}
+
+/**
+ * 一次 open + fstat + read 读取静态文件，避免 existsSync/statSync/readFileSync
+ * 三次调用之间的 TOCTOU 窗口。
+ *
+ * 返回 Buffer；不是普通文件或不存在时返回 null（调用方回 404）。
+ * 其它 IO 错误照常抛出，由调用方统一兜成 500。
+ */
+function readFileChecked(file) {
+  let fd
+  try {
+    // "r" 而不是 "r+"：静态资源只读，不需要写权限（越小越好）
+    fd = fs.openSync(file, "r")
+  } catch (err) {
+    if (err && (err.code === "ENOENT" || err.code === "ENOTDIR" || err.code === "EISDIR")) {
+      return null
+    }
+    throw err
+  }
+  try {
+    // fstat 作用于 fd 而不是路径 —— 即使文件此刻被改名/替换，
+    // 这次统计与随后的 read 仍然针对同一个 inode
+    const st = fs.fstatSync(fd)
+    if (!st.isFile()) return null
+    const buf = Buffer.allocUnsafe(st.size)
+    let off = 0
+    while (off < st.size) {
+      const n = fs.readSync(fd, buf, off, st.size - off, off)
+      if (n === 0) break            // 文件被截短：按实际读到的返回
+      off += n
+    }
+    return off === buf.length ? buf : buf.subarray(0, off)
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 /**
@@ -48,8 +86,12 @@ function isApiPath(urlPath) {
 /**
  * 把 URL 路径映射到 web/ 内的文件；越界或编码非法一律拒绝（返回 null）。
  * 入参是已经切掉查询串的路径。
+ *
+ * webRoot 可覆盖（默认 WEB_DIR）：测试要一个空的静态目录，
+ * 往源码树 web/ 里写文件会污染工作区。
  */
-function resolveStatic(urlPath) {
+function resolveStatic(urlPath, webRoot) {
+  const base = webRoot || WEB_DIR
   let clean
   try {
     clean = decodeURIComponent(urlPath)
@@ -57,8 +99,8 @@ function resolveStatic(urlPath) {
     return null
   }
   const rel = clean === "/" ? "index.html" : clean.replace(/^\/+/, "")
-  const abs = path.resolve(WEB_DIR, rel)
-  if (abs !== WEB_DIR && abs.indexOf(WEB_DIR + path.sep) !== 0) return null
+  const abs = path.resolve(base, rel)
+  if (abs !== base && abs.indexOf(base + path.sep) !== 0) return null
   return abs
 }
 
@@ -70,6 +112,7 @@ function createServer(opts) {
   const options = opts || {}
   const router = createRouter()
   const routes = options.routes || []
+  const webRoot = options.webRoot || WEB_DIR
   /** 常驻的 server 错误监听器只装一次，避免 listen 被调多次时重复挂 */
   let runtimeErrorHandled = false
   routes.forEach(function (route) {
@@ -116,11 +159,18 @@ function createServer(opts) {
     }
 
     if (found && found.methodNotAllowed) {
+      // RFC 7231 §6.5.5：405 必须带 Allow 头列出该资源支持的方法。
+      // allowed 里可能有 HEAD —— 静态资源分支不支持 HEAD，但路由层是纯
+      // "注册了什么就列什么"，不替调用方判断语义。
+      const allow = (found.allowed && found.allowed.length)
+        ? found.allowed.join(", ")
+        : "GET"
       sendJson(res, 405, {
         error: "方法不允许",
         method: req.method,
         path: rawPath,
-      })
+        allow: allow,
+      }, { "allow": allow })
       return
     }
 
@@ -129,7 +179,7 @@ function createServer(opts) {
       return
     }
 
-    const file = resolveStatic(rawPath)
+    const file = resolveStatic(rawPath, webRoot)
     if (!file) {
       res.writeHead(400, { "content-type": "text/plain; charset=utf-8" })
       res.end("400 非法路径")
@@ -137,12 +187,22 @@ function createServer(opts) {
     }
     let body
     try {
-      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      /*
+       * 【为什么不再用 existsSync → statSync → readFileSync】
+       *
+       * 那是三次独立的系统调用，中间任何一刻文件都可能被换掉
+       * （TOCTOU：检查时它在，读的时候已经被替换/删除）。
+       * 已认证/已授权之后的路径检查尤其不能这么写。
+       *
+       * 改成**一次 open + fstat + read**：拿到 fd 之后，
+       * fstat 与 read 针对的是同一个 inode，中间换名不影响这次读取。
+       */
+      body = readFileChecked(file)
+      if (body === null) {
         res.writeHead(404, { "content-type": "text/plain; charset=utf-8" })
         res.end("404 找不到")
         return
       }
-      body = fs.readFileSync(file)
     } catch (err) {
       // Windows 上文件被独占锁定（EPERM/EBUSY）时 statSync/readFileSync 会抛错。
       // 不兜住的话异常会从请求回调逃出去，Node 没有 uncaughtException 处理，整个服务挂掉。
@@ -329,7 +389,7 @@ function createApp(opts) {
   })
   routes.push.apply(routes, sessionRoutes)
 
-  const server = createServer({ routes: routes })
+  const server = createServer({ routes: routes, webRoot: options.webRoot })
 
   return {
     server: server.server,

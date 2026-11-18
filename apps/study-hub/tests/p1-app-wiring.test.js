@@ -192,3 +192,82 @@ test("createApp 的返回值保留 P0 的 unitSnapshot 字段", async function (
     assert.ok(app.unitSnapshot.byId, "要有 byId 索引")
   })
 })
+
+/*
+ * ==================== 405 必须带 Allow 头 ====================
+ *
+ * RFC 7231 §6.5.5：405 Method Not Allowed 的响应**必须**生成 Allow 头，
+ * 列出该资源当前支持的方法。不带的话客户端只能猜 —— 而"路径对、方法错"
+ * 恰恰是最需要告诉对方"该怎么调"的场景。
+ *
+ * 这条是 P0 最终评审留的 Minor 5：当时改了 router 契约没跟上，
+ * 现在 router.find 会带回 allowed，两处一起测。
+ */
+test("405 响应带 Allow 头，且与真实注册的方法一致", async function () {
+  await withApp(async function (base) {
+    // /api/settings 注册了 GET 与 PUT（见 app.sessionRoutes）
+    const res = await fetch(base + "/api/settings", { method: "DELETE" })
+    assert.strictEqual(res.status, 405)
+
+    const allow = res.headers.get("allow")
+    assert.ok(allow, "405 响应必须有 Allow 头")
+    assert.ok(allow.indexOf("GET") !== -1, "Allow 要含 GET：" + allow)
+    assert.ok(allow.indexOf("PUT") !== -1, "Allow 要含 PUT：" + allow)
+
+    const body = await res.json()
+    assert.strictEqual(body.allow, allow, "body.allow 与 Allow 头要一致")
+  })
+})
+
+test("405 的 Allow 头不会把未注册的方法写进去", async function () {
+  await withApp(async function (base) {
+    // /api/session 只有 GET
+    const res = await fetch(base + "/api/session", { method: "POST" })
+    assert.strictEqual(res.status, 405)
+    const allow = res.headers.get("allow")
+    assert.strictEqual(allow, "GET", "只有 GET 注册过，Allow 就只该有 GET：" + allow)
+  })
+})
+
+/*
+ * ==================== 静态文件读取不是 TOCTOU ====================
+ *
+ * 原来是 existsSync → statSync → readFileSync 三次系统调用，
+ * 中间任何一刻文件被换掉，就会读到"检查过的东西"以外的东西。
+ *
+ * 这里测的是**行为等价**（真文件能读、目录回 404、不存在回 404），
+ * 不是竞态本身 —— 竞态窗口没法在单测里稳定复现。
+ * 实现层的一致性（open → fstat → read 用同一个 fd）靠 code review。
+ */
+test("静态文件：真文件 200、目录 404、不存在 404", async function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "study-hub-static-"))
+  const web = path.join(root, "web")
+  fs.mkdirSync(web, { recursive: true })
+  fs.writeFileSync(path.join(web, "hello.txt"), "hi there", "utf8")
+  fs.mkdirSync(path.join(web, "subdir"), { recursive: true })
+
+  const app = createApp({
+    dbPath: ":memory:",
+    learningRoot: root,
+    localBank: null,
+    env: {},
+    envProbe: probeOk,
+    webRoot: web,
+  })
+  const port = await app.listen(0)
+  const base = "http://127.0.0.1:" + port
+  try {
+    const ok = await fetch(base + "/hello.txt")
+    assert.strictEqual(ok.status, 200)
+    assert.strictEqual(await ok.text(), "hi there")
+
+    const dir = await fetch(base + "/subdir")
+    assert.strictEqual(dir.status, 404, "目录不是普通文件，应回 404")
+
+    const missing = await fetch(base + "/nope.txt")
+    assert.strictEqual(missing.status, 404)
+  } finally {
+    await app.close()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

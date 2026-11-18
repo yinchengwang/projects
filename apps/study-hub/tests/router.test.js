@@ -46,6 +46,30 @@ test("路由表：路径对方法不对返回 methodNotAllowed", function () {
   assert.strictEqual(router.find("GET", "/api/other"), null)
 })
 
+test("methodNotAllowed 带回该路径支持的全部方法（供 405 的 Allow 头）", function () {
+  const router = createRouter()
+  router.add("GET", "/api/settings", function () {})
+  router.add("PUT", "/api/settings", function () {})
+  router.add("POST", "/api/settings", function () {})
+
+  const hit = router.find("DELETE", "/api/settings")
+  assert.strictEqual(hit.methodNotAllowed, true)
+  // 三个都登记过，顺序按注册顺序；重复的不会出现两次
+  assert.deepStrictEqual(hit.allowed, ["GET", "PUT", "POST"])
+
+  // 命中方法时不带 allowed（调用方用 route 就行）
+  const ok = router.find("GET", "/api/settings")
+  assert.strictEqual(ok.allowed, undefined)
+})
+
+test("同一路径注册重复方法时 allowed 去重", function () {
+  const router = createRouter()
+  router.add("GET", "/api/x", function () {})
+  router.add("GET", "/api/x", function () {})
+  const hit = router.find("POST", "/api/x")
+  assert.deepStrictEqual(hit.allowed, ["GET"])
+})
+
 test("readJsonBody 解析 JSON", async function () {
   const body = await readJsonBody(fakeReq('{"a":1,"b":"x"}'))
   assert.deepStrictEqual(body, { a: 1, b: "x" })
