@@ -256,6 +256,31 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 >    **没有**进 `common/config.h` 的页类型枚举（该枚举止于 `PT_FT_CATALOG = 0x14`）。
 >    这正是「模态自持页类型、不污染 L0」的正面样板，应在 §6.4 明说并保持。
 
+### 2.13 计划编写期的复核发现（2026-11-18）
+
+写三份实施计划（W-A 冻结轨退役 / W-B 主核工程组织 / W-C 八模态对称化）时逐文件核对源码，
+发现下列与本设计文档**不一致**或**未记录**的地方。每一条都已落到对应计划里；
+本节记录**证据**与**结论**，供复审逐条对照。
+
+| # | 发现 | 证据 | 结论 | 落在 |
+|---|---|---|---|---|
+| R-01 | **`faiss_hnsw.h` 这个头本身住在冻结轨的源码树里** | `engine/src/db/index/vector_index/faiss_hnsw/faiss_hnsw.h` | §2.8 只说「`vectors.c` 依赖 faiss_hnsw」。实情更糟：它 include 的是一个**将被整棵删掉的头** | W-A Task 3 |
+| R-02 | **`vector_index_selector.h` 在 `engine/include/db/`，实现却在冻结轨** | 头与实现分属两侧 | 删哪一边都不够 ⇒ 头与实现**必须一起**移植 | W-A Task 3 |
+| R-03 | **`memctx.h` 依赖 `db/parser/sql/parsenodes.h`** | `engine/include/db/sql/memctx.h` include 它 | 该头**也在删除清单里** ⇒ 移植时不能保留（它实际只用 114 个 `NodeTag` 值里的 2 个） | W-A Task 2 |
+| R-04 | **blob 与 graph 的 REPL 不在 `repl_<m>.c` 里** | `handle_blob` / `handle_graph` 是 `src/main.c` 内的 `static` 函数 | §6.1 的「③ REPL 族 = `src/repl_<m>.c`」对这两个模态**不成立** ⇒ 对称化动作清单要加两条：搬成 `repl_blob.c` / `repl_graph.c` | §6.1（已补） |
+| R-05 | **§5.6 的「5 个 memctx 测试」是笔误** | `engine/test/sdk/memory/` 实有 **6** 个 `.cpp` | §2.9 的 6 行清单是对的；§5.6 的两处「5 个」已改正 | §5.6（已改） |
+| R-06 | **doc 模态的完整计数是 3,787 行，不是 2,829** | `src/modalities/doc/` 10 个文件（.c + .h） | 2,829 是早期**部分计数**。⚠️ §2.2 该表的合计口径与本次测量**不同**，故**不做加减**（避免改出一组自相矛盾的总和）—— 权威数字由 W-B 的 `tools/measure_build.sh` 产出 | W-B Task B5 |
+| R-07 | **`engine/test/index/` 的源码 include `<index/...>`** | 这些路径只能经 `engine/include/db/` 解析 | 删掉 `engine/include/db/` ⇒ 这 8 个文件**连编译都过不了**，不只是链接目标消失 | W-A Task 4 |
+| R-08 | **`ALLOCSET_PRESET_SMALL高频` 是混写标识符** | `engine/include/db/sql/memctx.h:58` 等 4 处 | 移植时**逐字保留** —— 改名要连带改测试，且属"顺手优化相邻代码" | W-A Task 2 |
+| R-09 | **`SQL_MAX_COLS` 是 32，注释仍写 16** | `query/parser.h:36`、`query/exec_internal.h:69-72` | 既有文档债，**本轮不改**（精准修改纪律），但新代码按 32 写 | W-C Task C1 |
+| R-10 | **裁剪点是五处不是四处** | `src/main.c` 直接调用 `handle_vec` / `handle_ft` / `handle_geo` / `handle_ts` 与 `static` 的 `handle_blob` / `handle_graph` | §4.2 补第 5 处（REPL 入口级）；且 `db_internal.h` 的**模态函数声明**也要守卫 —— 否则 `db_ft_recovery_hook` 的注册点链接失败 | §4.2（已补） |
+| R-11 | **`storage/gstore*` 是 graph 与 vector **共用**的底座** | `vector_am.c:125` 调 `gstore_cursor_init(vstore_meta(...))` | 它**不属于 graph**，不能搬进 `modalities/graph/`，必须留在 L1 | W-C Task C3 |
+| R-12 | **`test/run.sh` 硬编码了 `build/`** | `OBJS=$(find build -name '*.o' ...)` | 裁剪 profile 的对象在 `build_mm_<m>/` ⇒ `run.sh` 必须读 `OBJ_DIR` 环境变量 | W-B Task B3 |
+| R-13 | **`make bench` 只在 `MM=full` 下可用** | bench 目标链 `vec_bench` / `graph_bench` / `ft_bench` / `geo_bench` / `ts_bench` | 裁剪 profile 下要**显式拒绝**（给出可读信息），而不是让它链接失败 | W-B Task B2 |
+| R-14 | **主核测试是 99 个文件（68 unit + 31 integration）** | `test/run.sh` 的 glob 实测 | `run.sh` 头部注释写的「93 个测试」也已过期 ⇒ 所有基线数字按 99 记 | W-A / W-B 基线 |
+| R-15 | **`SQL_MAX_COLS` 定义在 `query/parser.h`，而 `spi/` 要用它** | 依赖方向是 L3→L3 但**方向反了** | 挪到 `spi/table_opener.h` 或 `common/types.h`，`query/parser.h` 反过来 include | W-C Task C1 |
+| R-16 | **`db.c` 766 行 / `main.c` 670 行 / `db_instance.c` 232 行** | 实测 | 都在 800 行硬规则内，但 `db.c` 已接近上限 ⇒ C-1 往里加 opener 安装点时**不要**再堆代码 | W-C Task C1 |
+
 ---
 
 ## 3. 判决
@@ -267,12 +292,12 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | **D3** | **不重构 L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）；**模态归属的搬迁由 D9 管辖** | §2.1/§2.3：接口面已收敛到 1,313 行薄契约、零 internal 泄漏。**（复审修正）** 原文只写「不重构目录」，但 `storage/` 就是 L1 底座，把 `blob.c` 搬走属底座改动 —— 两个判决会在实施时打架，故收窄为「不动 L1–L3 的**机制与形状**」 |
 | **D4** | **删除** `engine/src/db/` 全树（524 文件 / 173,719 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3.4 倍且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
 | **D5** | **保留 SDK，去冻结化**：摘掉 `faiss_hnsw`/`mm_vector_index`/`sql_engine` 三个链接依赖；`sdk/vectors` 的 HNSW 后端改为 `index_flat.c` 实现真扁平索引；**并把 memctx 移植进 SDK 内部**（§5.6） | §2.8：SDK 6/7 模块是 SQLite 后端，与冻结内核无关；`index_flat.c` 本就是为此预留的占位。**（复审修正）** 原文漏了 memctx —— SDK 的 `MemoryContext` 类型**真的**来自 `include/db/sql/memctx.h`，实现**真的**在 `src/db/sql/memctx.c`，不处理则 `mmsdk` 链接必失败 |
-| **D6** | **主核补 CI** | 主核 50,867 行 / 94 个测试文件当前**零 CI 覆盖**，而冻结轨在 CI 里 |
+| **D6** | **主核补 CI** | 主核 50,867 行 / 99 个测试文件（68 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
 | **D7** | 编译期裁剪用**单一 `MM` 变量**（不是 14 个独立布尔开关） | 2026-10-27 设计明列的反目标：「宏组合爆炸」 |
 | **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,313 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
 | **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,313 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |
 | **D10** | **给 SPI 加第四个契约 `TableOpener`**：关系模态的适配器进 L4，执行器不再 include 任何模态头 | 关系模态是唯一被执行器直接调用的模态（`exec_scan.c` 的 `heap_am_build`）。它是「底座型模态」，实现横跨 L1–L3，搬不进 L4 —— 只有把「表打开」抽象成契约才能真正对称。**这也是 v1.7 跨模态联合查询的前置** |
-| **D11** | **文档模态功能补全**：执行 `PLAN-v1.6` 步骤 3~6，把 JSON 接进 SQL（`json_match` + 路径索引） | §2.12：JSONB 编解码/路径/溢出链已实现且测试全绿（2,829 行），但 `db.h` 里零个 `db_json_*`、无路径索引、未接执行器 —— 八模态里唯一功能未闭环的 |
+| **D11** | **文档模态功能补全**：执行 `PLAN-v1.6` 步骤 3~6，把 JSON 接进 SQL（`json_match` + 路径索引） | §2.12：JSONB 编解码/路径/溢出链已实现且测试全绿（3,787 行），但 `db.h` 里零个 `db_json_*`、无路径索引、未接执行器 —— 八模态里唯一功能未闭环的 |
 
 ### 3.1 为什么 D1 不是「凑合」而是正解
 
@@ -317,7 +342,7 @@ engine/db/
 - **闭包校验在配置期做**：profile 声明的模态集合必须对其依赖闭包封闭，否则 `make` 直接报错并打印差集。
   （不允许「选了 vector 却没编它的依赖」这种半配置状态。）
 
-**裁剪点只有四处**，不做满地 `#ifdef`（2026-10-27 设计的反目标）：
+**裁剪点只有五处**，不做满地 `#ifdef`（2026-10-27 设计的反目标）：
 
 | # | 位置 | 做法 |
 |---|---|---|
@@ -325,6 +350,22 @@ engine/db/
 | 2 | 实例结构体级 | `src/db_internal.h` 的 per-modality 字段与 `#include` 用 `#if DB_HAS_<MOD>` 包裹 |
 | 3 | 实例初始化级 | `src/db.c` 里 `db_vec_open` / `db_graph_open` / … 的调用点用 `#if DB_HAS_<MOD>` 包裹 |
 | 4 | **实例释放级** | `src/db_instance.c` 里的 `db_<m>_close` / `blob_store_destroy` / `graph_destroy` 调用点 —— **复审补入** |
+| 5 | **REPL 入口级** | `src/main.c` 里的 `handle_<m>` 派发与 `#include "repl_<m>.h"` —— **计划编写期补入** |
+
+> **（计划编写期补入的第 5 处）**：`main.c` 是命令行 REPL 的前端，**直接**调用各模态的
+> `handle_*`：外部的 `handle_vec` / `handle_ft` / `handle_geo` / `handle_ts`
+> （定义在 `repl_*.c`），以及**定义在 `main.c` 自己内部**的 `handle_blob` / `handle_graph`。
+> 不裁它 ⇒ 裁剪出来的二进制链接不过（`repl_vec.h` 被裁掉了，但 `main.c` 还在 include 它）。
+> ⚠️ `handle_blob` / `handle_graph` 是 `static` 函数 —— 整个函数体连同它的 static 辅助函数
+> 要一起包进 `#if`，否则 `-Werror` 的 `-Wunused-function` 会报「未使用的静态函数」。
+
+> **（计划编写期补入的第 2 处补充）**：`db_internal.h` 里除了字段与 `#include`，
+> 还有**模态专属的函数声明**（`db_vec_open` / `db_ft_open` / `db_ts_open` / `db_geo_open` /
+> `db_graph_register` / `db_ft_recovery_hook` / `GeoPtEntry` / `GeoTab` / `FtReplaySet` …）。
+> 它们也必须用 `#if DB_HAS_<MOD>` 包起来 ——
+> 不包不会编译失败（声明不存在的函数是合法的），但会留下误导性残留；
+> 且 `db_ft_recovery_hook` 的**注册点**（`db.c` 里的 `recovery_set_hook(db_ft_recovery_hook, inst)`）
+> 不守卫就会**链接失败**。
 
 > **复审补入的第 4 处（重要）**：模态的生命周期有**两半** —— 打开在 `db.c`，**关闭在 `db_instance.c`**，
 > 而且 `db_instance.c` 有**两条关闭路径**（正常关闭 + 错误回滚）。实测该文件里的模态调用点共 **10 处**：
@@ -349,10 +390,20 @@ engine/db/
 
 ### 4.3 每模态 smoke 目标（独立可用的机械证明）
 
-`make MM=vector` 额外产出 `build/smoke_vector.exe`，**只链接**该模态 + L0–L3 底座 + 模态自己的公开 API。
+`make smoke` 产出 8 个可执行文件（`build/smoke_<m>.exe`），每个**只链接**：L0–L3 底座
++ 该模态自己的源文件 + **只打开该模态的组合根**（`db.o` / `db_instance.o`，按模态单独编译一份）。
 
 它存在的唯一意义是**链接期证明**：如果这个模态偷偷依赖了别的模态，链接会失败。
 内容：初始化 → 建一个最小对象 → 写一条 → 读回 → 断言 → 关闭。
+
+> **（计划编写期修正）为什么要单独编译一份根**：组合根 `db.c` / `db_instance.c` 调用各模态的
+> open/close。若直接用 full 构建里的根对象文件，链接器会把**所有**模态的符号都拖进来 ⇒
+> 证明作废。所以每个模态单独编一份根（`-DDB_HAS_<MOD>` 只开它自己）——
+> 多出的代价是 8 × 2 个小文件的重编。
+>
+> **（计划编写期修正）smoke 的产出方式**：`make smoke`（在 `MM=full` 下）产出全部 8 个；
+> `make MM=vector` 产出 `build_mm_vector/smoke_vector.exe`。
+> 两种都要有 —— 前者证明"8 个模态各自独立"，后者证明"这个裁剪配置是能用的"。
 
 `make MM=full` 时产出**全部 8 个** smoke（完整列表见 §6.5）：
 `smoke_relational` / `smoke_blob` / `smoke_graph` / `smoke_vector` / `smoke_ft` /
@@ -469,7 +520,7 @@ engine/db/
 | `engine/src/sdk/` | 7 个模块，去冻结化后保留（D5） |
 | `engine/test/{algo,self_made_cpp}/` | §2.9 独立部分 |
 | `engine/test/kbase/` | 7 文件 —— **全部被注释掉**（`test/kbase/CMakeLists.txt` L4–L43 无一行生效），零注册目标。留着无害，但也无意义；本设计**不动它**（不属本设计范围） |
-| `engine/test/sdk/memory/` 的 5 个 memctx 测试 | §5.6 移植后是验收依据 |
+| `engine/test/sdk/memory/` 的 6 个 memctx 测试 | §5.6 移植后是验收依据 |
 | `engine/test/sdk/` 其余 29 个独立文件 | |
 | `engine/db/`（主核） | 本设计的主体 |
 
@@ -568,7 +619,7 @@ B-5 摘链接这步走不下去。
 |---|---|---|
 | **A. 把 memctx 移植进 `sdk/core/`**（**采纳**） | 742 行 `memctx.c` + 354 行 `memctx.h` 迁入 SDK | 见下方可行性论证 |
 | B. 主核提供等价分配器 | 主核是 Makefile 工程、无 `.a` 产物 | 跨构建体系，CMake 侧链不上 → **不可行** |
-| C. 删掉 SDK 的 memctx 层 | 删 6 个文件的 memctx 调用 + 5 个测试 | 破坏 SDK 公开 API —— 这是「砍功能」而非「去冻结化」，且 §2.9 的 5 个测试就是验收依据 → **不采纳** |
+| C. 删掉 SDK 的 memctx 层 | 删 6 个文件的 memctx 调用 + 6 个测试 | 破坏 SDK 公开 API —— 这是「砍功能」而非「去冻结化」，且 §2.9 的 5 个测试就是验收依据 → **不采纳** |
 
 **方案 A 的可行性论证（关键）**：`memctx.h` 对冻结内核的依赖**只有一个** ——
 `#include "db/parser/sql/parsenodes.h"`，而它需要那个文件的**唯一**原因是
@@ -587,9 +638,9 @@ B-5 摘链接这步走不下去。
 | M-3 | `include/sdk/impl/mmdb_memctx.h` 的 `#include "db/sql/memctx.h"` → `#include "core/memctx.h"`；同步订正 L116 那段过期注释（原文说「已通过 `#include "db/sql/memctx.h"` 自动暴露声明」—— 引用路径变了） |
 | M-4 | `mmdb_mem_register_resource` 的声明与定义一并迁入 SDK |
 | M-5 | `src/sdk/CMakeLists.txt` 把 `memctx.c` 加进 `mmsdk` 的源文件列表 |
-| M-6 | `engine/test/sdk/memory/` 的 5 个测试**保留**，作为 M-1~M-5 的验收依据 |
+| M-6 | `engine/test/sdk/memory/` 的 6 个测试**保留**，作为 M-1~M-5 的验收依据 |
 
-**验收**：`nm -u libmmsdk.a | grep memctx` 零命中（§5.5 第 3 条）+ 5 个 memctx 测试全绿。
+**验收**：`nm -u libmmsdk.a | grep memctx` 零命中（§5.5 第 3 条）+ 6 个 memctx 测试全绿。
 
 > **这一步的独立价值**：移植后 SDK **彻底不依赖**冻结内核 —— 冻结轨才真的可以整棵拔掉，
 > 而不只是「让 CMake 不再链接它」。
@@ -606,8 +657,17 @@ B-5 摘链接这步走不下去。
 |---|---|---|---|---|---|---|---|---|---|
 | ① SPI 适配器 | `src/modalities/<m>/` | `relational/heap_am.c` **← 搬**（S3） | `blob/blob_am.c` **← 搬**（S5） | ✓ | ✓ | ✓ | ✓ | ✓ | **无**（寄生模态，设计如此） |
 | ② 公开 API | `src/db_<m>.c` | SQL 路径（无独立文件，见 S4） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **`db_json.c` 新建** |
-| ③ REPL 族 | `src/repl_<m>.c` | SQL | BLOB ✓ | GRAPH ✓ | VEC ✓ | FT ✓ | GEO ✓ | TS ✓ | **`repl_json.c` 新建** |
+| ③ REPL 族 | `src/repl_<m>.c` | SQL | BLOB ⚠ | GRAPH ⚠ | VEC ✓ | FT ✓ | GEO ✓ | TS ✓ | **`repl_json.c` 新建** |
 | ④ 模态文档 | `MODALITIES.md` 对应节 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓（补契约面小节） |
+
+> **（计划编写期发现）blob 与 graph 的 REPL 是两个例外**：它们的 REPL 实现**不在** `repl_<m>.c` 里，
+> 而是**直接写在 `src/main.c` 内部**（`handle_blob` 与 `handle_graph` 两个 `static` 函数）。
+> 其余五个模态的 REPL 才是独立的 `repl_<m>.c`（`repl_vec.c` / `repl_ft.c` / `repl_geo.c` / `repl_ts.c`）。
+>
+> ⇒ **对称化的动作清单要加两条**：把 `handle_blob` / `handle_graph` 从 `main.c` 里**搬出去**
+> 成 `src/repl_blob.c` / `src/repl_graph.c`。
+> ⚠️ 这两条与 §4.2 的第 5 处裁剪点直接相关 —— 搬完之后 `main.c` 里就只剩**派发**，
+> 裁剪点只需包住派发分支（`static` 辅助函数随文件一起搬走，不会有 `-Wunused-function` 问题）。
 
 **实现目录不在对称范围内** —— 它由**分层**决定，不由「模态身份」决定：
 
@@ -630,26 +690,78 @@ B-5 摘链接这步走不下去。
 **判决 D10：新增 `src/spi/table_opener.h`**
 
 ```c
-/* 打开一张「catalog 真表」并构造它的 StorageAM。
- * 关系模态是当前唯一使用者，但它住在 L4 —— 执行器只认这个接口。 */
+/* 不透明 ctx 缓冲区的上限。 */
+#define SPI_AM_CTX_MAX 256
+
+/* 打开器的产物。调用方持有，必须活到本次查询结束。 */
 typedef struct {
-    /* 构造表 tid 的 AM。
-     * ctx_out 指向调用方提供的不透明缓冲区，其大小恒为 SPI_AM_CTX_MAX；
-     * 适配器必须静态断言自己的 ctx 不超过该上限（超限即编译错）。 */
-    int  (*build)(void *inst_ctx, u32 tid, StorageAM *am_out,
-                  void *ctx_out);
-    void *inst_ctx;              /* 实例级上下文，由组合根持有 */
-} TableOpener;
+    StorageAM      *am;        /* 这张表的 StorageAM */
+    const ColDesc  *cols;      /* 列定义（指向调用方的 cols_buf） */
+    int             ncols;
+    const IndexInfo *idxs;      /* 索引列表（指向调用方的 idxs_buf） */
+    int             nidx;
+    u32             tid;       /* catalog 表 id；虚拟表为 0 */
+    bool            is_virtual;
+} TableOpenResult;
+
+typedef struct TableOpener TableOpener;
+
+struct TableOpener {
+    const char *kind;          /* "catalog" / "virtual" —— 仅诊断用 */
+
+    /*
+     * 按表名打开一张表。
+     *
+     * owner      : 打开器的宿主（catalog / SpiRegistry / ...）
+     * out        : 产物（调用方持有）
+     * cols_buf   : 调用方给的列定义缓冲（至少 SQL_MAX_COLS 项 ColDesc）
+     * idxs_buf   : 调用方给的索引列表缓冲（至少 SQL_MAX_COLS 项 IndexInfo）
+     * priv       : 调用方给的私有状态缓冲
+     * priv_bytes : priv 的字节数
+     *
+     * out->cols / out->idxs 指向 cols_buf / idxs_buf（不是打开器自己的内存）——
+     * 这样调用方「自持副本」的纪律（v1.2 步骤 1）继续成立。
+     *
+     * 返回 OK；表不存在返回 E_NOTFOUND。
+     */
+    int (*open)(const TableOpener *op, void *owner, const char *name,
+                TableOpenResult *out,
+                ColDesc *cols_buf, IndexInfo *idxs_buf,
+                void *priv, size_t priv_bytes);
+
+    /* 按表 id 打开（只有 catalog opener 支持；虚拟表返回 E_NOTSUP）。 */
+    int (*open_by_id)(const TableOpener *op, void *owner, u32 tid,
+                      TableOpenResult *out,
+                      ColDesc *cols_buf, IndexInfo *idxs_buf,
+                      void *priv, size_t priv_bytes);
+
+    /* 私有状态需要多少字节。 */
+    size_t priv_bytes;
+};
 ```
 
-- **不透明 ctx 缓冲区**：`SPI_AM_CTX_MAX = 256`（实测 `HeapAmCtx` ≈ 184 字节，附录 C）。
+> **（计划编写期修正）契约比初稿多了三样东西**，都是为了补上初稿**装不下**的东西：
+>
+> | 初稿 | 缺什么 | 为什么初稿装不下 |
+> |---|---|---|
+> | 只返回 `StorageAM` | **列定义 + 索引列表** | `catalog_table_cols` 的签名是「**写进调用方给的数组**」，它不返回指针 ⇒ 列定义本来就必须落在调用方的缓冲里 |
+> | 只按 `tid` 打开 | **按表名打开** | 执行器的主路径是 `resolve_table(name)`；`tid` 路径只有 UPDATE / DELETE 用 |
+> | 固定 `ctx_out` | **`priv` + `priv_bytes`** | 关系模态的 per-query 私有状态是 `HeapAmCtx`(≈184 B) **加** 一个 `StorageAM` —— 一个 `ctx_out` 装不下两样 |
+>
+> **不透明 ctx 缓冲区**：`SPI_AM_CTX_MAX = 256`（实测 `HeapAmCtx` ≈ 184 字节，附录 C）。
   `TableCtx.am_ctx` 从 `HeapAmCtx` 改成 `u8 am_ctx_buf[SPI_AM_CTX_MAX]` →
   **执行器不再 include 任何模态头**。
   - **（复审修正）接口里不传 `ctx_cap`**：上限是编译期常量，运行时再传一个 cap 没有意义，
     反而给误用留了空间（适配器可以收到一个更小的 cap 然后写超界）。
     正确做法是**编译期校验**：`_Static_assert(sizeof(HeapAmCtx) <= SPI_AM_CTX_MAX, "...")`
     —— 超限直接编译错，而不是运行期才发现。接口更小，且不可误用。
-- **组合根（`db.c`）持有**：实例级保存一个 `TableOpener`，指向关系模态提供的实现。
+- **两个实现**：
+  - `rel_table_opener`（关系模态提供，在 `src/modalities/relational/rel_opener.c`）——
+    `catalog → heap → heap_am_build`；
+  - `spi_table_opener`（SPI 注册表提供，在 `src/spi/table_opener.c`）——
+    `名字 → 已注册的 StorageAM`。
+  执行器只按顺序问这两个，**谁先答上就用谁**（顺序 = catalog 优先，与旧实现一致）。
+- **组合根（`db.c`）持有**：实例级保存这两个 `TableOpener` 指针，装进 `Db` 结构体。
 - **门禁加强**：`check_deps.sh` 增加一条 —— `src/query/` 下**禁止 include 任何模态头**
   （`heap|blob|graph|vec|ft|geo|ts|json` 的 `#include` 行）。可机械验证，
   与 PLAN-v1.6 的 A7 审计同款思路，但提前到 C 阶段做。
@@ -682,6 +794,7 @@ typedef struct {
 | S7 | 文档模态公开 API | — | 新增 `src/db_json.c` + `include/db.h` 的 `db_json_*` | 依赖 C-4 |
 | S8 | 文档模态 REPL 族 | — | 新增 `src/repl_json.c` + `DOC` 动词族 | 依赖 C-4 |
 | S9 | 门禁加强 | `tools/check_deps.sh` | ① `src/query/` 禁 include 模态头（**只查 `#include` 行**）；② 模态适配器必须在 `src/modalities/` 下 | 可机械验证 |
+| **S10** | **blob / graph 的 REPL 归位**（**计划编写期补入**） | `src/main.c` 内的 `static handle_blob` / `static handle_graph` | `src/repl_blob.c` / `src/repl_graph.c` | 见 §6.1 的备注：这两个模态的 REPL **原本就不在** `repl_<m>.c` 里 ⇒ 对称性缺这两条。搬完之后 `main.c` 里只剩**派发**，§4.2 的第 5 处裁剪点也变干净 |
 
 **S3 + S6 做完后的 `spi/` 目录**（只剩**纯契约 + 机制**）：
 
@@ -691,8 +804,13 @@ src/spi/
 ├── index_am.h        索引 AM 契约（v0.9 定稿）
 ├── pushdown.h        谓词下推契约（v0.9 定稿）
 ├── table_opener.h    表打开契约（D10 新增）
+├── table_opener.c    注册表侧的 opener 实现（纯机制，不含任何模态）
 └── registry.{c,h}    虚拟表注册表（实例级机制）
 ```
+
+> **（计划编写期修正）`spi/` 里不能有任何模态的东西** —— 这条由门禁守住
+> （`forbid src/spi heap_am btree_am blob_am`）。
+> 关系模态与 blob 的适配器搬进 `src/modalities/` 后，`spi/` 只剩契约与机制。
 
 ### 6.4 文档模态的功能补全（`PLAN-v1.6` 步骤 3~6）
 
@@ -841,7 +959,15 @@ Makefile 的闭包校验器算出实际集合；差集非空直接报错。
 W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-B 的 P0（主核 CI）兜底，
 否则删除之后没有任何自动化手段能证明「主核没被碰坏」。
 
+| 计划 | 计划文件 | Task 数 | 勾选项数 |
+|---|---|---|---|
+| W-A 冻结轨退役 | `docs/superpowers/plans/2026-11-18-frozen-track-retirement.md` | 6 | 51 |
+| W-B 主核工程组织 | `docs/superpowers/plans/2026-11-18-main-kernel-build-organization.md` | 7 | 44 |
+| W-C 八模态对称化 | `docs/superpowers/plans/2026-11-18-eight-modality-symmetry.md` | 7 | 47 |
+
 ### 计划 W-A：冻结轨退役（§5，风险最高、依赖最多）
+
+> 计划文件：`docs/superpowers/plans/2026-11-18-frozen-track-retirement.md`
 
 0. **前置**：W-B 的 P0（主核 CI）已合入 —— 有了红灯才敢删
 1. 打 tag `pre-frozen-track-removal`
@@ -858,18 +984,23 @@ W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-
 
 ### 计划 W-B：主核工程组织（§4）
 
+> 计划文件：`docs/superpowers/plans/2026-11-18-main-kernel-build-organization.md`
+
 1. **P0**：主核 CI（Linux + Windows 两个 job）← **W-A 的前置**
-2. P1：`MM` 编译期开关 + 闭包校验（**四处裁剪点**，§4.2）
+2. P1：`MM` 编译期开关 + 闭包校验（**五处裁剪点**，§4.2）
 3. P2：每模态 smoke + `measure_build.sh`
 4. 写 `docs/arch/db/multimodal-build-baseline.md`（实测基线）
 
 ### 计划 W-C：八模态对称化与功能补全（§6）
+
+> 计划文件：`docs/superpowers/plans/2026-11-18-eight-modality-symmetry.md`
 
 1. **C-1**：S1 + S2 —— SPI 第四契约 + 执行器一次性脱钩（**风险最高的一步，先做**）
 2. **C-2**：S3 + S6 —— 关系模态适配器 + B+tree 适配器归位
 3. **C-3**：S5 —— blob 搬进 `modalities/blob/`
 4. **C-4**：PLAN-v1.6 步骤 3~6 —— 文档模态接 SQL（含 S7 / S8 + **A7 落点 3/4/5 的 parser 能力扩展**）
 5. **C-5**：S9 门禁加强 + `MM` 扩到 8 个 profile + 8 个 smoke
+6. **C-6**：S10 —— blob / graph 的 REPL 从 `main.c` 搬进 `repl_blob.c` / `repl_graph.c`（**计划编写期补入**）
 
 **执行顺序**：
 
