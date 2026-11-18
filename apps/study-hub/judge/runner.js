@@ -250,8 +250,11 @@ async function judgeCardScript(ctx) {
 
   const scriptAbs = path.resolve(learningRoot, scriptRel)
   if (!fs.existsSync(scriptAbs)) {
-    // 契约 §12：脚本缺失是 compile_error（附中文说明），不是 500
-    return makeUnitResult("compile_error", 0, 0, started, null,
+    // 契约 §12：脚本缺失是 compile_error（附中文说明），不是 500。
+    // totalCases 用 asserts.length（**不是 0**）：这条路径上断言集是**已知的**（隐含两条 + 单元自带），
+    // 只是还没跑。返回 0 会让 UI 显示「0/0」，与同函数里其它 compile_error 分支
+    // （「没配脚本」「没连 learning 仓」都给 asserts.length）不一致。
+    return makeUnitResult("compile_error", 0, asserts.length, started, null,
       "断言脚本不存在：" + scriptRel, "", "", "")
   }
 

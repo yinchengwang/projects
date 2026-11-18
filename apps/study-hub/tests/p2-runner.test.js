@@ -202,6 +202,9 @@ test("卡类：断言脚本不存在 → compile_error（不是 500，不是抛�
     assert.strictEqual(r.verdict, "compile_error", r.message)
     assert.ok(r.message.indexOf("断言脚本不存在") !== -1, r.message)
     assert.ok(r.message.indexOf("testcard.assert.py") !== -1, r.message)
+    // totalCases 要是「断言集的大小」而不是 0 —— 断言集是已知的（隐含两条 + 单元自带），
+    // 只是还没跑。给 0 会让 UI 显示「0/0」，与其它 compile_error 分支不一致。
+    assert.strictEqual(r.totalCases, 2, "隐含两条断言应当算进 totalCases：" + String(r.totalCases))
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
