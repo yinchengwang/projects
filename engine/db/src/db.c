@@ -170,6 +170,51 @@ static int wal_flush_before_page(void *ctx, u32 page_id, u32 page_lsn)
  * 这是「实例」的生命周期起点：开缓冲池、开 WAL、跑恢复、开 catalog。
  * 之后可以用 db_connect 开更多连接，共享这一切。
  */
+/*
+ * db_open 失败路径的唯一清理点。
+ *
+ * ==================== 为什么所有失败路径共用这一个 ====================
+ *
+ * 原来这里散着 **10 份**手写的清理块，每份按"初始化到哪一步"列出该释放的
+ * 东西。问题是：加一个模态就得多改 10 处，而且**顺序**（先 pager 后 wal）
+ * 是靠人记住的 —— 坑 M4-48 的教训正是这条顺序写反会 use-after-free
+ * （pager_close 刷脏页会触发 WAL 钩子，而 wal 已被 free）。
+ *
+ * 现在所有析构函数都是 NULL 安全的：
+ *   db_ft_close / db_geo_close / db_ts_close  检查 inst->xxx
+ *   graph_destroy / spi_registry_destroy / blob_store_destroy / catalog_close / wal_close
+ *                                             全部 if (!p) return
+ *   txn_clog_close                            检查 t->clog_fp
+ *   free(NULL)                                合法
+ * 所以"提前释放未初始化的东西"是安全的，一个函数就能覆盖全部阶段。
+ *
+ * 顺序（RULE，不许改）：
+ *   1. 模态（它们持有 pager 的页引用）
+ *   2. catalog（btree 持有 pager 引用）
+ *   3. txn_clog（clog 文件）
+ *   4. **pager 在 wal 之前**（pager_close 刷脏页 → WAL 钩子 → wal_fsync）
+ *   5. 最后 free 路径与结构体
+ */
+static void open_fail_cleanup(DbInstance *inst, DB *db, Pager *pg)
+{
+    db_ft_close(inst);
+    db_geo_close(inst);
+    db_ts_close(inst);
+    graph_destroy(inst->graph);
+    spi_registry_destroy(inst->reg);
+    blob_store_destroy(inst->blobs);
+    catalog_close(inst->cat);
+    txn_clog_close(&inst->txns);
+
+    pager_close(pg);        /* 必须在 wal_close 之前，见上 */
+    wal_close(inst->wal);
+
+    free(inst->clogpath);
+    free(inst->walpath);
+    free(inst);
+    free(db);
+}
+
 db_err db_open(const char *path, DB **out)
 {
     if (!path || !out)
@@ -258,19 +303,14 @@ db_err db_open(const char *path, DB **out)
     size_t plen = strlen(path);
     inst->walpath = malloc(plen + 8);
     if (!inst->walpath) {
-        pager_close(pg);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return DB_E_IO;
     }
     snprintf(inst->walpath, plen + 8, "%s-wal", path);
 
     rc = wal_open(inst->walpath, &inst->wal);
     if (rc != OK) {
-        pager_close(pg);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -296,11 +336,7 @@ db_err db_open(const char *path, DB **out)
     if (!datafile_exists && wal_nrecords(inst->wal) > 0) {
         rc = wal_reset(inst->wal);
         if (rc != OK) {
-            pager_close(pg);
-            wal_close(inst->wal);
-            free(inst->walpath);
-            free(inst);
-            free(db);
+            open_fail_cleanup(inst, db, pg);
             return map_rc(rc);
         }
     }
@@ -338,13 +374,7 @@ db_err db_open(const char *path, DB **out)
      */
     inst->clogpath = malloc(plen + 10);
     if (!inst->clogpath) {
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return DB_E_IO;
     }
     snprintf(inst->clogpath, plen + 10, "%s-clog", path);
@@ -354,12 +384,7 @@ db_err db_open(const char *path, DB **out)
 
     rc = txn_clog_open(&inst->txns, inst->clogpath);
     if (rc != OK) {
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -389,13 +414,7 @@ db_err db_open(const char *path, DB **out)
     rc = recovery_scan_xids(inst->wal, &xs);
     if (rc != OK) {
         recovered_state_free(&xs);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
     for (u32 i = 0; i < xs.cap; i++) {
@@ -470,13 +489,7 @@ db_err db_open(const char *path, DB **out)
     if (rc != OK) {
         db_ft_replay_free(&inst->ft_replay_redo);
         db_ft_replay_free(&inst->ft_replay_undo);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -492,29 +505,14 @@ db_err db_open(const char *path, DB **out)
      */
     rc = db_ft_open(inst);
     if (rc != OK) {
-        db_geo_close(inst);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
     Catalog *cat = NULL;
     rc = catalog_open(pg, db_wal_hook, inst, &cat);
     if (rc != OK) {
-        db_ft_close(inst);
-        db_geo_close(inst);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
     inst->cat = cat;
@@ -532,16 +530,7 @@ db_err db_open(const char *path, DB **out)
      */
     rc = blob_store_create(pg, db_wal_hook, inst, &inst->blobs);
     if (rc != OK) {
-        catalog_close(cat);
-        db_ft_close(inst);
-        db_geo_close(inst);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -560,17 +549,7 @@ db_err db_open(const char *path, DB **out)
      */
     rc = spi_registry_create(&inst->reg);
     if (rc != OK) {
-        blob_store_destroy(inst->blobs);
-        catalog_close(cat);
-        db_ft_close(inst);
-        db_geo_close(inst);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -584,18 +563,7 @@ db_err db_open(const char *path, DB **out)
     if (rc == OK)
         rc = spi_registry_add(inst->reg, "blob_objects", &inst->blob_am_objects);
     if (rc != OK) {
-        spi_registry_destroy(inst->reg);
-        blob_store_destroy(inst->blobs);
-        catalog_close(cat);
-        db_ft_close(inst);
-        db_geo_close(inst);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 
@@ -724,20 +692,7 @@ db_err db_open(const char *path, DB **out)
     }
 
     if (rc != OK) {
-        db_ft_close(inst);
-        db_geo_close(inst);
-        db_ts_close(inst);
-        graph_destroy(inst->graph);
-        spi_registry_destroy(inst->reg);
-        blob_store_destroy(inst->blobs);
-        catalog_close(cat);
-        txn_clog_close(&inst->txns);
-        pager_close(pg);
-        wal_close(inst->wal);
-        free(inst->clogpath);
-        free(inst->walpath);
-        free(inst);
-        free(db);
+        open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
 

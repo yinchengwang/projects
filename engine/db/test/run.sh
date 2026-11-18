@@ -1,14 +1,48 @@
 #!/bin/sh
 # 编译并运行 test/unit 与 test/integration 下的 test_*.c
 #
-# 默认不开 sanitizer（MinGW 常缺 libasan）；需要时：
-#   WITH_SAN=1 sh test/run.sh
+# 用法：
+#   sh test/run.sh              # 并行，默认 4 路
+#   JOBS=1 sh test/run.sh       # 串行（排障时用）
+#   JOBS=8 sh test/run.sh       # 更宽
+#   WITH_SAN=1 sh test/run.sh   # 开 ASan + UBSan（MinGW 常缺 libasan）
+#
+# ==================== 为什么可以并行 ====================
+#
+# 每个测试是**独立的可执行文件**，且互相不碰对方的路径：
+#   - 每个测试用自己的 test/tmp/<某名>.db（实测 93 个测试里
+#     没有任何两个共用同一个 .db 路径，也没有共用非 .db 的临时文件）
+#   - 编译产物是 build/<测试名>，一名一个
+#   - 没有网络端口、没有 fork 子进程、没有固定等待
+#
+# 所以并行只共享 CPU 与文件系统，不共享状态。
+#
+# 实测：串行全量约 3 分钟，其中大半是 93 次「编译 + 链接」的固定开销
+# （单次约 0.55 秒 = 约 51 秒），而最慢的单个测试 test_ts_seal 才 0.83 秒。
+#
+# ==================== 并行方式：分块，不是流水线 ====================
+#
+# 每 JOBS 个测试起一批，全部 `&` 后 `wait` 收齐，再起下一批。
+#
+# 为什么不上「谁先完成谁补位」的流水线：
+#   那需要 `wait -n`（BusyBox / 老 bash 没有）或轮询 pid（每个测试
+#   一次 kill -0，93 个测试 × N 轮轮询，代码复杂且是 sh 兼容性雷区）。
+#   分块的代价只是「一批里最慢的那个拖住其余槽位」—— 实测最大
+#   测试 0.83 秒、平均 0.3 秒，浪费远小于实现风险。
+#
+# ==================== 输出为什么不再逐行打 ====================
+#
+# 并行时多行输出会互相穿插，"哪个测试失败了"反而看不清。
+# 所以每个测试的完整输出落到 build/test-logs/<名字>.log，
+# 终端每条只打一行结论；失败时再把这些日志 tail 出来。
 
-set -e
+set -u            # 不用 -e：要让失败的测试继续跑完，最后统一汇总
 ROOT=$(cd "$(dirname "$0")/.." && pwd) || exit 1
 cd "$ROOT" || exit 1
 
 CC=${CC:-gcc}
+JOBS=${JOBS:-4}
+
 SAN=""
 if [ "${WITH_SAN:-0}" = "1" ]; then
     SAN="-fsanitize=address,undefined"
@@ -23,18 +57,22 @@ case "$(uname -s)" in
     *)                   LDFLAGS="-lpthread" ;;
 esac
 
-mkdir -p build test/tmp
+mkdir -p build test/tmp build/test-logs
 # 排除 build/bench/ —— 基准程序自己带 main，链进来会重复定义。
 # （bench 的对象是 2026-11-02 的步骤 6 加进来的；
 #  一开始没排除，make bench 之后测试链接就会炸。）
 OBJS=$(find build -name '*.o' ! -name 'main.o' ! -path 'build/bench/*' 2>/dev/null || true)
 
-fail=0
-found=0
-for t in test/unit/test_*.c test/integration/test_*.c; do
-    [ -e "$t" ] || continue
-    found=1
+# ==================== 单个测试：编译 → 运行 → 记结果 ====================
+#
+# 结果写面 <name>.rc（一个字节，内容是退出码）：
+#   0 = PASS，1 = 编译失败，2 = 运行失败
+# 三种结果分开，汇总时才能区分"编不过"和"断言没过"。
+run_one() {
+    t=$1
     name=$(basename "$t" .c)
+    log="build/test-logs/$name.log"
+    rc="build/test-logs/$name.rc"
 
     # test_stmt_alloc 自带分配器计数：链接时把 malloc 家族重定向到
     # 它内部的 __wrap_* 实现。这是**唯一**需要额外链接参数的文件，
@@ -46,22 +84,125 @@ for t in test/unit/test_*.c test/integration/test_*.c; do
             ;;
     esac
 
-    printf '%s ... ' "$name"
-    if $CC $CFLAGS -o "build/$name" "$t" $OBJS $LDFLAGS $extra; then
-        if "./build/$name"; then
-            echo " [PASS]"
-        else
-            echo " [FAIL]"
-            fail=1
-        fi
-    else
-        echo " [COMPILE FAIL]"
-        fail=1
+    if ! $CC $CFLAGS -o "build/$name" "$t" $OBJS $LDFLAGS $extra >"$log" 2>&1; then
+        echo 1 > "$rc"
+        printf '  %-34s [COMPILE FAIL]\n' "$name"
+        return
     fi
+    if "./build/$name" >>"$log" 2>&1; then
+        echo 0 > "$rc"
+        printf '  %-34s [PASS]\n' "$name"
+    else
+        echo 2 > "$rc"
+        printf '  %-34s [FAIL]\n' "$name"
+    fi
+}
+
+found=0
+list=""
+for t in test/unit/test_*.c test/integration/test_*.c; do
+    [ -e "$t" ] || continue
+    found=1
+    list="$list $t"
 done
 
 if [ "$found" -eq 0 ]; then
     echo "（没有找到测试文件）"
+    exit 1
 fi
 
-exit "$fail"
+total=0
+for t in $list; do total=$((total + 1)); done
+printf '并行 %d 路，共 %d 个测试：\n' "$JOBS" "$total"
+
+pass=0
+cfail=0
+rfail=0
+failed_names=""
+
+# 清掉上次留下的 .rc，否则「这轮没跑到」会被误读成「上轮的结果」
+rm -f build/test-logs/*.rc
+
+# ==================== 计时敏感的测试单独串行 ====================
+#
+# 这几个的判据是**毫秒级的时序关系**，并行时 CPU/IO 争抢会让比值漂移：
+#   test_ckpt_recovery_time  用 clock() 比 A/B/C 三种路径的耗时比值
+#   test_catalog_lock        gate_wait 的 200ms/300ms 负向断言 + 2s 正向断言
+#
+# 串行跑它们只是多花几秒，但换掉了一类偶发红灯 —— 偶发红灯比慢更讨厌：
+# 它会让"测试挂了"这件事失去信息量。
+SERIAL_TESTS="test_ckpt_recovery_time test_catalog_lock"
+
+is_serial() {
+    for s in $SERIAL_TESTS; do
+        [ "$1" = "$s" ] && return 0
+    done
+    return 1
+}
+
+batch=0
+parallel_list=""
+serial_list=""
+for t in $list; do
+    name=$(basename "$t" .c)
+    if is_serial "$name"; then
+        serial_list="$serial_list $t"
+    else
+        parallel_list="$parallel_list $t"
+    fi
+done
+
+for t in $parallel_list; do
+    ( run_one "$t" ) &
+    batch=$((batch + 1))
+    if [ "$batch" -ge "$JOBS" ]; then
+        wait            # 无参 wait 等所有子进程 —— 就是"等这一批"
+        batch=0
+    fi
+done
+# 最后一批不满 JOBS 个
+if [ "$batch" -gt 0 ]; then
+    wait
+fi
+
+# 计时敏感的放最后，一个一个跑（此时 CPU 已空）
+if [ -n "$serial_list" ]; then
+    printf '  （以下 %d 个计时敏感，串行跑）\n' "$(echo $serial_list | wc -w)"
+    for t in $serial_list; do
+        run_one "$t"
+    done
+fi
+
+# ==================== 汇总 ====================
+for t in $list; do
+    name=$(basename "$t" .c)
+    case "$(cat "build/test-logs/$name.rc" 2>/dev/null || echo 9)" in
+        0) pass=$((pass + 1)) ;;
+        1) cfail=$((cfail + 1)); failed_names="$failed_names $name" ;;
+        2) rfail=$((rfail + 1)); failed_names="$failed_names $name" ;;
+        *) rfail=$((rfail + 1)); failed_names="$failed_names $name"; printf '  %-34s [NO RESULT]\n' "$name" ;;
+    esac
+done
+
+printf '\n%d 个测试：%d 通过' "$total" "$pass"
+[ "$cfail" -gt 0 ] && printf '，%d 编译失败' "$cfail"
+[ "$rfail" -gt 0 ] && printf '，%d 断言失败' "$rfail"
+printf '\n'
+
+if [ -n "$failed_names" ]; then
+    echo
+    echo "失败详情（每个测试日志的最后 30 行）："
+    for name in $failed_names; do
+        rc=$(cat "build/test-logs/$name.rc" 2>/dev/null || echo 9)
+        case "$rc" in
+            1) printf -- '--- %s [COMPILE FAIL] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
+            2) printf -- '--- %s [FAIL] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
+            *) printf -- '--- %s [NO RESULT] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
+        esac
+        tail -30 "build/test-logs/$name.log" 2>/dev/null
+        echo
+    done
+    exit 1
+fi
+
+exit 0

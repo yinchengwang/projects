@@ -60,7 +60,10 @@ if(MMDB_ENABLE_VECTOR)
     set_target_properties(mm_executor_rag PROPERTIES FOLDER "ModalityEngines")
 endif()
 
-if(BUILD_TESTING)
+# 这个用例的源码在 engine/test/db/executor/ 下，却由 src 侧自己注册 ——
+# 所以摘 test/CMakeLists.txt 的 add_subdirectory(db) 摘不掉它。
+# 必须跟着同一个开关走（B5，见 engine/CMakeLists.txt）。
+if(BUILD_TESTING AND ENABLE_FROZEN_SRC_DB_TESTS)
     add_executable(test_rag_executor
         ${ENGINEERING_SOURCE_DIR}/test/db/executor/rag_executor_test.cpp
     )

@@ -135,7 +135,31 @@ static int load_user_cols(Catalog *cat)
     return OK;
 }
 
-/* 从 sys_index / sys_index_col 加载索引，并打开各自的 btree */
+/*
+ * 从 sys_index / sys_index_col 加载索引，并打开各自的 btree
+ *
+ * ==================== 失败必须冒泡，不能 continue ====================
+ *
+ * 这里原来是：`btree_open` 失败 → `freelist_destroy` → `continue`。
+ * 后果是**索引静默消失**：库能打开、查询能跑，只是那条索引不见了 ——
+ * 于是查询退化成全表扫描（慢，但不报错），而写入侧仍按 catalog 里
+ * 还记着的索引去维护它……
+ *
+ * 这是本文件里**唯一有正确性后果**的一条降级。别的 continue 都对应
+ * "这条记录本身不完整"（比如列定义缺失、表已不存在），跳过是合理的；
+ * 但"索引页明明在 catalog 里、却打不开"只有一种解释：**库损坏了**。
+ * 损坏必须让打开库失败，而不是让调用方在一个少了索引的库上继续写。
+ *
+ * 【为什么限定在 btree_open 失败】
+ * 前面几处 continue 的前提是"这条 sys_index 记录不可用"：
+ *   - rec_decode 失败 → 记录字节本身不合法
+ *   - 表不存在 → 从 catalog 里找不到对应表
+ *   - 找不到 seq=0 的列 → sys_index_col 缺行
+ * 数据模型上不会出现这些（没有 DROP TABLE / DROP INDEX，
+ * 索引记录与列记录是同一次创建写入的），出现即损坏 —— 但它们
+ * 属于"这条记录坏了"，而 btree_open 失败属于"记录在、索引结构坏了"。
+ * 后者更严重，也更难在事后发现，所以先把这一处改成硬失败。
+ */
 static int load_indexes(Catalog *cat)
 {
     TableEnt *ie = catalog_ent_by_id(cat, SYS_INDEX_ID);
@@ -194,19 +218,30 @@ static int load_indexes(Catalog *cat)
         m.col_no = col_no;
 
         FreeList *fl = NULL;
-        if (freelist_create(0, &fl) != OK)
-            continue;
+        if (freelist_create(0, &fl) != OK) {
+            heap_scan_end(s);
+            return E_IO;
+        }
         BTree *bt = NULL;
         if (btree_open(cat->pager, fl, m.root_page, &bt) != OK) {
+            /*
+             * 索引在 catalog 里登记了，它的根页却打不开 —— 库损坏。
+             *
+             * 这里不走 continue（静默丢索引），而是把错误冒泡给
+             * load_all → 开库失败。调用方宁可看到"打不开库"，
+             * 也不该在一个索引已经丢了一半的库上继续跑。
+             */
             freelist_destroy(fl);
-            continue;
+            heap_scan_end(s);
+            return E_CORRUPT;
         }
 
         IndexInfo *ni = realloc(te->idxs, (size_t)(te->nidx + 1) * sizeof(IndexInfo));
         if (!ni) {
             btree_destroy(bt);
             freelist_destroy(fl);
-            continue;
+            heap_scan_end(s);
+            return E_IO;
         }
         te->idxs = ni;
         te->idxs[te->nidx].meta = m;

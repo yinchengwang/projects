@@ -244,6 +244,38 @@ int ft_catalog_end_merge(FtIndex *ix, u32 xid, const u32 *head_pages, u32 n);
 int ft_catalog_abort_merge(FtIndex *ix, u32 xid, const u32 *head_pages, u32 n);
 
 
+/* ---------------- 检索的打分辅助件（ft_index_scores.c） ----------------
+ *
+ * 这两件在 ft_index.c 的检索主流程里用，但定义搬到了 ft_index_scores.c
+ * （原 ft_index.c 808 行超限）。声明留在这里而不是 ft_index.h：
+ * 它们是**模态内部实现**，不属于对外契约。
+ */
+
+/*
+ * (doc_id → 累计分数) 的开放寻址哈希表。
+ *
+ * doc_id 可以是任意值 —— 不能拿 0 当"空槽"标记，所以另设 used。
+ * 容量是 2 的幂，装填因子 <= 0.5。
+ */
+typedef struct {
+    u32    key;
+    double val;
+    u8     used;
+} FtIdxSlot;
+
+typedef struct {
+    FtIdxSlot *slots;
+    u32        cap;      /* 槽数（2 的幂） */
+    u32        count;    /* 已占槽数 */
+} FtIdxScoreMap;
+
+void ft_idx_map_init(FtIdxScoreMap *m);
+void ft_idx_map_free(FtIdxScoreMap *m);
+int  ft_idx_map_add(FtIdxScoreMap *m, u32 doc_id, double score);
+
+/* 结果排序比较器：分数降序、同分按 doc_id 升序（坑 M4-11） */
+int ft_idx_hit_cmp(const void *a, const void *b);
+
 #ifdef __cplusplus
 }
 #endif

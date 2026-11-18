@@ -92,6 +92,33 @@ struct TsStore {
 int ts_store_create_impl(Pager *pg, u32 span_sec, const TsWal *w, TsStore **out);
 int ts_store_open_impl(Pager *pg, const TsWal *w, TsStore **out);
 
+/*
+ * ---------------- 记录层（tsstore_record.c） ----------------
+ *
+ * 原 tsstore.c 808 行超限，这一层拆到了 tsstore_record.c。
+ * 声明留在这里：三个函数在 tsstore.c 的主流程里用，但定义在记录层。
+ */
+
+/* 分区数组 / by-time 索引扩容；失败返回 E_NOSPACE */
+int  ts_rt_reserve(TsStore *st, u32 need);
+int  ts_by_time_reserve(TsStore *st, u32 need);
+
+/* 第 idx 个分区的起始毫秒 */
+i64  ts_part_start(const TsStore *st, u32 idx);
+
+/* 走一遍分区页链：数行 / 数页 / 找链尾 */
+int  ts_walk_part(TsStore *st, u32 first_page, u32 *rows_out,
+                  u32 *pages_out, u32 *last_out);
+
+/* by-time 有序插入 */
+void ts_by_time_insert(TsStore *st, u32 idx);
+
+/* 往分区追加一行（含编码与 WAL） */
+int  ts_append_row(TsStore *st, u32 idx, const TsReading *r);
+
+/* 位模式互转（坑 M6-33） */
+u64  ts_double_bits(double d);
+
 #ifdef __cplusplus
 }
 #endif
