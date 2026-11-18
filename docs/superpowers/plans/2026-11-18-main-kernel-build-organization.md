@@ -256,7 +256,7 @@ Windows 下 make 的 `$(shell ...)` 走 cmd.exe（见 `Makefile` L4-20 的注释
   # 它同时被三处消费：
   #   1. Makefile        —— 据此裁剪源文件、生成 -DDB_HAS_* 宏
   #   2. tools/check_deps.sh —— 据此校验模态之间不许互相 include
-  #   3. docs/MM-PROFILES.md —— 人工可读的说明
+  #   3. engine/db/docs/MM-PROFILES.md —— 人工可读的说明
   # 三处各写一份 = 迟早不一致 = 裁剪出来的二进制缺东西，链接才报错。
   #
   # 【为什么不用 $(shell) 推导】
@@ -1494,7 +1494,7 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   然后 `objs=$(find "$realdir" -name '*.o' | wc -l)`、
   `syms=$(nm "$realdir/db.exe" ...)`。
 
-- [ ] **B5.4 跑度量，写 `docs/MM-PROFILES.md`**
+- [ ] **B5.4 跑度量，写 `engine/db/docs/MM-PROFILES.md`**
 
   ```powershell
   cd C:\code\projects\engine\db
