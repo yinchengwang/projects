@@ -1469,10 +1469,10 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
 - [ ] **C5.6 evaluator：`EX_FUNC` 的求值入口**
 
-`src/query/exec_scan.c` 的 `eval_expr`（**L42**）加一个 case：
+  `src/query/exec_scan.c` 的 `eval_expr`（**L42**）加一个 case：
 
-⚠️ **（可执行性修正）位置搞错了** —— `eval_expr` 在 **`exec_scan.c:42`**（行式路径）；
-`exec_eval.c` 里那个叫 **`eval_where`（L201）**（列式路径）。两路都要加，见本步末尾。
+  ⚠️ **（可执行性修正）位置搞错了** —— `eval_expr` 在 **`exec_scan.c:42`**（行式路径）；
+  `exec_eval.c` 里那个叫 **`eval_where`（L201）**（列式路径）。两路都要加，见本步末尾。
 
   ```c
   case EX_FUNC: {
