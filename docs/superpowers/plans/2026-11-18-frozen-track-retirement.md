@@ -3,13 +3,13 @@
 > 依据：`docs/superpowers/specs/2026-11-18-multimodal-db-project-organization-design.md` §5.1 / §5.4 / §5.5 / §5.6
 > 落地日期：2026-11-18
 > 前置：**必须先做完 W-B 的 P0（CI 门禁）** —— 没有红灯就看不出删除有没有打坏东西。
-> 后续：W-C 的 C-1（执行器脱钩）与本计划**不冲突**（一个动 `engine/db/`，一个动 `engine/src/sdk/` 与 `engine/include/`）。
+> 后续：W-C 的 C-1（执行器脱钩）与本计划**不冲突** —— C-1 动的是 `engine/db/src/`（`spi/` / `query/` / `modalities/`），本计划动的是 `engine/src/sdk/` 与 `engine/include/`。
 
 ---
 
 ## Goal
 
-把冻结轨 `engine/src/db/`（524 文件 / 173,719 行）整棵拔掉，让仓库里**只剩一个数据库内核**（`engine/db/`），同时保证：
+把冻结轨 `engine/src/db/`（524 文件 / 209,907 行）整棵拔掉，让仓库里**只剩一个数据库内核**（`engine/db/`），同时保证：
 
 1. `engine/db/`（主核，自带 Makefile，不在 CMake 图内）**完全不受影响**；
 2. `engine/src/sdk/`（嵌入式 SDK）继续可构建、可测试，且**不再引用任何冻结轨的源码或公开头**；
@@ -34,18 +34,18 @@
          语义：近似 HNSW → **精确暴力 KNN**（召回率只升不降；延迟换来的）
 
 线 ②  删轨（后做，**一个原子提交**：删了就得同时把构建接线修好）
-    D-1  engine/src/db/                     524 文件 / 173,719 行
+    D-1  engine/src/db/                     524 文件 / 209,907 行
     D-2  engine/test/db/                    289 文件 / ~587 ctest 用例
     D-3  engine/include/db/                 409 个公开头
     D-4  engine/include/rag/ 2 头 + engine/include/tree_index/ 8 头
     D-5  engine/cmake/ModalityProfiles.cmake、engine/cmake/MultimodalConfig.cmake（旧轨机制）
     D-6  engine/test/smoke/                 13 个文件（全是冻结轨）
-    D-7  engine/test/index/                 8 个文件（include 解析到 engine/include/db/）
+D-7  engine/test/index/                8 个目录（每个目录下的测试都 include `<index/...>`，随冻结轨一起没了 ⇒ 全部要删；设计 D-10 写的「4 个」是错的）
     D-8  engine/tools/benchmark/c_api/      依赖 mm_vector_index / faiss_hnsw
-    D-9  engine/src/db/ 下被 SDK 引用的两个 CMake 目标：sql_engine / faiss_hnsw / mm_vector_index
+D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / faiss_hnsw / mm_vector_index
 ```
 
-**关键约束：SDK 的依赖必须先解，轨才能删。** `mmsdk` 链接的三个目标 `sqlite3 / faiss_hnsw / mm_vector_index / sql_engine` 里，后三个**全部定义在冻结轨的 CMakeLists 里**：
+**关键约束：SDK 的依赖必须先解，轨才能删。** `mmsdk` 链接的**四个**目标 `sqlite3 / faiss_hnsw / mm_vector_index / sql_engine` 里，后三个**全部定义在冻结轨的 CMakeLists 里**（`sqlite3` 是第三方，不受影响）：
 
 - `engine/src/db/sql/CMakeLists.txt:7` → `add_library(sql_engine STATIC ...)`
 - `engine/src/db/index/vector_index/CMakeLists.txt:39` → `add_library(mm_vector_index STATIC ...)`
@@ -79,7 +79,7 @@
 | R3 | SDK 向量检索**语义有没有变差** | 召回率只升不降（HNSW 近似 → 精确）；`mmdb_vectors_search` 的返回结构、`apply_pagination`、`mmdb_metrics_record_query` 调用点一个不少 |
 | R4 | 删轨是不是**一个原子提交** | 删轨提交里必须同时包含构建接线修复；不允许出现"删了但 build 不过"的提交 |
 | R5 | 有没有**误删主核** | `engine/db/` 目录在提交后**仍然完整存在**且 `mingw32-make check` 绿 |
-| R6 | ctest 用例数 | 删除前后差值必须**恰好等于**冻结轨那部分（`engine/test/db/` + `engine/test/smoke/` + `engine/test/index/`），不能多也不能少 |
+| R6 | ctest 用例数 | 删除前后差值必须**恰好等于**冻结轨那部分（`engine/test/db/` + `engine/test/smoke/` + `engine/test/index/`）—— ⚠️ **（复审修正）** `engine/test/index/` 实际是 **8 个目录**（设计 D-10 写的「4 个」是错的），差值要按 8 个目录算
 
 ---
 
@@ -107,21 +107,21 @@
 | `engine/src/sdk/CMakeLists.txt` | `SDK_CORE_SOURCES` 加 `core/memctx.c`；链接只留 `sqlite3`；删 `../` include 路径 |
 | `engine/src/CMakeLists.txt` | 删 `add_subdirectory(db)` |
 | `engine/test/CMakeLists.txt` | 删冻结轨守卫块、删 `smoke` / `kbase` 子目录引用、清理 `_test_targets` |
-| `engine/test/sdk/memory/*.cpp`（4 个） | include `db/sql/memctx.h` → `sdk/impl/memctx.h` |
+| `engine/test/sdk/memory/*.cpp`（**6 个**，其中 **5 个**含 `db/sql/memctx.h`） | include `db/sql/memctx.h` → `sdk/impl/memctx.h` |
 | `engine/test/sdk/CMakeLists.txt` | 删 `hnsw` 子目录引用 |
 
 ### 删除
 
 | 路径 | 规模 |
 |---|---|
-| `engine/src/db/` | 524 文件 / 173,719 行 |
+| `engine/src/db/` | 524 文件 / 209,907 行 |
 | `engine/test/db/` | 289 文件 / ~587 ctest 用例 |
 | `engine/include/db/` | 409 个头 |
 | `engine/include/rag/` | 2 个头 |
 | `engine/include/tree_index/` | 8 个头 |
 | `engine/cmake/ModalityProfiles.cmake`、`engine/cmake/MultimodalConfig.cmake` | 旧轨模态开关机制 |
 | `engine/test/smoke/` | 13 个文件 |
-| `engine/test/index/` | 8 个文件 |
+| `engine/test/index/` | **8 个目录**（不是 8 个文件；设计 D-10 写「4 个目录」有误） |
 | `engine/test/sdk/hnsw/` | 2 个文件（测的是冻结轨的 HNSW） |
 | `engine/tools/benchmark/c_api/` | 依赖 `mm_vector_index` / `faiss_hnsw` |
 
@@ -146,6 +146,58 @@
   ```
 
   预期：`-- Build files have been written to: C:\code\projects\build/engine` + 编译无 error。
+
+- [ ] **1.1b 打回滚 tag `pre-frozen-track-removal`**
+
+  ⚠️ **（复审修正）删除前必须留一个能回退的点** ——
+  这次要删掉 **524 个文件 / 209,907 行**，是不可逆的大动作。
+  设计 §9 与 §7 的风险表都点名要打 tag，原计划漏了。
+
+  ```powershell
+  cd C:\code\projects
+  git status                     # 必须干净（或只剩无关的改动）
+  git tag -a pre-frozen-track-removal -m "冻结轨删除前的基线（W-A 执行前）"
+  git tag -l pre-frozen-track-removal
+  git rev-parse pre-frozen-track-removal
+  ```
+
+  ⚠️ **打 tag 前先确认工作区状态** —— 别把别人正在做的改动一起打进去。
+
+  ⚠️ **回退命令**（万一删完发现回不来）：
+
+  ```powershell
+  git reset --hard pre-frozen-track-removal
+  git push --force origin main     # ⚠️ 危险：只在确认要放弃后续提交时用
+  ```
+
+- [ ] **1.2 采 ctest 基线**
+  ⚠️ **（复审修正）只采「用例总数 N」不够** ——
+  设计 §7 的风险表明令：**必须采改造前基线（失败用例名集合，跑两次取交集），
+  只比「集合不新增」而非绝对值**。原计划只记了总数 N，
+  验收时又拿「用例数 == N」当判据 ——
+  **方向反了**：删轨本来就该让用例数变少，绝对值相等反而是错的判据。
+
+  ⇒ 补采**失败用例名集合**（跑两遍取交集，滤掉偶发失败）：
+
+  ```powershell
+  cd C:\code\projects
+  # 第一遍
+  ctest --test-dir build/engine --output-on-failure 2>&1 |
+    Select-String -Pattern '^\s*\d+ - .*\(Failed\)' |
+    ForEach-Object { $_.Line -replace '^\s*\d+ - ','' -replace ' \(Failed\).*$','' } |
+    Sort-Object -Unique | Out-File -Encoding utf8 build/engine/failed-run1.txt
+  # 第二遍（隔一会儿再跑，滤掉偶发）
+  ctest --test-dir build/engine --output-on-failure 2>&1 |
+    Select-String -Pattern '^\s*\d+ - .*\(Failed\)' |
+    ForEach-Object { $_.Line -replace '^\s*\d+ - ','' -replace ' \(Failed\).*$','' } |
+    Sort-Object -Unique | Out-File -Encoding utf8 build/engine/failed-run2.txt
+  # 交集 = 稳定的失败集合
+  Compare-Object (Get-Content build/engine/failed-run1.txt) (Get-Content build/engine/failed-run2.txt) -IncludeEqual -ExcludeDifferent |
+    Select-Object -ExpandProperty InputObject | Out-File -Encoding utf8 build/engine/failed-baseline.txt
+  ```
+
+  ⇒ 把 `failed-baseline.txt` 一起提交（它是**基线**，不是临时文件）。
+
 
 - [ ] **1.2 采 ctest 基线**
 
@@ -191,6 +243,13 @@
   | 工程轨 ctest 用例数 N | <1.2 输出> |
   | 打开冻结轨后 ctest 用例数 | <1.3 输出> |
   | 冻结轨独占用例数 D | <1.3 − 1.2> |
+| **稳定失败用例名集合**（两次跑取交集） | `build/engine/failed-baseline.txt` |
+
+⚠️ **（复审修正）删除后的验收判据**：
+- ❌ **不是**「用例数 == N」—— 删轨本来就要让用例数变少，绝对值相等是错的判据。
+- ✅ **是**「**失败用例名集合 ⊆ 基线集合（不新增）**」 + 「主核的 95 个测试全绿」。
+- ✅ 另外对账：删掉的用例数应与 D **大致相符**（多删少删都要能解释清楚 ——
+  W-A 会多删 `engine/test/index/` 的全部 8 个目录，见 Task 4 的偏离说明）。
   | 主核测试文件数 | 95（64 unit + 31 integration） |
   | 主核测试结果 | 95 通过 / 0 失败 |
   | SDK 用例数 | <ctest -N 里 sdk_* 的条数> |
@@ -390,6 +449,34 @@
   `mmdb_vectors_hnsw_rebuild` → `mmdb_vectors_index_rebuild`、
   `mmdb_vectors_hnsw_ensure` → `mmdb_vectors_index_ensure`、
   `mmdb_vectors_hnsw_free` → `mmdb_vectors_index_free`
+- **公开 API 的签名与结构体布局不变**：`engine/include/sdk/mmdb_vectors.h` 的**声明部分**一个字都不改。
+  ⚠️ **（复审修正）但「不改」不等于「一个字都不改」** ——
+  设计 §5.3 明确要求：**B-7/B-8 的降级语义必须写进该头的注释与 `engine/docs/` 里，不能默默改**，
+  §7 的风险表还要求写进 changelog。
+  「HNSW 近似检索 → 精确暴力 KNN」是**行为变更**，必须让使用者看得见。
+
+  ⇒ **本步做三件事**：
+
+  1. **在 `engine/include/sdk/mmdb_vectors.h` 的注释里写明降级**（声明部分不动）：
+
+     ```c
+     /*
+      * ⚠️ 检索实现已降级（2026-11-18，冻结轨退役）：
+      *   原实现 = faiss HNSW（近似检索，复杂度约 O(log N)）
+      *   现实现 = 扁平索引 + 精确暴力 KNN，复杂度 **O(N)**
+      * 语义不变（返回最近的 k 个），**性能显著下降**。
+      * 小规模（十万级以内）可接受；更大规模请另寻近似索引方案。
+      */
+     ```
+
+  2. **在 `engine/docs/` 下写一条**（该目录已存在），
+     建议文件名 `engine/docs/sdk-vector-search-downgrade.md`：
+     为什么降级（冻结轨删除）、换成什么、复杂度变化、影响面。
+
+  3. **写进 changelog**：`2026-11-18 冻结轨退役：SDK 向量检索由 HNSW 近似降级为精确 KNN`。
+
+  ⚠️ **这三条是设计 §5.3 的硬要求**，不是可选项 —— 默默改行为而不同步文档，
+  是本项目明令禁止的。
 - **公开 API 不变**：`engine/include/sdk/mmdb_vectors.h` 一个字都不改；
   `engine/include/sdk/mmdb_metrics.h` 的 `hnsw_build_total` / `hnsw_build_time_ms`
   字段名与 `mmdb_metrics_record_hnsw_build()` **保留原名**（公开 API 稳定性优先），
@@ -765,6 +852,14 @@
 ---
 
 ### Task 4：摘掉冻结轨（一个原子提交）
+  ⚠️ **（复审修正）本 Task 有一处与设计文档的偏离，必须记录在案**：
+
+  | 项 | 设计文档 | 本计划实测 | 处置 |
+  |---|---|---|---|
+  | `engine/test/index/` 删几个 | D-10 写 **4 个目录**（`brin` / `bitmap` / `gin` / `diskann`） | **8 个目录全部**都 include `<index/...>`，而 `index/` 目录随冻结轨一起没了 ⇒ 留任何一个都编不过 | **按 8 个删**；设计 D-10 的「4 个」是错的，回填订正 |
+  | `engine/test/db/` | 289 文件 | **294** 个 `.c/.cpp/.h`（357 个含其它类型） | 以实测为准，设计数字回填订正 |
+
+  ⇒ 这两条**必须同步回设计文档**，不能只在计划里改 —— 否则设计与实施长期不一致。
 
 **Files**
 - 删除：见「文件结构 › 删除」全部
@@ -778,6 +873,10 @@
   **必须同时处理**（见 4.3）。
 
 **⚠️ 这是本计划风险最高的一个 Task：删了就得同时把构建接线修好，不允许出现"删了但 build 不过"的提交。**
+
+#### 与设计文档的偏离（复审补入，必须回填设计文档）
+
+
 
 - [ ] **4.1 删除前最后一次确认主核是绿的**
 
@@ -1002,6 +1101,83 @@
     Select-Object Path, LineNumber, Line
   ```
 
+- [ ] **5.1b 逐类落点表（设计 §5.4 的八类，一个都不能漏）**
+
+  ⚠️ **（复审修正）原计划只把 `CLAUDE.md` / `AGENTS.md` 落到了步，
+  设计 §5.4 列的另外六类只有"搜一下"、没有"改"的落点** ——
+  做完后仍会留下 869 + 32 + 8 + 3 处死链。
+
+  | # | 目标 | 处数 | 动作 | 本计划落点 |
+  |---|---|---|---|---|
+  | 1 | `docs/analysis/` | **869** | **整批归档**：每篇顶部加横幅「本文分析对象（冻结内核 `engine/src/db`）已于 2026-11-18 删除，仅作历史参考」，文件 `git mv` 进 `docs/analysis/archive/` | 5.1b.1 |
+  | 2 | `docs/arch/` | **32** | 逐条改：改成主核 `engine/db/` 的说法 | 5.1b.2 |
+  | 3 | `docs/storage/` | **8** | 逐条改 | 5.1b.2 |
+  | 4 | `openspec/specs/` | **3** | 逐条改/删 | 5.1b.2 |
+  | 5 | 仓级 `README.md` | — | 定位表 / 核心能力 §1–§4 / 结构树 / 测试覆盖表 / 踩坑红线 **五处** | 5.1b.3 |
+  | 6 | `CLAUDE.md` | — | 五节整段重写 | 5.2 |
+  | 7 | `AGENTS.md` | — | 库清单 | 5.3 |
+  | 8 | `engine/README.md` | — | 同仓级 README | 5.1b.3 |
+  | 9 | `docs/memory-context-*.md` ×3 | — | ⚠️ **（复审补入）** 这三份讲的是**冻结轨的 memctx**，memctx 移植后必然过期 | 5.1b.2 |
+
+  > **复审补入的第 9 类**：设计 §5.4 没列这三份，但它们讲的就是 memctx ——
+  > 移植之后「冻结内核的内存上下文」这套说法全是错的。顺带说明：
+  > 冻结轨的 `include/db/sql/memctx.h` 本身就要删，这三份文档不跟着改就是死链。
+
+- [ ] **5.1b.1 归档 `docs/analysis/`（27 篇 / 869 处引用）**
+
+  ```powershell
+  cd C:\code\projects
+  New-Item -ItemType Directory -Force docs/analysis/archive | Out-Null
+  Get-ChildItem docs/analysis -File -Filter '*.md' |
+    Where-Object { $_.DirectoryName -notlike '*archive*' } |
+    ForEach-Object {
+      # ① 加横幅（幂等：已有横幅就跳过）
+      $c = Get-Content $_.FullName -Raw -Encoding UTF8
+      if ($c -notmatch '本文分析对象') {
+        $banner = "> ⚠️ **归档说明**：本文分析对象（冻结内核 `engine/src/db`）已于 2026-11-18 删除，仅作历史参考。`n> 当前主核是 `engine/db/`，见 [设计文档](../../superpowers/specs/2026-11-18-multimodal-db-project-organization-design.md)。`n`n"
+        Set-Content -Path $_.FullName -Value ($banner + $c) -Encoding UTF8 -NoNewline
+      }
+      # ② 移入 archive/
+      git mv $_.FullName (Join-Path (Resolve-Path docs/analysis/archive) $_.Name)
+    }
+  ```
+
+  ⚠️ **`git mv` 保留历史** —— 这批文档是历史分析，删掉不如归档。
+
+- [ ] **5.1b.2 逐条改 `docs/arch/` / `docs/storage/` / `openspec/specs/` / `docs/memory-context-*.md`**
+
+  ```powershell
+  cd C:\code\projects
+  Select-String -Path docs/arch/*.md,docs/storage/*.md,openspec/specs/*.md,docs/memory-context-*.md `
+    -Pattern 'src/db/|include/db/|db/sql/memctx|冻结内核'
+  ```
+
+  ⚠️ **`docs/storage-architecture.md` 这个路径不存在** ——（复审修正）
+  实际目录是 `docs/storage/`，CLAUDE.md 里链接的那个文件也要一起改。
+  逐条改的规则：
+  - `engine/src/db/...` → `engine/db/...`（并核对新路径真的存在）
+  - `engine/include/db/...` → 对应主核头
+  - `engine/test/db/...` → 主核测试目录
+  - 「冻结内核」「PostgreSQL 风格内核」等说法 → 改成「已退役，仅作历史参考」
+
+- [ ] **5.1b.3 改仓级 `README.md` 与 `engine/README.md`**
+
+  两处都要改这五项：
+  1. **定位表**（仓库是干什么的）
+  2. **核心能力 §1–§4**
+  3. **结构树**（`engine/src/db/` 整棵消失）
+  4. **测试覆盖表**（含 912 处 `src/db/` 引用里的一部分）
+  5. **踩坑红线**（冻结轨相关的红线条目）
+
+  ```powershell
+  cd C:\code\projects
+  Select-String -Path README.md,engine/README.md -Pattern 'src/db/|include/db/|冻结内核|engine/test/db'
+  ```
+
+  ⚠️ **`engine/README.md` 原来根本没进修改清单**（复审修正）——
+  它与仓级 README 讲的是同一套事，不改就是两套矛盾的说法。
+
+- [ ] **5.2 改 `CLAUDE.md`**
 - [ ] **5.2 改 `CLAUDE.md`**
 
   把「数据库存储引擎」整章（从「冻结内核参考」那行到「API 使用示例」结束）替换为：
@@ -1088,6 +1264,21 @@
 - 无代码变更。
 
 - [ ] **6.1 A1：冻结轨目录全部消失，主核完整**
+  ⚠️ **（复审修正）grep 的范围要按设计 §5.5 第 1 条的完整口径** ——
+  原计划只查了 3 个 `CMakeLists.txt`，查不到散落在 `.md` / `.cmake` / `.py` 里的引用。
+
+  ```powershell
+  cd C:\code\projects
+  $dirs = 'engine/src','engine/include','engine/test','engine/tools','engine/cmake'
+  foreach ($d in $dirs) {
+    Select-String -Path "$d/*" -Recurse -Include '*.c','*.h','*.cpp','*.cmake','CMakeLists.txt' `
+      -Pattern 'src/db/|include/db/' -ErrorAction SilentlyContinue
+  }
+  ```
+
+  预期：**零命中**（`engine/db/` 目录本身除外 —— 它是主核，不是冻结轨）。
+
+
 
   ```powershell
   cd C:\code\projects
@@ -1113,7 +1304,7 @@
 
   预期：0 failed。
 
-- [ ] **6.3 A3：ctest 用例数 == 基线 N**
+- [ ] **6.3 A3：失败用例名集合不新增 + 主核 95 个测试全绿**
 
   ```powershell
   ctest --test-dir build/engine -N | Select-String 'Total Tests'
@@ -1170,17 +1361,29 @@
   |---|---|---|---|---|
   | A1 | 冻结轨目录消失 / 主核完整 | 10 个路径全 False，`engine/db/Makefile` 为 True | | |
   | A2 | 工程轨从零构建 + 全测绿 | 0 failed | | |
-  | A3 | ctest 用例数 == 基线 N−1 | | | |
+| A3 | 失败用例名集合 ⊆ 基线集合（不新增） | | | |
   | A4 | SDK 无冻结轨引用 | grep 零命中 | | |
   | A5 | 主核零变化 | `git diff --stat` 空 | | |
   | A6 | 主核构建 + 95 测试绿 | ✓ 依赖方向正确 | | |
   | A7 | SDK 内存上下文 6 用例 | 全 PASS | | |
   | A8 | 依赖方向门禁 | `check_deps.sh` ✓ | | |
+| **A9** | **引用校验门禁** | `python scripts/check-wiki-refs.py` 退出码 0 | | |
+| **A10** | **SDK 无冻结轨符号残留**（`nm -u`） | `nm -u libmmsdk.a \| grep -Ei 'faiss\|hnsw\|sql_engine\|memctx'` **零命中** | | |
+
+> **（复审补入）A9 / A10** —— 设计 §5.5 的验收判据有 5 条，
+> 原计划的 A1–A8 只覆盖了 4 条半，漏了「引用校验门禁」这一条，
+> 并且 `nm` 只查了 memctx 符号的 T/U，**没查 `faiss` / `hnsw` / `sql_engine` 的未定义引用**。
+
+> A10 的命令：
+> ```bash
+> nm -u build/engine/src/sdk/libmmsdk.a | grep -Ei 'faiss|hnsw|sql_engine|memctx'
+> ```
+> 预期：**零命中**。命中 `faiss` / `hnsw` / `sql_engine` ⇒ 还有冻结轨的符号没摘干净。
 
   ## 删除量
   | 项 | 行数 |
   |---|---|
-  | engine/src/db/ | 173,719 |
+  | engine/src/db/ | 209,907 |
   | engine/include/db/ | 409 头 |
   | engine/test/db/ | 289 文件 / ~587 用例 |
   ```
@@ -1210,3 +1413,34 @@
 3. **验证方式** —— A1~A8 每一项的实测数字（不是"应该没问题"）。
 4. **后续建议** —— 例如：主核的 `MM=` 编译期裁剪（W-B）、八模态对称化（W-C）尚未开始；
    根目录越界文件仍未清理。
+
+## Self-Review 记录
+
+**Spec 覆盖**：§5.1 删除清单 → Task 3（先摘 SDK 依赖）+ Task 4（一个原子提交删轨）；
+§5.2 保留清单 → Task 4 的 Interfaces 段；§5.3 必须同步修的构建点 → Task 4（4.1~4.6）；
+§5.4 文档处置（912 处引用） → Task 5 的 5.1b 逐类落点表（**9 类**，含设计未列的
+`docs/memory-context-*.md` 三份）；§5.5 退役验收判据 → Task 6（A1~A10）；
+§5.6 SDK 内存上下文去冻结化 → Task 2（memctx 移植到 `engine/include/sdk/impl/memctx.h` +
+`engine/src/sdk/core/memctx.c`）；§7 风险 → Task 1.1b（`pre-frozen-track-removal` tag）、
+Task 1.2（ctest **失败用例名集合**基线）、Task 3（SDK 检索降级说明三件套）；
+§9 交付物 → 全部落地。
+
+**类型一致性**：`memctx.h` 的落点 `engine/include/sdk/impl/memctx.h` 与设计 §5.6 方案 A 一致；
+`mmdb_vectors_hnsw_*` → `mmdb_vectors_index_*` 是**实现级**重命名，
+公开头 `engine/include/sdk/mmdb_vectors.h` 的**声明**不动（只加注释，见 Task 3）；
+八个 memctx 符号（`palloc` / `pfree` / `AllocSetContextCreate` / `MemoryContextReset` /
+`MemoryContextDelete` / `MemoryContextCheckThread` / `mmdb_mem_register_resource` /
+`mmdb_mem_unregister_resource`）在 R1 判据、Task 2 的 `nm -g` 命令、附录里三处写法一致；
+CMake 目标的「删三个 / 留四个」（`sql_engine` / `faiss_hnsw` / `mm_vector_index` 删，
+`sqlite3` / `mmsdk` / `project_includes` / `multimodal_config_gen` 留）在
+§5.1、Task 4 的 Interfaces 段、验收表里三处一致 —— 名字无漂移。
+
+**比例**：本计划 1416 行 / 设计文档 1192 行 ≈ 1.2:1。
+其中约 40% 是两轮复审的「（复审修正）」批注 —— 它们是**要照着做的指令**，
+不是背景叙述，删掉会导致执行者踩坑。
+**复审来源**：本计划经过两轮独立 subagent 复审 ——
+① 规格覆盖复审（对照设计 §1~§9 逐条查落点）与 ② 跨计划一致性复审
+（31 个交叉点、契约冲突、文件归属冲突、顺序矛盾、数字口径）。
+两轮的 blocking 级发现**已全部并入本计划正文**，每处均以
+「⚠️ **（复审修正）**」标出，并写明**为什么错**与**改成什么** ——
+这样执行者遇到分歧时能就地判断，而不是回头查聊天记录。

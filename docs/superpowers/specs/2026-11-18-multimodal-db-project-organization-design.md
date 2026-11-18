@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件）；八模态在「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套上补全对称（为此给 SPI 加第四契约 `TableOpener`）；文档模态功能补全（接进 SQL）；冻结轨 `engine/src/db/` 全删（173,719 行），SDK 去冻结化（含 memctx 移植）后保留。**
+**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件）；八模态在「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套上补全对称（为此给 SPI 加第四契约 `TableOpener`）；文档模态功能补全（接进 SQL）；冻结轨 `engine/src/db/` 全删（209,907 行），SDK 去冻结化（含 memctx 移植）后保留。**
 
 ---
 
@@ -19,10 +19,10 @@
 
 | | 体量 | 状态 | CI 覆盖 |
 |---|---|---|---|
-| **主核** `engine/db/` | 247 文件 / **50,867 行** | **唯一在维护**（2026-11-16 路线翻转） | **零** ❌ |
-| **冻结轨** `engine/src/db/` | 524 文件 / **173,719 行** | 已冻结，保留作历史参考 | **在 CI 里被构建** ✅ |
+| **主核** `engine/db/` | 247 文件 / **68,037 行**（`.c` 52,400） | **唯一在维护**（2026-11-16 路线翻转） | **零** ❌ |
+| **冻结轨** `engine/src/db/` | 524 文件 / **209,907 行** | 已冻结，保留作历史参考 | **在 CI 里被构建** ✅ |
 
-冻结轨体量是主核的 3.4 倍，且主核一行 CI 都没有。这带来四个具体问题：
+冻结轨体量是主核的 3 倍多（209,907 行 vs 主核 68,037 行），且主核一行 CI 都没有。这带来四个具体问题：
 
 1. **读者不知道主核在哪** —— 两套内核、两套构建体系（Makefile vs CMake）、两套测试协议、两套目录约定。
 2. **CI 门禁打在了不维护的代码上** —— 冻结轨的测试默认还是关的（`ENABLE_FROZEN_SRC_DB_TESTS=OFF`），但它的**库**仍在被构建。
@@ -51,20 +51,24 @@
 | graph | + `common/crc` + `storage/gstore` | **0** |
 | doc | `common/{config,error,types}` + `storage/{page,pager,value}` | **0** |
 
-**关键数字**：模态可见的底座接口面 = **13 个头文件 / 约 1,313 行**，占 51k 行代码的 **2.6%**。
+**关键数字**：模态可见的底座接口面 = **13 个头文件 / 1,934 行**（全行口径），占 `src/` 68,037 行的 **2.8%**。
 `pager_internal.h` / `heap_internal.h` / `heap_am_internal.h` / `blob_hdr.h` —— 模态一个都没碰。
 
 ### 2.2 主核的体量分布
 
+> **口径（2026-11-18 实测）**：统计 `engine/db/src/` 下 **`.c` 文件的物理行数**（不含 `.h`）。
+> **全文所有主核体量数字都用这个口径**，避免"同一张表里两种算法"。
+> 头文件的量单列在 §2.1。冻结轨的行数用 **`.c` + `.h` 全行**口径（§2.7 的表）。
+
 | 部分 | 行数 | 占比 |
 |---|---|---|
-| 共享底座 `common`+`storage`+`wal`+`index`+`txn`+`catalog`+`query`+`spi` | **19,066** | 37% |
-| 六个模态 `ft` 8,850 / `ts` 5,580 / `geo` 3,244 / `vector` 3,088 / `doc` 2,829 / `graph` 2,056 | **25,647** | 50% |
-| 各模态公开 API + REPL（`db_ft.c` / `repl_geo.c` …） | ~6,154 | 12% |
+| 共享底座 `common`+`storage`+`wal`+`index`+`txn`+`catalog`+`query`+`spi` | **18,109** | 35% |
+| 六个模态 `ft` 9,490 / `ts` 5,559 / `geo` 3,310 / `vector` 3,104 / `doc` 3,061 / `graph` 2,279 | **26,803** | 51% |
+| 各模态公开 API + REPL（`db_ft.c` / `repl_geo.c` / `main.c` …） | **6,722** | 13% |
 
 ### 2.3 「公共代码抽到单独目录」这个诉求的现状
 
-**已经满足，且是 deep module 形态**：底座 19,066 行对外只暴露 1,313 行头文件；
+**已经满足，且是 deep module 形态**：底座 18,109 行对外只暴露 1,934 行头文件；
 `tools/check_deps.sh` 强制 L0→L4 单向依赖（L4 模态之间禁互相 include），当前输出 `✓ 依赖方向正确`。
 
 **再抽一个目录是纯改名，零收益。**
@@ -101,20 +105,22 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 
 已判定：stub 不迁（pg/mysql 协议、`db_server`、`raft_transport`、`mmdb_sdk`、`distributed_query`、REST/`vector_api`）；
 值得迁的是 `percolator`/`mvcc_ts`/`tso`/`raft` 状态机、`sql_compat`/`analytics_sql`、RAG 算子框架、协议 codec。
-**该清单漏了 `index/`（46,805 行 / 27 个 ANN + 15 个传统索引）** —— 它只盘了「工程面」。
+**该清单漏了 `index/`（56,647 行 / 27 个 ANN + 15 个传统索引）** —— 它只盘了「工程面」。
 
 **③ 用户裁决（2026-11-18）**：冻结轨**全删**，含索引动物园与分布式。
 
 ### 2.7 冻结轨的依赖分层（实测，本轮补做）
 
+> **口径**：`.c` + `.h` 的物理行数，全树合计 **524 文件 / 209,907 行**。
+
 | 子树 | 行数 | 是否依赖冻结内核**实现** | 依赖证据 |
 |---|---|---|---|
-| `index/` | **46,805** | **否** | 只用自己的头 + 7 个冻结**公开头**：`db/core/log.h`、`db/index/{art/art.h,btree/btree.h,heap/heap_vector_store.h,hilbert.h,shared/tree_page.h,vector_index/vector_index_selector.h}` |
-| `distributed`+`consensus`+`sharding` | **6,684** | **否** | + `db/shard_routing.h`、`db/distributed/{distributed_query,rpc,rpc_stream}.h`、`db/distributed/txn/distributed_txn.h`、`db/sharding/sharding.h`、`db/core/log.h` |
-| `graph/` | 4,910 | **是** | `db/core/func_registry.h`、`db/core/log.h` |
-| `tools/` | 2,390 | **是** | `db/` 顶层（CLI/server） |
-| `protocol/` | 2,329 | 部分 | `sql_compat.c`/`analytics_sql.c` 独立，另两个是 stub |
-| 其余内核本体 | **110,601** | — | storage/sql/parser/executor/core/api/cli/optimizer/vectorized/yang/… （= 173,719 − 上述各行） |
+| `index/` | **56,647** | **否** | 只用自己的头 + 7 个冻结**公开头**：`db/core/log.h`、`db/index/{art/art.h,btree/btree.h,heap/heap_vector_store.h,hilbert.h,shared/tree_page.h,vector_index/vector_index_selector.h}` |
+| `distributed`+`consensus`+`sharding` | **8,136** | **否** | + `db/shard_routing.h`、`db/distributed/{distributed_query,rpc,rpc_stream}.h`、`db/distributed/txn/distributed_txn.h`、`db/sharding/sharding.h`、`db/core/log.h` |
+| `graph/` | 5,850 | **是** | `db/core/func_registry.h`、`db/core/log.h` |
+| `tools/` | 2,922 | **是** | `db/` 顶层（CLI/server） |
+| `protocol/` | 2,847 | 部分 | `sql_compat.c`/`analytics_sql.c` 独立，另两个是 stub |
+| 其余内核本体 | **133,505** | — | storage/sql/parser/executor/core/api/cli/optimizer/vectorized/yang/… （= 209,907 − 上述各行） |
 
 > **措辞修正（2026-11-18 复审）**：`index/` 与 `distributed/` 不依赖冻结内核的**实现**，但**依赖它的公开头**
 > （`engine/include/db/` 下的头）。因此 D-1 删 `engine/src/db/` 时，这些子树**暂时还能编译**；
@@ -271,7 +277,7 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | R-05 | **§5.6 的「5 个 memctx 测试」是笔误** | `engine/test/sdk/memory/` 实有 **6** 个 `.cpp` | §2.9 的 6 行清单是对的；§5.6 的两处「5 个」已改正 | §5.6（已改） |
 | R-06 | **doc 模态的完整计数是 3,787 行，不是 2,829** | `src/modalities/doc/` 10 个文件（.c + .h） | 2,829 是早期**部分计数**。⚠️ §2.2 该表的合计口径与本次测量**不同**，故**不做加减**（避免改出一组自相矛盾的总和）—— 权威数字由 W-B 的 `tools/measure_build.sh` 产出 | W-B Task B5 |
 | R-07 | **`engine/test/index/` 的源码 include `<index/...>`** | 这些路径只能经 `engine/include/db/` 解析 | 删掉 `engine/include/db/` ⇒ 这 8 个文件**连编译都过不了**，不只是链接目标消失 | W-A Task 4 |
-| R-08 | **`ALLOCSET_PRESET_SMALL高频` 是混写标识符** | `engine/include/db/sql/memctx.h:58` 等 4 处 | 移植时**逐字保留** —— 改名要连带改测试，且属"顺手优化相邻代码" | W-A Task 2 |
+| R-08 | **`ALLOCSET_PRESET_SMALL高频` 是混写标识符** | 全仓仅 **2 处**：`memctx.h:58`（枚举定义）+ `memctx.c:543`（case） | 移植时**逐字保留** —— 改名要连带改测试，且属"顺手优化相邻代码" | W-A Task 2 |
 | R-09 | **`SQL_MAX_COLS` 是 32，注释仍写 16** | `query/parser.h:36`、`query/exec_internal.h:69-72` | 既有文档债，**本轮不改**（精准修改纪律），但新代码按 32 写 | W-C Task C1 |
 | R-10 | **裁剪点是五处不是四处** | `src/main.c` 直接调用 `handle_vec` / `handle_ft` / `handle_geo` / `handle_ts` 与 `static` 的 `handle_blob` / `handle_graph` | §4.2 补第 5 处（REPL 入口级）；且 `db_internal.h` 的**模态函数声明**也要守卫 —— 否则 `db_ft_recovery_hook` 的注册点链接失败 | §4.2（已补） |
 | R-11 | **`storage/gstore*` 是 graph 与 vector **共用**的底座** | `vector_am.c:125` 调 `gstore_cursor_init(vstore_meta(...))` | 它**不属于 graph**，不能搬进 `modalities/graph/`，必须留在 L1 | W-C Task C3 |
@@ -282,6 +288,9 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | R-16 | **`db.c` 766 行 / `main.c` 670 行 / `db_instance.c` 232 行** | 实测 | 都在 800 行硬规则内，但 `db.c` 已接近上限 ⇒ C-1 往里加 opener 安装点时**不要**再堆代码 | W-C Task C1 |
 | **R-17** | **仓库自己的文档里，主核的测试数与超限文件清单都已过期** | `CLAUDE.md`「主数据库内核」节写「`sh test/run.sh` — **55 个测试文件**，73 处断言」；同节把 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 列为「既有超限文件」 | 实测：`test/unit/` **64** 个 + `test/integration/` **31** 个 = **95** 个测试文件（`run.sh` 的 glob 就是 `test/unit/test_*.c test/integration/test_*.c`）；三个「超限文件」实测 **614 / 766 / 795** 行，**全部 ≤ 800**，早已不超限 | W-A Task 5 |
 | **R-18** | **`test/run.sh` 的头部注释写着「实测 93 个测试里没有任何两个共用同一个 .db 路径」** | `test/run.sh:15` | 实测是 **95** 个。这条注释是**并发安全性的证据**（"各测试互不干扰"），数字错一点不影响结论，但会让复核者对不上 | W-A Task 5 |
+| **R-19** | **`memctx` 的行数被记小了** | `engine/include/db/sql/memctx.h` 实测 **503 行**、`engine/src/db/sql/memctx.c` 实测 **834 行** | 本文档 §5.6 原写「742 行 `memctx.c` + 354 行 `memctx.h`」「其余 352 行」—— 三个数字都偏小。**移植的工作量估计按偏小的数给的**，已订正 | §5.6（已改） |
+| **R-20** | **本文档的体量数字是「早快照」，且口径未标注** | §2.2 的表、§2.7 的冻结轨分层表、§2.1 的「1,313 行 / 2.6%」 | 三处都**没写统计口径**，读者无从判断"行数"是含头文件、含注释、含空行还是只算 `.c`。本文档 §2.2 现在把口径写死为「`.c` 文件的物理行数」、§2.7 写死为「`.c` + `.h` 全行」，并按 2026-11-18 实测值重算 | §2.1 / §2.2 / §2.7（已改） |
+| **R-21** | **冻结轨的体量比本文档记录的还大** | `engine/src/db/` 实测 **524 文件 / 209,907 行**（`.c` + `.h`）；`index/` 子树 **56,647 行**（原记 46,805） | 「冻结轨是主核 3 倍多」这个**结论方向不变**，但绝对值全线偏小。删除的**风险评估**（§7）用的是偏小的数 ⇒ 实际删除量更大 | §2.7 / D-1 / D-4（已改） |
 
 ---
 
@@ -291,13 +300,13 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 |---|---|---|
 | **D1** | 主核保持**单仓单二进制**，用**编译期模态裁剪**实现「模态可单独构建/单独部署」 | 模态共享同一套运行时（pager/WAL/xid/缓冲池），进程内耦合无法靠目录结构切断；§2.4 的**四项**阻断决定了多进程当前不可行 |
 | **D2** | **不做**插件化（`.so` 动态加载） | 要把 C 头文件 SPI 升级成稳定 ABI 契约（结构体布局 / 函数指针表 / 内存所有权跨模块 / CRT 差异），成本远大于「发版便利」的收益；且 `spi/storage_am.h` 151 行含 11 个宏与 14 个函数指针字段，ABI 易碎 |
-| **D3** | **不重构 L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）；**模态归属的搬迁由 D9 管辖** | §2.1/§2.3：接口面已收敛到 1,313 行薄契约、零 internal 泄漏。**（复审修正）** 原文只写「不重构目录」，但 `storage/` 就是 L1 底座，把 `blob.c` 搬走属底座改动 —— 两个判决会在实施时打架，故收窄为「不动 L1–L3 的**机制与形状**」 |
-| **D4** | **删除** `engine/src/db/` 全树（524 文件 / 173,719 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3.4 倍且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
+| **D3** | **不重构 L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）；**模态归属的搬迁由 D9 管辖** | §2.1/§2.3：接口面已收敛到 1,934 行薄契约、零 internal 泄漏。**（复审修正）** 原文只写「不重构目录」，但 `storage/` 就是 L1 底座，把 `blob.c` 搬走属底座改动 —— 两个判决会在实施时打架，故收窄为「不动 L1–L3 的**机制与形状**」 |
+| **D4** | **删除** `engine/src/db/` 全树（524 文件 / 209,907 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3 倍多（209,907 行 vs 主核 68,037 行）且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
 | **D5** | **保留 SDK，去冻结化**：摘掉 `faiss_hnsw`/`mm_vector_index`/`sql_engine` 三个链接依赖；`sdk/vectors` 的 HNSW 后端改为 `index_flat.c` 实现真扁平索引；**并把 memctx 移植进 SDK 内部**（§5.6） | §2.8：SDK 6/7 模块是 SQLite 后端，与冻结内核无关；`index_flat.c` 本就是为此预留的占位。**（复审修正）** 原文漏了 memctx —— SDK 的 `MemoryContext` 类型**真的**来自 `include/db/sql/memctx.h`，实现**真的**在 `src/db/sql/memctx.c`，不处理则 `mmsdk` 链接必失败 |
-| **D6** | **主核补 CI** | 主核 50,867 行 / 95 个测试文件（64 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
+| **D6** | **主核补 CI** | 主核 52,400 行 `.c`（含 `.h` 是 68,037 行 / 247 文件）/ 95 个测试文件（64 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
 | **D7** | 编译期裁剪用**单一 `MM` 变量**（不是 14 个独立布尔开关） | 2026-10-27 设计明列的反目标：「宏组合爆炸」 |
-| **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,313 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
-| **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,313 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |
+| **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,934 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
+| **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,934 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |
 | **D10** | **给 SPI 加第四个契约 `TableOpener`**：关系模态的适配器进 L4，执行器不再 include 任何模态头 | 关系模态是唯一被执行器直接调用的模态（`exec_scan.c` 的 `heap_am_build`）。它是「底座型模态」，实现横跨 L1–L3，搬不进 L4 —— 只有把「表打开」抽象成契约才能真正对称。**这也是 v1.7 跨模态联合查询的前置** |
 | **D11** | **文档模态功能补全**：执行 `PLAN-v1.6` 步骤 3~6，把 JSON 接进 SQL（`json_match` + 路径索引） | §2.12：JSONB 编解码/路径/溢出链已实现且测试全绿（3,787 行），但 `db.h` 里零个 `db_json_*`、无路径索引、未接执行器 —— 八模态里唯一功能未闭环的 |
 
@@ -370,13 +379,14 @@ engine/db/
 > 不守卫就会**链接失败**。
 
 > **复审补入的第 4 处（重要）**：模态的生命周期有**两半** —— 打开在 `db.c`，**关闭在 `db_instance.c`**，
-> 而且 `db_instance.c` 有**两条关闭路径**（正常关闭 + 错误回滚）。实测该文件里的模态调用点共 **10 处**：
+> 而且 `db_instance.c` 有**两条关闭路径**（正常关闭 + 错误回滚）。实测该文件里的模态调用点共 **11 处**（复审订正：原写 10 处，漏了 L187 `graph_destroy`）：
 >
 > ```
 > L55   db_vec_close(inst)          L125  blob_store_destroy(inst->blobs)
 > L67   db_ft_close(inst)           L126  graph_destroy(inst->graph)
 > L78   db_geo_close(inst)          L186  blob_store_destroy(inst->blobs)   ← 错误路径
-> L90   db_ts_close(inst)           L207  db_ft_close(inst)
+> L90   db_ts_close(inst)           L187  graph_destroy(inst->graph)        ← 错误路径
+>                                    L207  db_ft_close(inst)
 >                                    L213  db_geo_close(inst)
 >                                    L219  db_ts_close(inst)
 > ```
@@ -485,7 +495,7 @@ engine/db/
 | **P0** | 主核 CI（§4.5） | 无 —— **先做**，因为它给后面所有改动兜底 |
 | **P1** | `MM` 编译期开关 + 闭包校验（§4.2） | P0 |
 | **P2** | 每模态 smoke 目标 + `measure_build.sh`（§4.3/§4.4） | P1 |
-| **P3** | D8 预备：把 seam（1,313 行头文件）整理成可发布的头文件包 | P1–P2 完成后再评估 |
+| **P3** | D8 预备：把 seam（1,934 行头文件）整理成可发布的头文件包 | P1–P2 完成后再评估 |
 
 > 冻结轨退役（§5）是**独立工作流 W-A**，不属于本表的阶段序列 —— 它与 P0/P1/P2 的交叉点只有一条：
 > **W-A 必须在 P0 之后执行**（§9）。八模态对称化（§6）是**独立工作流 W-C**，与 P1 的先后见 §9。
@@ -498,12 +508,12 @@ engine/db/
 
 | # | 对象 | 规模 | 依据 |
 |---|---|---|---|
-| D-1 | `engine/src/db/` | 524 文件 / 173,719 行 | 用户裁决；§2.7 依赖分层已查实 |
+| D-1 | `engine/src/db/` | 524 文件 / 209,907 行 | 用户裁决；§2.7 依赖分层已查实 |
 | D-2 | `engine/test/db/` | 289 文件（≈587 条 ctest 用例） | 测的都是被删的内核 |
 | D-3 | `engine/test/smoke/` | 13 文件 | 全是旧轨 profile 冒烟（`mm_*_smoke`） |
 | D-4 | `engine/include/db/` | **409** 个 `.h` | 冻结内核的公开 API。**必须与 D-1 同批删**（§2.7：`index/`、`distributed/` 依赖这里的头） |
 | D-5 | `engine/include/rag/`、`engine/include/tree_index/` | **2 + 8** 头 | 分别对应 `executor/rag/` 与 `src/db/index/` 的传统索引 |
-| D-6 | `engine/include/sdk/impl/mmdb_memctx.h` 的 **include 与类型依赖** | 1 头 + 6 源文件 + 5 测试 | **（复审重大修正）** 原文判断「SDK 公共头零处引用冻结内核类型，只需订正注释」—— **实测相反**：<br>`include/sdk/impl/mmdb_memctx.h:25` **真实存在** `#include "db/sql/memctx.h"`，<br>L32 `typedef MemoryContext mmdb_memctx_t;` 直接 typedef 自冻结内核类型。<br>6 个 SDK 源文件 include 它；`palloc`/`pfree`/`AllocSetContextCreate`/`MemoryContextDelete` 的**实现体**在 `src/db/sql/memctx.c`（742 行）；`mmdb_mem_register_resource` **只在该文件定义**（L783）而 `sdk/core/mmdb.c:199` 在调用。<br>→ **处置见 §5.6「SDK 内存上下文去冻结化」**（把 memctx 移植进 `sdk/core/`），**不是订正注释** |
+| D-6 | `engine/include/sdk/impl/mmdb_memctx.h` 的 **include 与类型依赖** | 1 头 + 6 源文件 + 5 测试 | **（复审重大修正）** 原文判断「SDK 公共头零处引用冻结内核类型，只需订正注释」—— **实测相反**：<br>`include/sdk/impl/mmdb_memctx.h:25` **真实存在** `#include "db/sql/memctx.h"`，<br>L32 `typedef MemoryContext mmdb_memctx_t;` 直接 typedef 自冻结内核类型。<br>6 个 SDK 源文件 include 它；`palloc`/`pfree`/`AllocSetContextCreate`/`MemoryContextDelete` 的**实现体**在 `src/db/sql/memctx.c`（834 行）；`mmdb_mem_register_resource` **只在该文件定义**（L783）而 `sdk/core/mmdb.c:199` 在调用。<br>→ **处置见 §5.6「SDK 内存上下文去冻结化」**（把 memctx 移植进 `sdk/core/`），**不是订正注释** |
 | D-7 | `engine/cmake/ModalityProfiles.cmake`、`engine/cmake/MultimodalConfig.cmake` | 2 文件 | 旧轨的 profile 机制；主核用 Makefile，不进 CMake 图 |
 | D-8 | `engine/tools/benchmark/c_api/` | 目录 | 链 `mm_vector_index`/`faiss_hnsw`；**删了必须同时删 `tools/benchmark/CMakeLists.txt:5` 的 `add_subdirectory(c_api)`**（见 B-9） |
 | D-9a | `engine/test/sdk/hnsw/hnsw_filter_test.cpp`、`engine/test/sdk/integration/selector_integration_test.cpp` | 2 文件 | 依赖 HNSW / `vector_index_selector`（随 B-7 改造或删除） |
@@ -608,7 +618,7 @@ engine/include/sdk/impl/mmdb_memctx.h:32   typedef MemoryContext mmdb_memctx_t;
 |---|---|
 | SDK 源文件（6 个） | `core/collection.c`、`core/mmdb.c`、`core/mmdb_memctx.c`、`extra/xquery.c`、`graph/graph.c`、`text/text.c` |
 | 类型 | `MemoryContext` 来自 `include/db/sql/memctx.h`（冻结内核公开头） |
-| 实现 | `palloc` / `pfree` / `AllocSetContextCreate` / `MemoryContextReset` / `MemoryContextDelete` → `src/db/sql/memctx.c`（742 行） |
+| 实现 | `palloc` / `pfree` / `AllocSetContextCreate` / `MemoryContextReset` / `MemoryContextDelete` → `src/db/sql/memctx.c`（834 行） |
 | 独有符号 | `mmdb_mem_register_resource` / `mmdb_mem_unregister_resource` **只在** `src/db/sql/memctx.c:783,816` 定义；`src/sdk/core/mmdb.c:199` 在调用 |
 | 测试 | `engine/test/sdk/memory/` 下 **5 个**（见 §2.9） |
 
@@ -619,7 +629,7 @@ B-5 摘链接这步走不下去。
 
 | 方案 | 工作量 | 评价 |
 |---|---|---|
-| **A. 把 memctx 移植进 `sdk/core/`**（**采纳**） | 742 行 `memctx.c` + 354 行 `memctx.h` 迁入 SDK | 见下方可行性论证 |
+| **A. 把 memctx 移植进 `sdk/core/`**（**采纳**） | 834 行 `memctx.c` + 503 行 `memctx.h` 迁入 SDK | 见下方可行性论证 |
 | B. 主核提供等价分配器 | 主核是 Makefile 工程、无 `.a` 产物 | 跨构建体系，CMake 侧链不上 → **不可行** |
 | C. 删掉 SDK 的 memctx 层 | 删 6 个文件的 memctx 调用 + 6 个测试 | 破坏 SDK 公开 API —— 这是「砍功能」而非「去冻结化」，且 §2.9 的 5 个测试就是验收依据 → **不采纳** |
 
@@ -629,13 +639,13 @@ B-5 摘链接这步走不下去。
 实测：`parsenodes.h` 的 `NodeTag` 共 **114 项**，而 `memctx.h` 只用到 2 项。
 
 → **移植代价极小**：在 SDK 内定义一个只含这 2 个值的本地枚举（或改用 `u16` + 2 个常量），
-`memctx.h` 的**其余 352 行与 `memctx.c` 的 742 行可近乎原样搬运**，无行为变更。
+`memctx.h` 的**其余 501 行与 `memctx.c` 的 834 行可近乎原样搬运**，无行为变更。
 
 **移植清单**：
 
 | # | 动作 |
 |---|---|
-| M-1 | `include/db/sql/memctx.h` → `engine/src/sdk/core/memctx.h`（去 `parsenodes.h` 依赖，`NodeTag` 换本地 2 值枚举） |
+| M-1 | `include/db/sql/memctx.h` → **`engine/include/sdk/impl/memctx.h`**（去 `parsenodes.h` 依赖，`NodeTag` 换本地 2 值枚举）—— **（复审订正）** 原文写 `engine/src/sdk/core/memctx.h`（把头放进 .c 目录，与 SDK 其它实现级头的落法不一致）；W-A 用的 `sdk/impl/` 才是对的 |
 | M-2 | `src/db/sql/memctx.c` → `engine/src/sdk/core/memctx.c`（`<windows.h>` / `<pthread.h>` 双线程 ID 保留原样） |
 | M-3 | `include/sdk/impl/mmdb_memctx.h` 的 `#include "db/sql/memctx.h"` → `#include "core/memctx.h"`；同步订正 L116 那段过期注释（原文说「已通过 `#include "db/sql/memctx.h"` 自动暴露声明」—— 引用路径变了） |
 | M-4 | `mmdb_mem_register_resource` 的声明与定义一并迁入 SDK |
@@ -693,7 +703,16 @@ B-5 摘链接这步走不下去。
 
 ```c
 /* 不透明 ctx 缓冲区的上限。 */
-#define SPI_AM_CTX_MAX 256
+/*
+ * 打开器私有状态缓冲的字节上限。
+ *
+ * ⚠️ **（复审修正）原值 256 不够，且名字有两义** ——
+ * 关系模态的私有状态实测是 `Heap*`(8) + `HeapAmCtx`(184) + `StorageAM`(152) = **344 字节** > 256。
+ * 原值只按 `HeapAmCtx` 单件定的，漏算了 `Heap*` 与 `StorageAM`。
+ * ⇒ 值提到 **512**；名字从 `SPI_AM_CTX_MAX` 改成 `SPI_OPENER_PRIV_MAX`
+ *   —— 原名里的 "CTX" 在别处被当成"执行器的上下文缓冲"，一个名字两种含义。
+ */
+#define SPI_OPENER_PRIV_MAX 512
 
 /* 打开器的产物。调用方持有，必须活到本次查询结束。 */
 typedef struct {
@@ -750,12 +769,12 @@ struct TableOpener {
 > | 只按 `tid` 打开 | **按表名打开** | 执行器的主路径是 `resolve_table(name)`；`tid` 路径只有 UPDATE / DELETE 用 |
 > | 固定 `ctx_out` | **`priv` + `priv_bytes`** | 关系模态的 per-query 私有状态是 `HeapAmCtx`(≈184 B) **加** 一个 `StorageAM` —— 一个 `ctx_out` 装不下两样 |
 >
-> **不透明 ctx 缓冲区**：`SPI_AM_CTX_MAX = 256`（实测 `HeapAmCtx` ≈ 184 字节，附录 C）。
-  `TableCtx.am_ctx` 从 `HeapAmCtx` 改成 `u8 am_ctx_buf[SPI_AM_CTX_MAX]` →
+> **不透明 ctx 缓冲区**：`SPI_OPENER_PRIV_MAX = 512`（实测 `HeapAmCtx` ≈ 184 字节，附录 C）。
+`TableCtx.am_ctx` 从 `HeapAmCtx` 改成 `u8 am_ctx_buf[SPI_OPENER_PRIV_MAX]` →
   **执行器不再 include 任何模态头**。
   - **（复审修正）接口里不传 `ctx_cap`**：上限是编译期常量，运行时再传一个 cap 没有意义，
     反而给误用留了空间（适配器可以收到一个更小的 cap 然后写超界）。
-    正确做法是**编译期校验**：`_Static_assert(sizeof(HeapAmCtx) <= SPI_AM_CTX_MAX, "...")`
+正确做法是**编译期校验**：`_Static_assert(sizeof(HeapAmCtx) <= SPI_OPENER_PRIV_MAX, "...")`
     —— 超限直接编译错，而不是运行期才发现。接口更小，且不可误用。
 - **两个实现**：
   - `rel_table_opener`（关系模态提供，在 `src/modalities/relational/rel_opener.c`）——
@@ -919,7 +938,7 @@ Makefile 的闭包校验器算出实际集合；差集非空直接报错。
 
 | 风险 | 影响 | 应对 |
 |---|---|---|
-| **ctest 用例数从 ~835 掉到 ~250** | 高 | 这不是回归 —— 是删掉了 289 个测冻结内核的测试文件。**必须采改造前基线**（失败用例名集合，跑两次取交集），只比「集合不新增」而非绝对值（2026-10-27 设计的教训） |
+| **ctest 用例数从 ~835 掉到 ~250** | 高 | 这不是回归 —— 是删掉了 294 个测冻结内核的测试文件。**必须采改造前基线**（失败用例名集合，跑两次取交集），只比「集合不新增」而非绝对值（2026-10-27 设计的教训） |
 | **SDK 向量检索降级为暴力 KNN** | 中 | 写进 SDK 文档与 changelog；不静默改 |
 | **`mmsdk` 摘链接后出现 undefined symbol** | 中 | 链接期立刻暴露；`nm -u` 逐个查 |
 | **912 处文档死链** | 中 | §5.4 分类处置；`check-wiki-refs.py` 必跑 |
@@ -928,7 +947,7 @@ Makefile 的闭包校验器算出实际集合；差集非空直接报错。
 | **删除后无法回滚** | 低 | git 历史保留；删除前打 tag `pre-frozen-track-removal` |
 | **`engine/include/db/` 下有 SDK 仍在用的头** | 低 | §2.8 已证明 SDK 只 include `algo-prod/distance/distance.h` 与 `roaring_bitmap.h`；B-6 的 include 路径调整后用编译验证 |
 | **`TableOpener` 改造动执行器，可能引入回归** | 高 | 改造前先跑 `sh test/run.sh` 存基线；改造后**用例集合必须完全一致**（不新增、不减少）；S2 的验收 = 「执行器零模态名」门禁通过 **且** 全部既有用例仍绿 |
-| **`SPI_AM_CTX_MAX = 256` 未来不够用** | 低 | 契约头里写死上限并在编译期校验（超限即编译错）；真需要时改这一个常量，代价可控 |
+| **`SPI_OPENER_PRIV_MAX = 512` 未来不够用** | 低 | 契约头里写死上限并在编译期校验（超限即编译错）；真需要时改这一个常量，代价可控 |
 | **文档模态接 SQL 时执行器改动越界** | 中 | A7 审计清单**先定义后实现**：允许落点**五处**（值层路径变体 / 求值入口 / lexer / parser 表达式 / parser DDL），见 §6.4；`grep -i json src/query/` 的每一处命中都要在清单里登记 |
 | **`json_match` 的 NULL 语义（路径不存在 vs JSON null vs 标量不匹配）** | 中 | 映射规则全表用例（A1/A2）；反向验证注入 1 = 把 null 映成 INT 0，让 NULL 语义测试变红 |
 | **八模态对称化与 v1.6 的执行器改动撞车** | 中 | **必须合并做**（C-4 依赖 C-1）；分两次动执行器 = 两次回归成本 + 两次审计 |
@@ -947,6 +966,10 @@ Makefile 的闭包校验器算出实际集合；差集非空直接报错。
 3. **不做**跨模态事务（v1.7+ 议题，本次不动）。
 4. **不做**把冻结轨的 percolator / raft / RAG 算子框架**迁移**到主核 —— 用户裁决是全删；triage 文档保留其分级结论供将来需要时取用。
 5. **不重构**主核 **L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）—— D3 已收窄为这句话。§6 只动**模态归属**与新增第四契约。
+   - **（复审补入的唯一豁免）**：`catalog` 的索引元数据**增加一种「表达式索引」形态**（`IndexInfo` 多三个字段 + 落盘格式多一段）——
+     这是路径索引（PLAN-v1.6 步骤 4，「B+tree 既有能力、零新机制」）的**必要条件**。
+     **豁免范围严格限定在这三处**：不改 `IndexInfo` 之外的任何 catalog 结构、不改 catalog 的其它落盘格式、不动 catalog 的锁与恢复逻辑。
+     没有这条豁免，D11（文档模态功能补全）与「不重构 catalog」不可兼得。
 6. **不改**主核的公开 API 语义 —— `db_json_*` 是**新增**，不是改动既有函数。
 7. **不为对称而造空壳** —— 关系模态不新建 `db_rel.c`（它的对外接口就是 SQL），文档模态不新建 `doc_am.c`（寄生模态无虚拟表）。
 8. **不做** JSON Schema 校验、多值索引、部分更新、JSON 聚合函数、MongoDB 查询语法 —— 沿用 `PLAN-v1.6` §1.1 的「不做表」，不重复决策。
@@ -1004,20 +1027,50 @@ W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-
 5. **C-5**：S9 门禁加强 + `MM` 扩到 8 个 profile + 8 个 smoke
 6. **C-6**：S10 —— blob / graph 的 REPL 从 `main.c` 搬进 `repl_blob.c` / `repl_graph.c`（**计划编写期补入**）
 
+> **（复审补入）编号对照** —— 本节用 `C-1 … C-6`（按「动作组」编号），
+> W-C 计划文件里用 `Task C1 … Task C7`（按「可独立提交的批次」编号）。两者不是一一对应：
+
+| 本节 | W-C 计划的 Task | 内容 |
+|---|---|---|
+| C-1 | **C1** | S1 + S2 —— SPI 第四契约 + 执行器脱钩 |
+| C-2 | **C2** | S3 + S6 —— 关系模态 + B+tree 适配器归位 |
+| C-3 | **C3** | S5 —— blob 归位 |
+| C-6 | **C4** | S10 —— blob / graph 的 REPL 归位 |
+| C-4 | **C5** | PLAN-v1.6 步骤 3~6 —— 文档模态接 SQL（含 S7 / S8） |
+| C-5 | **C6 + C7** | S9 门禁 + 8 profile + 8 smoke；收官复盘 |
+
 **执行顺序**：
 
 ```
 W-B 的 P0（CI 兜底）
   → W-A 全部（冻结轨退役，含 §5.6 的 memctx 移植）
   → W-C 的 C-1（执行器脱钩，此时 CI 已是绿的，能立刻发现回归）
-  → W-C 的 C-2 / C-3 / C-4
-  → W-B 的 P1 / P2（MM 开关与 smoke，此时 8 个模态已就位，profile 才是真的 8 个）
+  → W-C 的 C-2 / C-3 / C-4 / C-5
+  → W-B 的 P1 / P2（MM 开关与 smoke —— 此时 8 个模态已就位且**文件归属已定**，`tools/mm_profiles.mk` 一次建对，不需要二次同步）
+  → W-C 的 C-6（8 profile + 8 smoke 重跑 + 收官复盘）
   → 文档大改（§5.4 与 §6 的 MODALITIES.md 补写，放在 W-A 末尾，与删除同批提交）
 ```
 
-> **W-C 的 C-1 必须在 W-B 的 P1 之前**：P1 的 `MM` 开关要靠 `#if DB_HAS_<MOD>` 裁剪 `db_internal.h`、`db.c` **与 `db_instance.c`**；
+> **（复审修正）这段顺序原来是四份互斥的说法** —— 设计 §9、W-B 表头、
+> W-C 表头、W-B B1.1 注释各说一套。**本块是唯一权威。**
+
+> **规则一**：W-C 的 C-1 ~ C-5 **全部**必须在 W-B 的 P1 **之前**完成。
+> 理由：P1 的 B1 会**第一次创建** `tools/mm_profiles.mk` ——
+> 那时所有模态的文件已在最终位置（C-2/C-3 搬完了、C-4/C-5 建好了
+> `src/db_json.c` / `src/repl_json.c`），**一次写对**，
+> 不存在「先写旧的、之后再同步」的第二步。
+> 若顺序反了，B1 写下的 `MM_FILES_blob := src/storage/blob.c …`
+> 在 C-3 搬家后全部失效 ⇒ `MM=vector` 裁不掉 blob ⇒ P1 的验收必失败。
+
+> **规则二**：W-C 的 C-1 必须在 W-B 的 P1 之前（它与 P1 改同一批文件）：
+> P1 的 `MM` 开关要靠 `#if DB_HAS_<MOD>` 裁剪 `db_internal.h`、`db.c` **与 `db_instance.c`**；
 > 而 C-2 正在改这些文件的结构。先脱钩、后裁剪，避免同一批文件被两条工作流同时改。
 
+> **规则三**：W-C 的 C-6 在 P1/P2 **之后** ——
+> 它做的是「门禁 + 8 profile + 8 smoke **重跑**」，需要 P1 建好的 `MM` 开关已就位。
+> C-6 对 `mm_profiles.mk` 的动作是**核对/校准**，不是"补同步"。
+
+> **规则四**：W-A 的**文档大改**（§5.4）放在 W-A 末尾，与删除同批提交。
 ### 9.1 本地执行环境的前提（复审补入）
 
 三条工作流里有两处依赖 POSIX `sh`，**Windows 本地 `sh` 不在 PATH**：
@@ -1105,7 +1158,7 @@ Select-String -Path "engine/db/src/modalities/doc/json_ovf.h" -Pattern 'PT_JSON_
 | `engine/db/docs/PLAN-v1.6.md` | 文档模态的完整实现计划（§6.4 的执行依据） |
 | `engine/db/README.md` | 主核七条硬规则（§4.3 的边界来源） |
 
-## 附录 C：`SPI_AM_CTX_MAX = 256` 的取值依据
+## 附录 C：`SPI_OPENER_PRIV_MAX = 512` 的取值依据
 
 `HeapAmCtx`（`spi/heap_am.h:36-50`）的字段与估算尺寸（64 位平台）：
 
@@ -1118,7 +1171,7 @@ Select-String -Path "engine/db/src/modalities/doc/json_ovf.h" -Pattern 'PT_JSON_
 | `nidx` | `int` | 4（+4 对齐填充） |
 | `layout` | `RecLayout` | 142 → 144（对齐后） |
 
-**合计 ≈ 184 字节** → `SPI_AM_CTX_MAX = 256` 留 72 字节余量（可容纳一个 `Graph*` 或两个 `u32` 级别的附加状态）。
+**合计 ≈ 184 字节**。⚠️ **（复审修正）这个依据不够** —— 关系模态的私有状态实际是 `Heap*`(8) + `HeapAmCtx`(184) + `StorageAM`(152) = **344 字节**，原来的 256 装不下 ⇒ 常量已提到 **512**（留 168 字节余量）。
 
 `RecLayout` 的构成（`storage/record.h:113-125`）：7 个 `u16`（14 字节）+ 2 个 `u16[REC_MAX_COLS]`。
 `REC_MAX_COLS` = 32 → 2 × 32 × 2 = 128 字节 → 合计 142 字节。
@@ -1131,8 +1184,8 @@ Select-String -Path "engine/db/src/modalities/doc/json_ovf.h" -Pattern 'PT_JSON_
 >
 > ```c
 > /* modalities/relational/heap_am.c */
-> _Static_assert(sizeof(HeapAmCtx) <= SPI_AM_CTX_MAX,
->                "HeapAmCtx 超过 SPI_AM_CTX_MAX，需调大常量或压缩 ctx");
+> _Static_assert(sizeof(HeapAmCtx) <= SPI_OPENER_PRIV_MAX,
+"HeapAmCtx 超过 SPI_OPENER_PRIV_MAX，需调大常量或压缩 ctx");
 > ```
 >
 > 这让「ctx 超限」从**运行期内存损坏**降级为**编译期错误**。

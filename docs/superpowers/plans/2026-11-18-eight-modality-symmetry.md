@@ -10,8 +10,13 @@
 > ```
 > C-1 **必须**先于 W-B P1 —— 两者都改 `db_internal.h` / `db.c` / `db_instance.c`，
 > 顺序反了必然冲突。
-> C-2 / C-3 / C-4 / C-5 与 W-B P1 无文件重叠，**但 C-2 / C-3 改动了模态的文件归属**，
-> 所以必须在 W-B P1 **之后**同步 `tools/mm_profiles.mk`（见 C-6）。
+> C-2 / C-3 / C-4 / C-5 与 W-B P1 无文件重叠，但它们**都改了模态的文件归属** ——
+> 所以必须全部排在 W-B P1 **之前**：P1 的 B1 会**第一次创建** `tools/mm_profiles.mk`，
+> 那时文件归属已定，**一次建对**。反过来做就要多出「同步 `mm_profiles.mk`」这一步，
+> 而且极易漏 —— 设计 §9 的顺序块是唯一权威。
+>
+> ⚠️ **本计划自己新加的 C5.14（`src/db_json.c`）与 C5.15（`src/repl_json.c`）
+> 也属于「改了文件归属」** —— 它们同样必须在 P1 之前完成。
 
 ---
 
@@ -92,7 +97,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
 | # | 关注点 | 判据 |
 |---|---|---|
-| R1 | 执行器真的不认识模态了吗 | `grep -rniE 'heap\|relational\|blob\|graph\|vector\|json' src/query/exec*.c` 只命中注释；`exec_internal.h` 不再 include `spi/heap_am.h` |
+| R1 | 执行器真的不认识模态了吗 | `grep -rniE 'heap\|relational\|blob\|graph\|vector\|json' src/query/exec*.c` **零命中（连注释都不该有）**；`exec_internal.h` 不再 include `spi/heap_am.h` |
 | R2 | 第四个契约是不是"活"的 | `TableOpener` 有**两个**实现（catalog 侧 + 注册表侧），执行器通过函数指针调用，**没有**任何 `if (is_virtual)` 之外的模态分支 |
 | R3 | blob 搬家有没有漏 | `grep -rn 'storage/blob.h\|spi/blob_am.h' engine/db/src/` 应指向新位置；旧位置文件不存在 |
 | R4 | 关系模态搬家有没有漏 | `grep -rn 'spi/heap_am' engine/db/src/` 只剩新位置 |
@@ -115,6 +120,8 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 | `engine/db/src/spi/table_opener.c` | 注册表侧 opener（虚拟表） |
 | `engine/db/src/modalities/relational/rel_opener.c` | 关系模态的 opener（catalog → heap → StorageAM） |
 | `engine/db/src/modalities/relational/rel_opener.h` | 同上，头 |
+| `engine/db/src/db_json.c` | 文档模态的**公开 API 实现**（`db_json_encode` / `db_json_decode` / `db_json_match`）+ `db_json_init()`（S7） |
+| `engine/db/src/repl_json.c` / `repl_json.h` | 文档模态的 **REPL 族**（`DOC` 动词族，S8） |
 | `engine/db/src/modalities/doc/json_func.c` | 通用值层函数：`json_match` / `json_extract` 的注册与实现 |
 | `engine/db/src/modalities/doc/json_match.c` | 匹配规格解析（`'$.a.b = 5'` → path + op + 值） |
 | `engine/db/src/modalities/doc/json_match.h` | 同上，头 |
@@ -155,7 +162,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 | `engine/db/src/index/*` | 路径索引（表达式索引）的支持 |
 | `engine/db/include/db.h` | 新增 `db_json_*` 公开 API |
 | `engine/db/docs/MODALITIES.md` | 补 A7 审计清单 + 八模态盘点表 |
-| `engine/db/tools/mm_profiles.mk` | 随 C-2 / C-3 的搬家更新文件归属 |
+| `engine/db/tools/mm_profiles.mk` | **W-B 的 B1 创建**（在本计划 C-1~C-5 之后）；本计划 C-6 只做核对/校准 |
 
 ---
 
@@ -215,7 +222,19 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
    * 各模态的私有状态大小不同（关系模态约 200 字节，虚拟表为 0）。
    * 塞进公共结构体就是"给最胖的那个留位置，全家都付这份内存"。
    */
-  #define SPI_AM_CTX_MAX 256
+  /*
+   * 打开器私有状态缓冲的字节上限。
+   *
+   * ⚠️ **（复审修正）原值 256 不够** —— 关系模态的私有状态实测是：
+   *   `Heap*` 8 + `HeapAmCtx` 184 + `StorageAM` 152 = **344 字节** > 256。
+   * （原值只按 `HeapAmCtx` 单件的 184 字节定，漏算了 `Heap*` 与 `StorageAM`。）
+   * ⇒ 提到 **512**，并给下一个模态留一档余量。
+   *
+   * 【为什么改名】原名 `SPI_AM_CTX_MAX` 里的 "CTX" 在别处被当成
+   * "执行器的上下文缓冲"，同一个名字两种含义。改名 `SPI_OPENER_PRIV_MAX`
+   * 后语义唯一：**打开器私有状态的字节上限**。
+   */
+  #define SPI_OPENER_PRIV_MAX 512
 
   /* 打开器的产物。调用方持有，必须活到本次查询结束。 */
   typedef struct {
@@ -230,16 +249,44 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   typedef struct TableOpener TableOpener;
 
+  /*
+   * 第四个 SPI 契约：表打开器。
+   *
+   * ⚠️ **（复审修正）`open` / `open_by_id` 都带两个"调用方给的缓冲"参数** ——
+   * 起因是 `catalog_table_cols` **写进调用方给的数组、不返回指针**
+   * （现有调用：`catalog_table_cols(db->cat, tid, tc->cols_buf, SQL_MAX_COLS, &ncols)`），
+   * 所以 opener 光返回指针不够：列定义得由**调用方**备好缓冲，
+   * `out->cols` / `out->idxs` 指回它 —— 这样"自持副本"纪律才继续成立。
+   *
+   * ⚠️ **本块是契约的唯一权威副本**（原文件里有初版与修正版两份并存，
+   * 签名不一致、谁照抄谁编译不过；初版已删）。
+   */
   struct TableOpener {
       const char *kind;          /* "catalog" / "virtual" —— 仅诊断用 */
 
-      /* 按表名打开。表不存在返回 E_NOTFOUND。 */
+      /*
+       * 按表名打开。表不存在返回 E_NOTFOUND。
+       *
+       * owner      : 打开器的宿主（catalog / SpiRegistry / ...）
+       * name       : 表名
+       * out        : 产物（调用方持有）
+       * cols_buf   : 调用方给的列定义缓冲（至少 SQL_MAX_COLS 项 ColDesc）
+       * idxs_buf   : 调用方给的索引列表缓冲（至少 SQL_MAX_COLS 项 IndexInfo）
+       * priv       : 调用方给的私有状态缓冲（至少 priv_bytes 字节）
+       * priv_bytes : priv 的字节数
+       *
+       * out->cols / out->idxs 会指向 cols_buf / idxs_buf（不是打开器自己的内存）。
+       */
       int (*open)(const TableOpener *op, void *owner, const char *name,
-                  TableOpenResult *out, void *priv, size_t priv_bytes);
+                  TableOpenResult *out,
+                  ColDesc *cols_buf, IndexInfo *idxs_buf,
+                  void *priv, size_t priv_bytes);
 
-      /* 按表 id 打开（只有 catalog opener 支持；虚拟表返回 E_NOTSUP）。 */
+      /* 按表 id 打开（只有 catalog opener 支持；虚拟表返回 E_NOTSUP）。参数同上。 */
       int (*open_by_id)(const TableOpener *op, void *owner, u32 tid,
-                        TableOpenResult *out, void *priv, size_t priv_bytes);
+                        TableOpenResult *out,
+                        ColDesc *cols_buf, IndexInfo *idxs_buf,
+                        void *priv, size_t priv_bytes);
 
       /* 私有状态需要多少字节。 */
       size_t priv_bytes;
@@ -295,8 +342,14 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   /*
    * 私有状态的大小契约 —— 越界就是编译期错误，不是运行期崩溃。
    */
-  _Static_assert(sizeof(RelPriv) <= SPI_AM_CTX_MAX,
-                 "关系模态的私有状态超出 SPI_AM_CTX_MAX");
+  _Static_assert(sizeof(RelPriv) <= SPI_OPENER_PRIV_MAX,
+                 "关系模态的私有状态超出 SPI_OPENER_PRIV_MAX");
+
+  /*
+   * 实测 sizeof(RelPriv) = Heap*(8) + HeapAmCtx(184) + StorageAM(152) = **344 字节**
+   * ⇒ 原上限 256 装不下（这正是原 `_Static_assert` 必然炸的原因）。
+   * 上限已提到 SPI_OPENER_PRIV_MAX = 512（见 C1.1 的契约）。
+   */
 
   /* 把 AM 装进 TableOpenResult。 */
   static int rel_fill(const RelPriv *rp, const ColDesc *cols, int ncols,
@@ -313,8 +366,15 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
       return OK;
   }
 
+  /*
+   * ⚠️ **（复审修正）签名必须与 C1.1 的契约逐字一致** ——
+   * 原样例是**修正前**的签名（少 `cols_buf` / `idxs_buf`），
+   * 照抄会与函数指针类型不匹配，编译报错。
+   */
   static int rel_open_by_id(const TableOpener *op, void *owner, u32 tid,
-                            TableOpenResult *out, void *priv, size_t priv_bytes)
+                            TableOpenResult *out,
+                            ColDesc *cols_buf, IndexInfo *idxs_buf,
+                            void *priv, size_t priv_bytes)
   {
       (void)op;
       Catalog *cat = (Catalog *)owner;
@@ -327,9 +387,9 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
       if (!heap)
           return E_CORRUPT;
 
-      const ColDesc *cols = NULL;
+      /* catalog_table_cols 写进调用方给的数组，不返回指针 */
       int ncols = 0;
-      int rc = catalog_table_cols(cat, tid, &cols, ncols);   /* 按实际签名改 */
+      int rc = catalog_table_cols(cat, tid, cols_buf, SQL_MAX_COLS, &ncols);
       ...
   }
   ```
@@ -342,41 +402,40 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   这就要求 `TableOpenResult` 里的 `cols` 指向**调用方的缓冲区**。
 
   ⇒ 修正契约：`TableOpenResult` 里的 `cols` / `idxs` 指针由**打开器**填，
-  但指向哪里由**调用方**决定 —— 所以契约里要加两个"调用方给的缓冲"参数：
+  但指向哪里由**调用方**决定 —— 所以契约里要加两个"调用方给的缓冲"参数。
+
+  > ⚠️ **（复审修正）本块原来重复定义了 `struct TableOpener`** ——
+  > 与 C1.1 那份**初版契约**并存，两份签名不一致（初版没有 `cols_buf` / `idxs_buf`），
+  > 谁照抄谁编译不过。
+  > ⇒ **初版已删**；契约的**唯一权威副本在 C1.1**（`src/spi/table_opener.h`），
+  > 本节只保留**为什么这么设计**的论证，不再重复定义。
 
   ```c
-  struct TableOpener {
-      const char *kind;
-
-      /*
-       * 打开一张表。
-       *
-       * owner      : 打开器的宿主（catalog / SpiRegistry / ...）
-       * name       : 表名
-       * out        : 产物（调用方持有）
-       * cols_buf   : 调用方给的列定义缓冲（至少 SQL_MAX_COLS 项 ColDesc）
-       * idxs_buf   : 调用方给的索引列表缓冲（至少 SQL_MAX_COLS 项 IndexInfo）
-       * priv       : 调用方给的私有状态缓冲
-       * priv_bytes : priv 的字节数
-       *
-       * out->cols / out->idxs 会指向 cols_buf / idxs_buf（不是打开器自己的内存）——
-       * 这样调用方的"自持副本"纪律（v1.2 步骤 1）继续成立。
-       */
-      int (*open)(const TableOpener *op, void *owner, const char *name,
-                  TableOpenResult *out,
-                  ColDesc *cols_buf, IndexInfo *idxs_buf,
-                  void *priv, size_t priv_bytes);
-
-      int (*open_by_id)(const TableOpener *op, void *owner, u32 tid,
-                        TableOpenResult *out,
-                        ColDesc *cols_buf, IndexInfo *idxs_buf,
-                        void *priv, size_t priv_bytes);
-
-      size_t priv_bytes;
-  };
+  /* 契约全文见 C1.1 —— 此处不重复定义，避免两份签名打架 */
+  int (*open)(const TableOpener *op, void *owner, const char *name,
+              TableOpenResult *out,
+              ColDesc *cols_buf, IndexInfo *idxs_buf,
+              void *priv, size_t priv_bytes);
   ```
 
   ⚠️ **`SQL_MAX_COLS` 是 32，不是 16**（`query/parser.h:36`）。
+  ⚠️ **`SQL_MAX_COLS` 的归属要动**（设计 §2.13 R-15）：
+  它现在住在 `src/query/parser.h:36`（值 **32**，注释仍写 16），
+  但 `spi/table_opener.h` 的契约要用它（缓冲至少 `SQL_MAX_COLS` 项）——
+  **L3 的 spi 头不能依赖 L3 的 query 头**。
+
+  ⇒ **本 Task 一并把 `SQL_MAX_COLS` 挪到 `src/common/types.h`**，
+  `query/parser.h` 改成 include 它（不改值、不改语义）。
+
+  ⚠️ **改完必须查一遍所有引用点**：
+
+  ```powershell
+  Select-String -Path src/ -Pattern 'SQL_MAX_COLS'
+  ```
+
+  预期：**每一处都指向新家**（`common/types.h` 定义，其余 include 它）。
+
+
   ⚠️ 顺带记一笔（**本 Task 不改，只提醒**）：`parser.h` 与 `exec_internal.h:69-72`
   的注释仍写"=16"，与实际值 32 不符 —— 属既有文档债。
 
@@ -465,7 +524,7 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   struct Db {
       Pager    *pager;
       Catalog  *cat;
-      TxnTable  txns;
+      TxnTable *txns;       /* ⚠️ 指针，不是副本 —— 本步**不改**它 */
       SpiRegistry *reg;
       Snapshot  snap;
       u32       cur_xid;
@@ -482,6 +541,12 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
       const TableOpener *opener_virtual;
   };
   ```
+
+  ⚠️ **`txns` 是指针不是值**（`exec.h:16/43` 原文写着「指向**共享的**事务表（指针，不是副本！）」，
+  赋值点 `db.c:715` / `db.c:741` 都是 `= &inst->txns`）。
+  本步**只加两个 opener 字段**，`txns` 一行都不许动 ——
+  改成值就是复制了一份事务表，xid 分配器会分裂成两个。
+
 
 - [ ] **C1.5 `src/query/exec_internal.h`：`TableCtx` 去模态化**
 
@@ -572,16 +637,34 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   `resolve_table_id` 同理，改调 `opener_catalog->open_by_id`。
 
-- [ ] **C1.7 `src/db.c`：安装两个 opener**
+- [ ] **C1.7 `src/db.c`：**两个**入口都要安装 opener**
 
-  在 `db_open` 里给连接装上：
+  ⚠️ **（复审修正）只装 `db_open` 会漏掉第二个连接** ——
+  `db.c:728` 的 `db_connect()` **另建一个连接**并逐字段填 `conn->db.*`
+  （`conn->db.txns = &db->inst->txns` 就在那儿）。
+  只在 `db_open` 装 ⇒ `db_connect` 出来的连接两个 opener 都是 NULL
+  ⇒ **第二个连接起所有表都报「表不存在」**。
+
+  ⇒ **两处都要装**：
 
   ```c
+  /* db_open() 里，建完 conn 之后 */
+  conn->db.opener_catalog = &rel_table_opener;
+  conn->db.opener_virtual = &spi_table_opener;
+  ```
+
+  ```c
+  /* db_connect() 里（db.c:728 起），逐字段填完 conn->db.* 之后 */
   conn->db.opener_catalog = &rel_table_opener;
   conn->db.opener_virtual = &spi_table_opener;
   ```
 
   ⚠️ `db.c` 要 include `modalities/relational/rel_opener.h` 与 `spi/table_opener.h`。
+
+  ⚠️ **与 W-B B3.3/B3.4 的冲突**：`db.c` 的模态 `#if` 守卫是 W-B P1 才加的，
+  而本步（W-C C-1）在 W-B P1 **之前**执行 ⇒ 此时 `db.c` 里还没有 `#if DB_HAS_*`，
+  两边不打架。**但** C5.7 要往 `db.c` 加 `db_json_init()` 时，
+  那个调用点必须**同时**被 W-B 的裁剪守卫覆盖 —— 见 C5.7 的说明。
 
 - [ ] **C1.8 机械验收：执行器不认识模态了**
 
@@ -599,6 +682,13 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   预期：**零命中**。
 
+  ⚠️ **（复审修正）与 R1 的口径要统一** —— R1 写的是「只命中注释」，
+  本步写的是「零命中（连注释都不该有）」，**两条判据互相矛盾**。
+  ⇒ 以本步为准：**零命中**。R1 已改成同一口径。
+  ⇒ 若执行时发现注释里有 `heap` 字样（如「这里以前是 heap 的活」），
+  **一并删掉** —— 留着的唯一好处是让人以为这条路还没走完。
+
+
 - [ ] **C1.9 构建 + 全量测试**
 
   ```powershell
@@ -608,6 +698,21 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   ```
 
   预期：零警告；`✓ 依赖方向正确`；**95 个测试全绿**。
+
+  ⚠️ **（复审修正）光"全绿"不够**（设计 §7 风险表）：
+  TableOpener 改造是**执行器核心路径**的改动 ——
+  必须**改造前后的 ctest 用例名集合逐条比对**，确认「不新增、不减少」：
+
+  ```powershell
+  cd C:\code\projects\engine\db
+  & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh   # 跑一次
+  # 从输出里抽出全部用例名，存成 before.txt / after.txt，再 diff
+  ```
+
+  ⇒ 改造前跑一次存 `before.txt`，改造后跑一次存 `after.txt`，
+  `diff before.txt after.txt` 必须**为空**。
+  ⚠️ 只比「用例数相等」不够 —— 数量相同但名字换了，是另一种回归。
+
 
   ⚠️ `heap_am_build` 现在只在 `rel_opener.c` 里被调用 ——
   `exec_scan.c` 不再 include `spi/heap_am.h`，所以 `heap_am.c` 的 include 要跟着改。
@@ -857,7 +962,10 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   ```
 
   ⚠️ **`repl_blob.c` / `repl_graph.c` 属于 blob / graph 两个模态** ——
-  W-B 的 `tools/mm_profiles.mk` 里，`MM_FILES_blob` 要加 `src/repl_blob.c`，
+⚠️ **（复审修正）本步在 W-B 的 B1 之前** —— `tools/mm_profiles.mk` **还不存在**。
+⇒ 正确说法是：**P1 的 B1 建 `mm_profiles.mk` 时，`MM_FILES_blob` 就要含 `src/repl_blob.c`**。
+⇒ 在本步的**执行记录**里写下这句提醒，让后续执行者不会去找一个还不存在的文件。
+⇒ 并且：`W-B 的 tools/mm_profiles.mk 里，MM_FILES_blob 要加 src/repl_blob.c`
   `MM_FILES_graph` 要加 `src/repl_graph.c`（见 Task C6）。
 
 ---
@@ -881,11 +989,18 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 - 新的索引形态：**表达式索引**（索引键 = 路径提取的标量）
 
 **⚠️ A7 审计清单必须先写（PLAN-v1.6 步骤 5 的第 1 条）**：
-执行器里允许出现的落点**只有两处** ——
-1. **通用值层**（`src/storage/value.{h,c}`）：值变体 + 函数表
-2. **求值入口**（`src/query/exec_eval.c` 的 `eval_expr`）：`EX_FUNC` 的分发
+  执行器里允许出现的落点**是五处**（设计 §6.4 已把「原文写『只有两处』是错的」订正过来）——
+  1. **通用值层**（`src/storage/value.{h,c}` / `record.h`）：值变体 + 函数表
+  2. **求值入口**（`src/query/exec_scan.c::eval_expr` 与 `src/query/exec_eval.c::eval_where`
+     —— **两条平行实现都要加**）：`EX_FUNC` 的分发
+  3. **lexer**（`src/query/parser.c` 的词法部分）：认识 `JSON` 类型名与 `json` 路径字面量
+  4. **parser 表达式**（`src/query/parser.h` / `parser.c` / `parser_priv.h`）：
+     新增**通用**函数调用节点 `EX_FUNC`
+  5. **parser DDL**（`src/query/parser_stmt.c`）：`CREATE INDEX` 支持 `json '$.a.b'` 的路径列
 
-**不允许**：任何 `if (strcmp(col_type, "json"))` 式的模态特判。
+  **不允许**：任何 `if (strcmp(col_type, "json"))` 式的模态特判。
+  落点 3/4/5 的原则是「**加通用能力，不加模态分支**」——
+  `EX_FUNC` 是通用函数调用节点（将来 `geo_contains(...)` 也能用），`JSON` 是通用类型名。
 
 - [ ] **C5.1 先写 A7 审计清单（写进 `engine/db/docs/MODALITIES.md`）**
 
@@ -894,12 +1009,15 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   ```markdown
   ## v1.6 · 执行器改动审计清单（A7）
 
-  文档模态接进 SQL 时，执行器**只允许**在下面两处出现与文档有关的代码：
+  文档模态接进 SQL 时，执行器**只允许**在下面**五处**出现与文档有关的代码：
 
   | # | 落点 | 文件 | 允许的内容 | 禁止的内容 |
   |---|---|---|---|---|
-  | 1 | 通用值层 | `src/storage/value.h` / `value.c` | `T_JSON` 值变体；通用函数表（`val_func_register` / `val_func_find`）；函数签名为 `int (*)(DbValue *args, int nargs, DbValue *out)` | 出现 "json" 字样以外的模态名；按列类型分支的求值逻辑 |
-  | 2 | 求值入口 | `src/query/exec_eval.c::eval_expr` | `EX_FUNC` 的一次函数表查表 + 调用 | 任何 `strcmp(..., "json")`；任何路径解析；任何索引判断 |
+  | 1 | 通用值层 | `src/storage/value.h` / `value.c` / `record.h` | `T_JSON` 值变体；通用函数表（`val_func_register` / `val_func_find`）；函数签名为 `int (*)(const DbValue *args, int nargs, DbValue *out)` | 出现 "json" 字样以外的模态名；按列类型分支的求值逻辑 |
+  | 2 | 求值入口 | `src/query/exec_scan.c::eval_expr` **与** `src/query/exec_eval.c::eval_where`（两条平行实现，**都要加**） | `EX_FUNC` 的一次函数表查表 + 调用 | 任何 `strcmp(..., "json")`；任何路径解析；任何索引判断 |
+  | 3 | lexer | `src/query/parser.c` 的词法部分 | 认识 `JSON` 类型名与 `json` 路径字面量（`'$.a.b'` 的词法） | 任何语义判断；任何模态名 |
+  | 4 | parser 表达式 | `src/query/parser.h` / `parser.c` / `parser_priv.h` | 新增**通用**函数调用节点 `EX_FUNC` + `json_match` 的参数解析 | 为 `json_match` 特判；任何路径解析 |
+  | 5 | parser DDL | `src/query/parser_stmt.c` | `CREATE INDEX` 支持 `json '$.a.b'` 的路径列 | 加模态分支；改其它 DDL 的语义 |
 
   审计命令（每次改动后跑）：
 
@@ -1168,6 +1286,35 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   }
   ```
 
+- [ ] **C5.3b 步骤 3 收尾：大文档外置接 `PT_JSON_OVF` 页链**
+
+  ⚠️ **（复审修正）PLAN-v1.6 的「步骤 3」原来没有独立落点** ——
+  它被混在 C5.3 的 `DbValue` 变体里，导致「大文档外置」这条
+  只剩一个测试要求、没有实现步骤。
+
+  PLAN-v1.6 步骤 3 的原文要求：**大文档（> 页大小）走页链外置；
+  `ext_fn` 换沿链读；`DetoastFn` 契约一行不改**。
+
+  ⇒ 本步要做三件事：
+
+  1. **record 编解码按 `cols[i].type` 分流**：
+     - `T_JSON` 且内联长度 ≤ `JSON_INLINE_MAX`（`json_ovf.h` 里是 2048）⇒ 内联存；
+     - 超长 ⇒ **外置**：正文落到 `PT_JSON_OVF` 页链，
+       `DbValue` 里只留 `external = true` + `(key, off, len)`。
+
+     ⚠️ **字段名是 `external`，不是 `is_external`**（`storage/value.h:95`）——
+     写错就编译不过。
+
+  2. **`ext_fn` 沿链读**：外部值的读取函数**沿 `PT_JSON_OVF` 页链**逐页拼出全文，
+     **不改 `DetoastFn` 的签名**（`value.h:128`）。
+
+  3. **只取路径字段时不读全文**（A2 的实现侧）：
+     路径索引命中时**只读那一段**，不把整条链拉上来 —— 用页读计数断言。
+
+  ⚠️ **`DbValue.type` 只有 `ColType` 一套枚举**（`value.h:79`），
+  **不存在 `ValType`** —— 别引入第二套类型枚举。
+
+
   ⚠️ **`fn_json_match` 的第一个实参是 JSONB** ——
   它可能是外部值（`ext_fn`），要 `val_detoast` 出来再解析。
   `val_detoast` 已有（`storage/value.h`）。
@@ -1179,20 +1326,47 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
   需要做的：
 
-  1. **索引定义**：catalog 里多存"这个索引是路径索引，路径是 `$.a.b`"。
-     现在 `IndexInfo` 只存列号。加一个字段：
-     ```c
-     typedef struct {
-         u16  col;          /* 普通索引的列号 */
-         bool is_path;      /* true = 路径索引 */
-         u8   path_len;
-         char path[64];     /* 路径文本（is_path 时有效） */
-     } IndexInfo;
-     ```
-     ⚠️ **`IndexInfo` 加字段会影响 `exec_internal.h` 的 `idxs_buf[SQL_MAX_COLS]`** ——
-     内存变大但没关系（32 项 × ~72 字节 = 2.3 KB，在栈上，可接受）。
-     ⚠️ **catalog 的索引元数据要能存下这个字段** —— 落盘格式要加一段。
-     这是**有代价的**（要改 catalog 的序列化）。
+   1. **索引定义**：catalog 里多存"这个索引是路径索引，路径是 `$.a.b`"。
+
+      ⚠️ **（复审修正）字段落点不是 `IndexInfo`，是 `IndexMeta`** ——
+      现有 `src/catalog/catalog.h:102-106` 的 `IndexInfo` 是**索引句柄**，不是元数据：
+
+      ```c
+      typedef struct {
+          IndexMeta meta;   /* 元数据 */
+          BTree    *bt;     /* 已打开的 B+tree */
+          FreeList *fl;     /* 内部用，外部别碰 */
+      } IndexInfo;          /* ← 句柄！不能动 */
+      ```
+
+      它的使用者有 7 处，跨 3 层（`catalog.c:486/533`、`catalog_load.c:239`、
+      `catalog_lock.c:282`、`spi/heap_am.c:36/53/438/507`）——
+      给它加字段会**抹掉 B+tree 句柄**，索引扫描全废。
+
+      ⇒ **路径字段加在 `IndexMeta` 上**（`catalog.h` 里 `IndexMeta` 的定义），`IndexInfo` **一个字都不动**：
+
+      ```c
+      typedef struct {
+          /* ... 现有 IndexMeta 字段 ... */
+          u16  col;          /* 普通索引的列号 */
+          bool is_path;      /* true = 路径索引 */
+          u8   path_len;
+          char path[64];     /* 路径文本（is_path 时有效） */
+      } IndexMeta;
+      ```
+
+      ✅ 好处：`exec_internal.h` 的 `idxs_buf[SQL_MAX_COLS]` **完全不受影响**
+      （`IndexInfo` 仍是 100 字节，32 项 = 3.2 KB，在栈上，可接受）。
+
+      ⚠️ **catalog 的索引元数据要能存下这个字段** —— 落盘格式要加一段。
+      这是**有代价的**（要改 catalog 的序列化）——
+      设计 §8.5 已为此开了**唯一豁免**：只允许改 `IndexMeta` 这三处，
+      不动 catalog 的其它结构、其它落盘格式、锁与恢复逻辑。
+
+      ⚠️ **改动面比"加个字段"大**，实际要碰 4 个文件：
+      `src/catalog/catalog.h`（`IndexMeta` 定义）、`src/catalog/catalog.c`（序列化）、
+      `src/catalog/catalog_load.c`（反序列化）、`src/spi/heap_am.c`（消费元数据）。
+      **这 4 个文件必须进本任务的修改清单**（见 C5.8.1）。
 
      ⚠️ **更省的做法**：路径索引**不进 catalog 的普通索引结构**，
      而是由文档模态**自己管理**（它有自己的元数据 ——
@@ -1216,6 +1390,15 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
      ⚠️ **UPDATE 的旧值从哪来**：heap 的 MVCC 版本链里有旧版本（`xmin`/`xmax`），
      所以旧键能算出来。
 
+   4. **查询路径（执行器用索引）**：
+      - WHERE 里有 `json_match(doc, '$.a.b = 5')` → 解析出 path + op + 值。
+      - 在表的索引里找"路径索引且 path 相同且 op 可用"的。
+      - 用它做索引扫描 → 拿到候选行 → **执行器重新求值整个 WHERE**（超集契约）。
+      - 索引扫描的结果必须**是超集**（索引可能给出不完全匹配的候选）。
+      - ⚠️ **谓词下推必须走 `spi/pushdown.h` 的下推契约**（设计 §6.1 的要求）：
+        路径谓词的"能不能下推、推给谁"由**下推契约**表达，
+        执行器**不**直接问文档模态"这个谓词你认不认"。
+
   4. **查询路径（执行器用索引）**：
      - WHERE 里有 `json_match(doc, '$.a.b = 5')` → 解析出 path + op + 值。
      - 在表的索引里找"路径索引且 path 相同且 op 可用"的。
@@ -1223,6 +1406,18 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
      - 索引扫描的结果必须**是超集**（索引可能给出不完全匹配的候选）。
 
 - [ ] **C5.9 A3 验收：两路全等**
+  ⚠️ **（复审修正）PLAN-v1.6 的「反向验证 2 处」原来只做了一处** ——
+  必须做**两处注入**，证明这套测试**真的会红**（否则测试是摆设）：
+
+  | # | 注入 | 期望 |
+  |---|---|---|
+  | 1 | **标量映射把 `null` 映成 INT 0**（把 `json_extract_scalar` 里 null 的分支改成返回 0） | NULL 语义的用例必须**红** —— 若仍绿，说明这条用例没真正覆盖 null |
+  | 2 | UPDATE 漏删旧键（把写路径里"删旧键"那行注释掉） | A4 的索引对账用例必须**红** —— 若仍绿，说明对账没数对 |
+
+  ⇒ 两个注入各做一次，**每次都要看到红**，然后**回滚注入**、再跑一遍确认全绿。
+  两次注入的截图/输出写进执行记录。
+
+
 
   新建 `engine/db/test/integration/test_json_index_equiv.c`：
 
@@ -1319,7 +1514,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   Select-String -Path src/query/*.c,src/query/*.h -Pattern 'json'
   ```
 
-  **逐行**核对：命中必须全部落在 A7 清单的"落点 1"（值层）与"落点 2"（求值入口）里。
+  **逐行**核对：命中必须**逐行对上 A7 清单五处中的某一格**；落在五处之外 = 零容忍。
   写进 `engine/db/docs/MODALITIES.md` 的执行记录。
 
   ```powershell
@@ -1330,6 +1525,92 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
   预期：零警告；`✓ 依赖方向正确`；**全部测试绿**（95 + 新增）。
 
+  ⚠️ **A8 的第三项「新文件 < 800 行」原来没有验收命令** —— 补上：
+
+  ```powershell
+  cd C:\code\projects\engine\db
+  Get-ChildItem src/modalities/doc,src/db_json.c,src/repl_json.c -Recurse -File |
+    Where-Object { $_.Extension -in '.c','.h' } |
+    ForEach-Object {
+      $n = ([System.IO.File]::ReadAllLines($_.FullName)).Count
+      if ($n -gt 800) { "超限 {0} 行: {1}" -f $n, $_.FullName }
+    }
+  ```
+
+  预期：**无输出**（零超限）。⚠️ `Measure-Object -Line` 对 UTF-8 源文件会**偏低**，
+  必须用 `[System.IO.File]::ReadAllLines().Count`。
+
+
+- [ ] **C5.14 `db_json_*` 的实现落点：新建 `src/db_json.c`**（S7）
+
+  ⚠️ **（复审修正）原计划只给了 `include/db.h` 的声明，没给实现的落点** ——
+  `db_json_encode` / `db_json_decode` / `db_json_match` 三个公开函数
+  以及 `db_json_init()` **必须有家**，否则链接不过。
+
+  ⇒ **实现放在 `src/db_json.c`**（与 `db_vec.c` / `db_ft.c` 同级，
+  公开 API 的实现文件都住在 `src/` 顶层）：
+
+  | 函数 | 落点 | 说明 |
+  |---|---|---|
+  | `db_json_encode` | `src/db_json.c` | 文本 → JSONB。**薄封装**，真正的编解码在 `modalities/doc/jsonb.c` |
+  | `db_json_decode` | `src/db_json.c` | JSONB → 文本。同样薄封装 |
+  | `db_json_match` | `src/db_json.c` | 匹配规格求值；**委托** `modalities/doc/json_match.c` |
+  | `db_json_init` | `src/db_json.c` | 注册 `json_match` / `json_extract` 到值层函数表（`val_func_register`） |
+
+  ⚠️ **`db_json.c` 要进 `MM_FILES_doc`**（W-B B1.1 的裁剪清单，
+  W-C C6.1 会同步）—— 否则 `MM=vector` 时 `db_json_*` 符号还在、
+  `db_json_init()` 也会被调用 → 注册了不存在的函数。
+
+  ⚠️ **`db_json_init()` 的调用点（`db.c`）必须被 W-B 的裁剪守卫覆盖** ——
+  它在 `db.c` 的 `db_open` 里，而 W-B B3.3 的守卫是 `MM=vector` 等 profile 才加的。
+  ⇒ 在 `db.c` 里写成：
+
+  ```c
+  #if DB_HAS_DOC
+      db_json_init();
+  #endif
+  ```
+
+  ⚠️ **W-B P1 在 W-C C-1/C-5 之后执行**（设计 §9 的顺序），
+  所以**这一步要等 W-B P1 的守卫落地后再做**，或者在这一步就把
+  `#if DB_HAS_DOC` 一起写好（W-B B3.3 只需补齐其余触点）。
+  **二选一，但必须在本步的记录里写明选了哪个。**
+
+- [ ] **C5.15 文档模态的 REPL 族：`src/repl_json.c` + `DOC` 动词族**（S8）
+
+  ⚠️ **（复审修正）原计划完全没有 S8** —— 设计的「四件套」是
+  「SPI 适配器 + **公开 API** + **REPL 族** + 模态文档」，
+  文档模态当时只有前两件，**REPL 族整个缺失**。
+
+  ⇒ **新建** `engine/db/src/repl_json.c` / `engine/db/src/repl_json.h`，
+  提供 `DOC` 动词族：
+
+  | 动词 | 作用 |
+  |---|---|
+  | `DOC ENCODE <json>` | 文本 → JSONB，打印 hex |
+  | `DOC DECODE <hex>` | JSONB → 文本 |
+  | `DOC MATCH <json> <spec>` | 匹配规格求值，打印 true/false |
+  | `DOC PATH <json> <path>` | 取路径值（调试用） |
+
+  仿照 `repl_vec.c` / `repl_ft.c` 的既有形状（`repl_xxx_init(...)` 注册动词 +
+  `handle_xxx(...)` 处理）。
+
+  ⚠️ **接线点有两处**：
+  1. `main.c` 的 `#include "repl_json.h"`（在 L62-65 那一组 `repl_*.h` 里）
+     与派发（`main.c:593-629` 那一组 `handle_xxx` 调用）
+2. ⚠️ **（复审修正）此时 `tools/mm_profiles.mk` 还不存在**（P1 的 B1 在后面才建它）——
+   在本步的执行记录里写下：**P1 建 `mm_profiles.mk` 时，`MM_FILES_doc` 必须含 `src/repl_json.c` 与 `src/db_json.c`**。
+
+  ⚠️ **与 W-B B3.6 的 `#if` 守卫的关系**：W-B B3.6 是在 `main.c` 里
+  就地包 `#if` 住各模态的 include 与派发。文档模态的 REPL 也要被守卫住
+  （`MM=vector` 时不该有 `DOC` 动词）。
+  ⇒ **本步的派发代码写成 `#if DB_HAS_DOC` 包裹**，
+  W-B B3.6 只需把 `repl_json.h` 的 include 与 `handle_json` 的调用一并纳入。
+
+  ⚠️ **`repl_json.c` 不属于任何 `MM_FILES_*` 的通配**（它在 `src/` 顶层，
+  不在 `src/modalities/doc/` 下）—— 必须**显式**加进 `MM_FILES_doc`。
+
+- [ ] **C5.16 提交**
 - [ ] **C5.14 提交**
 
   ```powershell
@@ -1344,7 +1625,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 ### Task C6：门禁 + 8 个 profile + 8 个 smoke 重跑
 
 **Files**
-- 修改：`engine/db/tools/mm_profiles.mk`（随 C-2 / C-3 的搬家更新）
+- 核对：`engine/db/tools/mm_profiles.mk`（W-B 的 B1 已按最终归属一次建对；本步只**核对/校准**，并补上 C-4/C-5 新增的 `src/db_json.c` / `src/repl_json.c`）
 - 修改：`engine/db/tools/check_deps.sh`（加"模态不许直接依赖 L1 之外的东西"之类的规则，若需要）
 - 新建：`engine/db/test/smoke/smoke_doc.c`（W-B 已建的话改造它）
 
@@ -1352,7 +1633,7 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 - `MM_FILES_blob` 的文件归属要更新（blob 搬家了）。
 - `MM_FILES_relational` 是新的（关系模态的适配器搬到了 `modalities/relational/`）。
 
-- [ ] **C6.1 更新 `tools/mm_profiles.mk`**
+- [ ] **C6.1 核对 `tools/mm_profiles.mk`（不是「更新」—— B1 已一次建对）**
 
   ```make
   # blob 的实现搬进了 modalities/blob/（C-3）；REPL 也归位了（C-4）
@@ -1503,3 +1784,39 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
    C5.9（A3 两路全等）、C5.10（A4 对账）、C5.13（A7 审计）、C6.2 / C6.3（9 profile + 8 smoke）。
 4. **后续建议** —— 跨模态事务（v1.7+）；`json_match` 的多值索引（当前数组路径返回 NULL）；
    根目录越界文件仍未清理。
+
+## Self-Review 记录
+
+**Spec 覆盖**：§6.1「对称」的定义（先定义再补全）→ C1（第四个 SPI 契约）+ C2/C3（归位）；
+§6.2 `TableOpener` → C1.1~C1.9；§6.3 结构对称化动作清单 → C2 / C3 / C4；
+§6.4 文档模态功能补全（`PLAN-v1.6` 步骤 3~6、A1~A8）→ C5（含复审补入的
+C5.3b「步骤 3 收尾」、C5.14「`db_json_*` 的实现落点」、C5.15「`DOC` 动词族」）；
+§6.5 `MM` 开关与 smoke 覆盖 8 个模态 → C6（重跑 W-B 建好的 8 个 smoke）；
+§6.6 执行顺序 → 本计划表头已改为**引用设计 §9 的唯一权威顺序块**；
+§2.12 文档模态功能缺口 → C5 全覆盖；
+§7 风险 → C1.9（改造前后 ctest 用例名集合**逐条**比对，不只看总数）、
+C5.9（反向验证**两处**注入）、C5.13（A7 五处审计 + 新文件 < 800 行的验收命令）、
+C5.1b（`IndexMeta` 落点，避免动 `IndexInfo` 句柄）、C1.2（`RelPriv` 尺寸断言）。
+
+**类型一致性**：`TableOpener` / `TableOpenResult` / `SPI_OPENER_PRIV_MAX` 在 C1.1 定义、
+C1.2 使用、C1.4 装进 `Db`，三处名字一致（常量从 `SPI_AM_CTX_MAX` 改名，
+因为原名里的 "CTX" 在别处被当成「执行器的上下文缓冲」，一词两义）；
+`RelPriv` 的三个字段 `Heap*` / `HeapAmCtx` / `StorageAM` 在 C1.2 的定义、
+C1.2 的 `_Static_assert` 与 C1.4 的安装处三处一致（实测 8+184+152 = 344 字节 ≤ 512）；
+`rel_open_by_id` 的签名在 C1.1（契约）与 C1.2（实现样例）**逐字一致**
+（含 `cols_buf` / `idxs_buf` 两个「调用方给的缓冲」参数）；
+`Db.txns` 保持 `TxnTable *`（`exec.h:16/43` 的原注释「指针，不是副本」），
+C1.4 只加两个 opener 字段，一行都不动；
+路径索引的三个新字段加在 `IndexMeta` 上，`IndexInfo`（**索引句柄**）不动 ——
+七个使用者（`catalog.c:486/533`、`catalog_load.c:239`、`catalog_lock.c:282`、
+`spi/heap_am.c:36/53/438/507`）不受影响。名字无漂移。
+
+**比例**：本计划 1787 行 / 设计文档 1192 行 ≈ 1.5:1。
+其中约 35% 是两轮复审的「（复审修正）」批注 —— 它们是**要照着做的指令**，
+不是背景叙述，删掉会导致执行者踩坑。
+**复审来源**：本计划经过两轮独立 subagent 复审 ——
+① 规格覆盖复审（对照设计 §1~§9 逐条查落点）与 ② 跨计划一致性复审
+（31 个交叉点、契约冲突、文件归属冲突、顺序矛盾、数字口径）。
+两轮的 blocking 级发现**已全部并入本计划正文**，每处均以
+「⚠️ **（复审修正）**」标出，并写明**为什么错**与**改成什么** ——
+这样执行者遇到分歧时能就地判断，而不是回头查聊天记录。
