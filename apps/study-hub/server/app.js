@@ -262,6 +262,41 @@ function createServer(opts) {
 }
 
 /**
+ * 装载三轨共用的单元索引。
+ *
+ * 契约 §3.4：loadUnits(opts) -> { units, warnings, byId }。
+ * 完整 Unit（含 entry / asserts / statement）只活在内存里——
+ * units 表只是摘要（契约 §4.2），判题接口必须查这份索引。
+ *
+ * 扫盘失败不抛异常：单元列表空着，总比服务起不来强。
+ * @param {{root: string|null, ok: boolean}} learning
+ * @param {object} env
+ * @param {object} options
+ * @returns {{units: object[], warnings: string[], byId: object}}
+ */
+function loadUnitsIndex(learning, env, options) {
+  if (!learning || !learning.ok) {
+    return { units: [], warnings: ["还没连上 learning 仓，单元列表是空的"], byId: {} }
+  }
+  try {
+    const { loadUnits } = require("../core/unit/index.js")
+    const { localBankDir } = require("../core/paths.js")
+    return loadUnits({
+      learningRoot: learning.root,
+      localBank: options.localBank === null ? null : localBankDir(env, options.localBank),
+      unitsDir: path.join(learning.root, "units"),
+      grokkingDir: path.join(learning.root, "scaffold", "grokking"),
+    })
+  } catch (err) {
+    return {
+      units: [],
+      warnings: ["单元索引装载失败：" + String((err && err.message) || err)],
+      byId: {},
+    }
+  }
+}
+
+/**
  * 装配整个应用。
  * @param {{dbPath?: string, learningRoot?: string, env?: object, localBank?: string|null, llmClient?: object|null, envProbe?: Function}} opts
  *   dbPath：SQLite 文件路径，默认 data/app.db；传 ":memory:" 用内存库
@@ -343,6 +378,11 @@ function createApp(opts) {
     sendJson: sendJson,
   })
 
+  // P2：三轨共用的单元索引（含 entry / asserts / statement）。
+  // P0 的 refreshUnitIndex 只把**摘要**灌进 units 表，完整 Unit 只在内存里，
+  // 判题接口要的就是那份。options.units 可注入（测试用）。
+  const units = options.units || loadUnitsIndex(learning, env, options)
+
   // P0：单元查询接口。独立文件（server/api-units.js），与其它里程碑零冲突。
   require("./api-units.js")
     .buildUnitRoutes({
@@ -389,6 +429,20 @@ function createApp(opts) {
   })
   routes.push.apply(routes, sessionRoutes)
 
+  // P2：单元运行接口（判题 / 完成 / 问 LLM / 环境自检）。
+  // 路由在独立文件里（server/api-unit-run.js），这里合并进同一张路由表——
+  // 与 M5/M6 同一个套路，不去改 P0/P1 写的 server/api-units.js。
+  routes.push.apply(
+    routes,
+    require("./api-unit-run.js").buildUnitRunRoutes({
+      store: store,
+      units: units,
+      llm: llm,
+      learning: learning,
+      sendJson: sendJson,
+    })
+  )
+
   const server = createServer({ routes: routes, webRoot: options.webRoot })
 
   return {
@@ -407,6 +461,8 @@ function createApp(opts) {
     unitSnapshot: unitSnapshot,
     // M6：新增字段，纯粹是加法——M1 冻结的字段一个都没动。
     llm: llm,
+    // P2：单元索引。新增字段，纯粹是加法。
+    units: units,
     // P1：新增字段，纯粹是加法——会话与设置这两组路由的装配结果。
     sessionRoutes: sessionRoutes,
   }
