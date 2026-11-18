@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件），冻结轨 `engine/src/db/` 全删（173,719 行），SDK 去冻结化后保留。**
+**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件）；八模态在「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套上补全对称（为此给 SPI 加第四契约 `TableOpener`）；文档模态功能补全（接进 SQL）；冻结轨 `engine/src/db/` 全删（173,719 行），SDK 去冻结化后保留。**
 
 ---
 
@@ -28,7 +28,11 @@
 2. **CI 门禁打在了不维护的代码上** —— 冻结轨的测试默认还是关的（`ENABLE_FROZEN_SRC_DB_TESTS=OFF`），但它的**库**仍在被构建。
 3. **主核的多模态组织方式没有「可独立验证」的机制** —— 目前「模态之间不许互相 include」由 `check_deps.sh` 守着，但**没有任何机械证据证明「某个模态可以单独构建、单独部署」**。
 
-第 3 点引出本设计的主体：**多模态数据库应该以什么工程形态存在**。
+第 3 点引出本设计的主体：**多模态数据库应该以什么工程形态存在**，以及**「八模态」如何在结构上成为事实**。
+
+4. **「八模态」目前只是文档说法，不是结构事实** —— 实测（§2.11）：关系模态的实现与适配器在 `storage/` 与 `spi/`，
+   blob 的实现在 `storage/`、适配器在 `spi/`，文档模态**没有公开 API、没有 REPL 族、没接入 SQL**。
+   八个模态在「实现目录 / SPI 适配器 / 公开 API / REPL 族 / SQL 入口」五条线上**只齐了 6 个**。
 
 ---
 
@@ -144,6 +148,61 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 **912 处** `src/db/` 引用：`docs/analysis` 869 + `docs/arch` 32 + `docs/storage` 8 + `openspec/specs` 3。
 其中**带精确行号的引用实测为 0** → `scripts/check-wiki-refs.py` 不会因行号越界失败，但会产生死链。
 
+### 2.11 八模态的对称性缺口（实测）
+
+八模态在四条线上的对齐情况：
+
+| 模态 | 实现 | SPI 适配器 | 公开 API | REPL 族 | SQL 入口 |
+|---|---|---|---|---|---|
+| 0 关系 | `storage/heap*`（**L1，被 L2 依赖**） | `spi/heap_am*` ❌ | 内嵌在 db.c ❌ | SQL | catalog 真表 |
+| 1 blob | `storage/blob*` ❌ | `spi/blob_am*` ❌ | `db_blob.c` ✓ | BLOB ✓ | blob_frames/blob_objects |
+| 2 图 | `modalities/graph/` ✓ | `graph_am.c` ✓ | `db_graph.c` ✓ | GRAPH ✓ | graph_nodes/graph_edges |
+| 3 向量 | `modalities/vector/` ✓ | `vector_am.c` + `hnsw_am.c` ✓ | `db_vec.c` ✓ | VEC ✓ | vec_items |
+| 4 全文 | `modalities/ft/` ✓ | `ft_am.c` ✓ | `db_ft.c` ✓ | FT ✓ | ft_docs |
+| 5 空间 | `modalities/geo/` ✓ | `geo_am.c` ✓ | `db_geo.c` ✓ | GEO ✓ | geo_points |
+| 6 时序 | `modalities/ts/` ✓ | `ts_am.c` ✓ | `db_ts.c` ✓ | TS ✓ | ts_readings/ts_partitions |
+| 7 **文档** | `modalities/doc/` ✓ | **无**（寄生模态，设计如此） | **无** ❌ | **无** ❌ | **未接入** ❌ |
+
+**三条实测结论**：
+
+**① 关系模态的适配器搬不进 L4 —— 被执行器卡住**
+
+```
+query/exec_internal.h:5    #include "spi/heap_am.h"     → HeapAmCtx 类型
+query/exec_internal.h:80   HeapAmCtx am_ctx;            → TableCtx 字段
+query/exec_scan.c:222,286  heap_am_build(...)           → 2 处调用
+```
+
+其余 6 个模态的适配器能在 L4，是因为**执行器从不直接调用**它们（只拿 `StorageAM*`）。
+关系模态的表不走注册表（catalog 真表），执行器必须**主动构造**它的 AM。
+
+**② 关系模态的实现也搬不进 L4 —— 被 L2 卡住**
+
+```
+catalog/catalog.h:8   #include "storage/heap.h"   →  Heap *catalog_heap(Catalog*, u32)
+txn/vacuum.h:6        #include "storage/heap.h"   →  int vacuum_table(Heap *h, ...)
+```
+
+L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁必红。
+
+**③ blob 零反向依赖 → 可完整搬进 `modalities/blob/`**
+
+全仓只有 `spi/blob_am.h` 依赖 `storage/blob.h`，而适配器一起搬 → 无残留。
+
+**补充**：执行器是全仓唯一直接认识模态的地方，而 `spi/heap_am.h` 的注释自己承认 ——
+*"如果关系模态直接被执行器特殊处理（现在是这个状态），那'模态'就只是'blob 那一块'，SPI 是假的"*。
+
+### 2.12 文档模态的功能缺口（对照 `PLAN-v1.6`）
+
+| PLAN-v1.6 步骤 | 状态 | 证据 |
+|---|---|---|
+| 步骤 1 JSON parser + JSONB 编解码 | ✅ 已完成 | `json_parse.c` / `jsonb.c` / `json_scalar.c` / `jsonb_get.c`；`test_jsonb.c`、`test_jsonb_crash.c` 全绿 |
+| 步骤 2 路径表达式 + 标量映射 | ✅ 已完成 | `json_path.c`；`test_json_path.c` 全绿 |
+| 步骤 3 heap 列类型 + 大文档外置 | 🟡 **部分** | `T_JSON = 6`（`record.h:53`）+ 变长区判定（`record.h:64`）已定义；`json_ovf.c` 页链已实现；**但 heap 记录编解码是否真的走 `T_JSON` 未验证** |
+| 步骤 4 路径索引（写时维护） | ❌ 未做 | 无 `CREATE INDEX ... (json '$.a.b')` 路径 |
+| 步骤 5 执行器接线 + `json_match` | ❌ 未做 | `include/db.h` 里**零个** `db_json_*`；`src/query/` 里零个 json |
+| 步骤 6 MVCC + 崩溃 + 反向验证 + 收官复盘 | ❌ 未做 | — |
+
 ---
 
 ## 3. 判决
@@ -158,6 +217,9 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 | **D6** | **主核补 CI** | 主核 50,867 行 / 94 个测试文件当前**零 CI 覆盖**，而冻结轨在 CI 里 |
 | **D7** | 编译期裁剪用**单一 `MM` 变量**（不是 14 个独立布尔开关） | 2026-10-27 设计明列的反目标：「宏组合爆炸」 |
 | **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,313 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
+| **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,313 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |
+| **D10** | **给 SPI 加第四个契约 `TableOpener`**：关系模态的适配器进 L4，执行器不再 include 任何模态头 | 关系模态是唯一被执行器直接调用的模态（`exec_scan.c` 的 `heap_am_build`）。它是「底座型模态」，实现横跨 L1–L3，搬不进 L4 —— 只有把「表打开」抽象成契约才能真正对称。**这也是 v1.7 跨模态联合查询的前置** |
+| **D11** | **文档模态功能补全**：执行 `PLAN-v1.6` 步骤 3~6，把 JSON 接进 SQL（`json_match` + 路径索引） | §2.11：JSONB 编解码/路径/溢出链已实现且测试全绿（2,829 行），但 `db.h` 里零个 `db_json_*`、无路径索引、未接执行器 —— 八模态里唯一功能未闭环的 |
 
 ### 3.1 为什么 D1 不是「凑合」而是正解
 
@@ -191,10 +253,12 @@ engine/db/
 
 ### 4.2 `MM` 编译期模态开关
 
-**单一入口**：`make MM=vector` / `MM=ft` / `MM=geo` / `MM=ts` / `MM=graph` / `MM=full`（默认）。
+**单一入口**：`make MM=relational` / `blob` / `graph` / `vector` / `ft` / `geo` / `ts` / `doc` / `full`（默认）。
+
+> **完整的 8 个 profile 列表与依赖闭包规则见 §6.5** —— 本节讲机制，§6.5 讲 8 模态的取值。
 
 - profile 定义写在**一个**文件 `engine/db/tools/mm_profiles.mk`（唯一真相源），
-  每个 profile 显式列出它打开的模态集合，并声明每个模态的**闭包依赖**（当前除底座外无跨模态依赖）。
+  每个 profile 显式列出它打开的模态集合，每个模态声明自己的**依赖**（由闭包校验器算出实际集合，不手工指定）。
 - Makefile 从 profile 推导 `-DDB_HAS_<MOD>=0/1` 并**裁剪源文件**：
   未选中的模态，其 `src/modalities/<m>/`、`src/db_<m>.c`、`src/repl_<m>.c` 不进 `SRCS`。
 - **闭包校验在配置期做**：profile 声明的模态集合必须对其依赖闭包封闭，否则 `make` 直接报错并打印差集。
@@ -219,12 +283,13 @@ engine/db/
 它存在的唯一意义是**链接期证明**：如果这个模态偷偷依赖了别的模态，链接会失败。
 内容：初始化 → 建一个最小对象 → 写一条 → 读回 → 断言 → 关闭。
 
-`make MM=full` 时产出全部 7 个 smoke：`smoke_base`（关系模态 + blob，即内核基座）、`smoke_vector`、
-`smoke_ft`、`smoke_geo`、`smoke_ts`、`smoke_graph`、`smoke_doc`。
+`make MM=full` 时产出**全部 8 个** smoke（完整列表见 §6.5）：
+`smoke_relational` / `smoke_blob` / `smoke_graph` / `smoke_vector` / `smoke_ft` /
+`smoke_geo` / `smoke_ts` / `smoke_doc`。
 
-> `smoke_doc` 与其他六个不同：文档模态**尚未接入 SQL**（`engine/db/README.md` 顶部状态校正），
-> 它的 smoke 只验证 JSONB 编解码 / 路径求值 / 溢出链，**不验证 SQL 路径**。这一点必须在 smoke 的注释里写明，
-> 否则会让人误以为文档模态已可从 SQL 访问。
+> `smoke_doc` 与其他七个不同：文档模态是**寄生模态**，没有独立存储与虚拟表，
+> 它的 smoke 验的是「JSONB 编解码 + 路径提取 + 标量映射」，**不验 SQL 路径**（除非 §6.4 的 C-4 已完成）。
+> 这一点必须写在 smoke 的注释里，否则会让人误以为文档模态已可从 SQL 访问。
 
 ### 4.4 量化脚本
 
@@ -259,7 +324,7 @@ Linux runner 上另跑一遍（`make all` + `sh test/run.sh`），因为 `check_
 | **P3** | D8 预备：把 seam（1,313 行头文件）整理成可发布的头文件包 | P1–P2 完成后再评估 |
 
 > 冻结轨退役（§5）是**独立工作流 W-A**，不属于本表的阶段序列 —— 它与 P0/P1/P2 的交叉点只有一条：
-> **W-A 必须在 P0 之后执行**（§8）。
+> **W-A 必须在 P0 之后执行**（§9）。八模态对称化（§6）是**独立工作流 W-C**，与 P1 的先后见 §9。
 
 ---
 
@@ -343,7 +408,150 @@ cd engine/db && sh tools/check_deps.sh && sh test/run.sh
 
 ---
 
-## 6. 风险
+## 6. 设计 C：八模态对称化与功能补全
+
+### 6.1 「对称」的定义（先定义，再补全）
+
+**模态的契约面 = 四件套**，位置统一：
+
+| 件 | 统一位置 | 关系 | blob | 图 | 向量 | 全文 | 空间 | 时序 | 文档 |
+|---|---|---|---|---|---|---|---|---|---|
+| ① SPI 适配器 | `src/modalities/<m>/` | `relational/heap_am.c` **← 新建** | `blob/blob_am.c` **← 搬** | ✓ | ✓ | ✓ | ✓ | ✓ | **无**（寄生模态，设计如此） |
+| ② 公开 API | `src/db_<m>.c` | SQL 路径（无独立文件，见 S4） | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | **`db_json.c` 新建** |
+| ③ REPL 族 | `src/repl_<m>.c` | SQL | BLOB ✓ | GRAPH ✓ | VEC ✓ | FT ✓ | GEO ✓ | TS ✓ | **`repl_json.c` 新建** |
+| ④ 模态文档 | `MODALITIES.md` 对应节 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓（补契约面小节） |
+
+**实现目录不在对称范围内** —— 它由**分层**决定，不由「模态身份」决定：
+
+- **关系模态 = 底座型模态**：实现横跨 L1（`storage/heap*`）/ L2（`catalog`、`txn/vacuum`、`index/btree`）/ L3（`query`）。
+  §2.11② 已证：`catalog.h:8` 与 `vacuum.h:6` 都 include `storage/heap.h` → **L2 直接持有 `Heap*`**。
+  搬到 L4 = `L2 → L4` 反向依赖 = 门禁必红。**这是角色决定的，不是历史遗留。**
+- **其余 7 个 = 插件型模态**：实现整体在 L4 `modalities/<m>/`。
+- **blob 例外中的例外**：§2.11③ 已证零反向依赖 → **可完整搬进 `modalities/blob/`**。
+
+> **文档模态没有 ① 号件，是设计而非缺陷**：它是**寄生模态** —— 不建存储、做 heap 上的列类型、没有虚拟表，
+> 因此没有 `StorageAM`。它的对应物是**值层谓词求值器** `modalities/doc/json_match.c`，走 `spi/pushdown.h` 的下推契约。
+
+### 6.2 SPI 的第四个契约：`TableOpener`（关系模态进入 L4 的钥匙）
+
+**问题**：其余 6 个模态的适配器能在 L4，是因为执行器**从不直接调用**它们。
+关系模态是例外 —— 它的表不走注册表（catalog 真表），执行器必须主动构造它的 AM（§2.11①）。
+
+把适配器留在 `spi/`（L3）能骗过门禁（L3→L3 合法），但**语义上执行器仍然直接认识 heap**。
+
+**判决 D10：新增 `src/spi/table_opener.h`**
+
+```c
+/* 打开一张「catalog 真表」并构造它的 StorageAM。
+ * 关系模态是当前唯一使用者，但它住在 L4 —— 执行器只认这个接口。 */
+typedef struct {
+    /* 构造表 tid 的 AM。ctx_out 指向调用方提供的不透明缓冲区
+     * （≥ SPI_AM_CTX_MAX 字节），由适配器写入其私有状态。 */
+    int  (*build)(void *inst_ctx, u32 tid, StorageAM *am_out,
+                  void *ctx_out, u32 ctx_cap);
+    void *inst_ctx;              /* 实例级上下文，由组合根持有 */
+} TableOpener;
+```
+
+- **不透明 ctx 缓冲区**：`SPI_AM_CTX_MAX = 256`（实测 `HeapAmCtx` ≈ 184 字节，附录 C）。
+  `TableCtx.am_ctx` 从 `HeapAmCtx` 改成 `u8 am_ctx_buf[SPI_AM_CTX_MAX]` →
+  **执行器不再 include 任何模态头**。
+- **组合根（`db.c`）持有**：实例级保存一个 `TableOpener`，指向关系模态提供的实现。
+- **门禁加强**：`check_deps.sh` 增加一条 —— `src/query/` 下**禁止出现任何模态名**
+  （`heap|blob|graph|vec|ft|geo|ts|json` 的 include）。可机械验证，与 PLAN-v1.6 的 A7 审计同款思路，但提前到 C 阶段做。
+
+**收益**：
+1. 执行器真正模态无关（`grep -iE "heap|blob|graph|vector|json" src/query/` 零命中）
+2. 关系模态与其它 7 个同层（L4）→ 八模态结构对称
+3. **这是 v1.7「跨模态联合查询」的前置** —— 联合查询要同时打开不同模态的表，必须先有统一的「表打开」抽象
+
+**代价**：执行器 3 处改动（1 个 include + 1 个结构体字段 + 2 个调用点）+ 1 个新契约头（约 40 行）+ 门禁 1 条。
+**必须与 C-4（文档模态接 SQL）合并做** —— 两者都要动执行器，分两次动是浪费。
+
+### 6.3 结构对称化的动作清单
+
+| # | 动作 | 从 | 到 | 门禁 / 影响 |
+|---|---|---|---|---|
+| S1 | SPI 第四契约 | — | 新增 `src/spi/table_opener.h` | L3 新增头，无依赖 |
+| S2 | 执行器去模态化 | `query/exec_internal.h`、`query/exec_scan.c` | 改用 `TableOpener` | **必须在 S3 之前** |
+| S3 | 关系模态适配器 | `src/spi/heap_am.{c,h}`、`heap_am_batch.c`、`heap_am_internal.h` | `src/modalities/relational/` | 依赖 S2 |
+| S4 | 关系模态的「公开 API」归位 | — | **不新建 `db_rel.c`** —— 关系模态的对外接口就是 SQL（`db_exec` + DDL/DML），没有独立的 `db_rel_*` 函数族。**不为了对称而造空壳 API** | — |
+| S5 | blob 实现 + 适配器 | `src/storage/blob*`、`src/spi/blob_am.*` | `src/modalities/blob/` | 零反向依赖 |
+| S6 | B+tree 适配器归位 | `src/spi/btree_am.{c,h}` | `src/modalities/relational/` | B+tree 是关系模态的索引结构；全仓仅 `btree_am.c` 自己 include 它 |
+| S7 | 文档模态公开 API | — | 新增 `src/db_json.c` + `include/db.h` 的 `db_json_*` | 依赖 C-4 |
+| S8 | 文档模态 REPL 族 | — | 新增 `src/repl_json.c` + `DOC` 动词族 | 依赖 C-4 |
+| S9 | 门禁加强 | `tools/check_deps.sh` | ① `src/query/` 禁含模态名；② 模态适配器必须在 `src/modalities/` 下 | 可机械验证 |
+
+**S3 + S6 做完后的 `spi/` 目录**（只剩**纯契约 + 机制**）：
+
+```
+src/spi/
+├── storage_am.h      存储 AM 契约（v0.9 定稿）
+├── index_am.h        索引 AM 契约（v0.9 定稿）
+├── pushdown.h        谓词下推契约（v0.9 定稿）
+├── table_opener.h    表打开契约（D10 新增）
+└── registry.{c,h}    虚拟表注册表（实例级机制）
+```
+
+### 6.4 文档模态的功能补全（`PLAN-v1.6` 步骤 3~6）
+
+| 步骤 | 动作 | 验收 |
+|---|---|---|
+| 步骤 3 收尾 | 验证 heap 记录编解码真的走 `T_JSON`；大文档外置接 `PT_JSON_OVF` 页链（`ext_fn` 换成沿链读，契约一行不改） | A2：只取路径字段时**不读全文**（页读计数对比） |
+| 步骤 4 | 路径索引：`CREATE INDEX ON t (json '$.a.b')`；**写时同步维护**（UPDATE 整替换 → 删旧键插新键，用既有 B+tree 能力） | A4：索引项计数对账，旧键不残留 |
+| 步骤 5 | 执行器接线 + `json_match(doc, '$.a.b = 5')`；**走/不走索引两路结果集全等** | A3 + A7 |
+| 步骤 6 | MVCC（RR 快照下文档不撕裂）+ 崩溃恢复 + **反向验证 2 处**（标量映射把 null 映成 0；UPDATE 漏删旧键）+ 收官复盘 | A5 / A6 / A8 |
+
+**A7 审计清单（先定义后实现）**：执行器允许的改动落点**只有两处** ——
+
+1. **通用值层的路径变体**：`value.h` / `record.h` 承载 JSON 值（`T_JSON` 已有，需补 `DbValue` 的 JSON 变体或明确走外部值通道）
+2. **求值入口**：`exec_scan.c` 的谓词求值处识别 `json_match(...)` 并委托给 `modalities/doc/json_match.c`
+
+其余任何 `if (strcmp(col_type, "json"))` 形态的模态特判 = **零容忍**。
+
+### 6.5 `MM` 开关与 smoke 覆盖 8 个模态
+
+profile 补全（`engine/db/tools/mm_profiles.mk` 为唯一真相源）：
+
+| profile | 打开的模态 | 闭包自动含 | 产物 |
+|---|---|---|---|
+| `MM=relational` | 关系 | 底座 L0–L3 | `db.exe` + `smoke_relational` |
+| `MM=blob` | blob | 底座 L0–L1（+ 实例编排所需的 wal） | `db.exe` + `smoke_blob` |
+| `MM=graph` / `vector` / `ft` / `geo` / `ts` | 各 1 个 | 底座 L0–L3 | 对应 smoke |
+| `MM=doc` | 文档 | 底座 + **关系**（寄生模态必须依赖它的宿主） | `db.exe` + `smoke_doc` |
+| `MM=full` | 全部 8 个 | — | 全部 8 个 smoke |
+
+**依赖闭包由声明算出，不手工指定** —— 每个模态在 `mm_profiles.mk` 里声明它需要谁，
+Makefile 的闭包校验器算出实际集合；差集非空直接报错。
+
+> **闭包机制第一次真正起作用的就是 `doc`**：文档模态是寄生模态，JSON 存 heap 行里，
+> 所以 `MM=doc` 必须带上关系模态。这条依赖是**声明出来的**，不是手工塞进 profile 的 ——
+> 漏声明时闭包校验器会报错并打印差集。
+
+> **不要把 blob 塞进 `relational` 的闭包**：外部值机制是**泛型**的（`storage/value.h` 存 `DetoastFn` 函数指针），
+> 关系模态的 heap 路径**零处**引用 blob（实测：`storage/heap.c` 只 include `heap_internal.h` + `record.h`）。
+> blob 走自己的 `blob_frames` 虚表路径，与关系模态无依赖关系。
+
+**smoke 的语义**（每模态一个）：初始化 → 建最小对象 → 写一条 → 读回 → 断言 → 关闭。
+它的意义是**链接期证明**：若某模态偷偷依赖了别的模态，链接失败。
+
+> `smoke_doc` 与其他七个不同：文档模态是**寄生模态**，没有独立存储与虚拟表，
+> 它的 smoke 验的是「JSONB 编解码 + 路径提取 + 标量映射」，**不验 SQL 路径**（除非 C-4 已完成）。
+> 这一点必须写在 smoke 的注释里，否则会让人误以为文档模态已可从 SQL 访问。
+
+### 6.6 设计 C 的执行顺序
+
+| 切片 | 内容 | 前置 |
+|---|---|---|
+| **C-1** | S1 + S2：SPI 第四契约 + 执行器去模态化（**执行器一次性脱钩**） | 无 |
+| **C-2** | S3 + S6：关系模态适配器 + B+tree 适配器搬进 `modalities/relational/` | C-1 |
+| **C-3** | S5：blob 搬进 `modalities/blob/` | 无（可与 C-1/C-2 并行） |
+| **C-4** | PLAN-v1.6 步骤 3~6：文档模态接 SQL（含 S7 / S8） | C-1（执行器已脱钩，改动面小） |
+| **C-5** | S9 门禁加强 + `MM` 开关扩到 8 个 profile + 8 个 smoke | C-1~C-4 |
+
+---
+
+## 7. 风险
 
 | 风险 | 影响 | 应对 |
 |---|---|---|
@@ -355,23 +563,30 @@ cd engine/db && sh tools/check_deps.sh && sh test/run.sh
 | **P0~P2 与冻结轨退役并行导致分支混乱** | 中 | **次序**：先 W-B 的 P0（CI 兜底）→ 再 W-A（删除，趁 CI 已就位，能立刻验证主核没受影响）→ 再 W-B 的 P1/P2 → 最后文档大改 |
 | **删除后无法回滚** | 低 | git 历史保留；删除前打 tag `pre-frozen-track-removal` |
 | **`engine/include/db/` 下有 SDK 仍在用的头** | 低 | §2.8 已证明 SDK 只 include `algo-prod/distance/distance.h` 与 `roaring_bitmap.h`；B-6 的 include 路径调整后用编译验证 |
+| **`TableOpener` 改造动执行器，可能引入回归** | 高 | 改造前先跑 `sh test/run.sh` 存基线；改造后**用例集合必须完全一致**（不新增、不减少）；S2 的验收 = 「执行器零模态名」门禁通过 **且** 全部既有用例仍绿 |
+| **`SPI_AM_CTX_MAX = 256` 未来不够用** | 低 | 契约头里写死上限并在编译期校验（超限即编译错）；真需要时改这一个常量，代价可控 |
+| **文档模态接 SQL 时执行器改动越界** | 中 | A7 审计清单**先定义后实现**：允许落点只有「值层路径变体」与「求值入口」两处；`grep -i json src/query/` 的每一处命中都要在清单里登记 |
+| **`json_match` 的 NULL 语义（路径不存在 vs JSON null vs 标量不匹配）** | 中 | 映射规则全表用例（A1/A2）；反向验证注入 1 = 把 null 映成 INT 0，让 NULL 语义测试变红 |
+| **八模态对称化与 v1.6 的执行器改动撞车** | 中 | **必须合并做**（C-4 依赖 C-1）；分两次动执行器 = 两次回归成本 + 两次审计 |
 
 ---
 
-## 7. 不做项
+## 8. 不做项
 
 1. **不做**多进程 / 多服务 / 微服务化（D8 留预备）。
 2. **不做**插件化（`.so`）—— D2 已否决，理由见 §3。
 3. **不做**跨模态事务（v1.7+ 议题，本次不动）。
 4. **不做**把冻结轨的 percolator / raft / RAG 算子框架**迁移**到主核 —— 用户裁决是全删；triage 文档保留其分级结论供将来需要时取用。
-5. **不重构**主核的目录结构与 SPI 契约（D3）。
-6. **不改**主核的公开 API 语义。
+5. **不重构**主核的**底座**目录结构与已有 SPI 契约（D3）—— §6 只动模态归属与新增第四契约，不碰 L0–L3 的形状。
+6. **不改**主核的公开 API 语义 —— `db_json_*` 是**新增**，不是改动既有函数。
+7. **不为对称而造空壳** —— 关系模态不新建 `db_rel.c`（它的对外接口就是 SQL），文档模态不新建 `doc_am.c`（寄生模态无虚拟表）。
+8. **不做** JSON Schema 校验、多值索引、部分更新、JSON 聚合函数、MongoDB 查询语法 —— 沿用 `PLAN-v1.6` §1.1 的「不做表」，不重复决策。
 
 ---
 
-## 8. 交付物与实施计划拆分
+## 9. 交付物与实施计划拆分
 
-本设计包含两条**相互独立**的工作流，实施计划拆成两份。**两者有一个交叉点**：
+本设计包含三条工作流，实施计划拆成三份。**交叉点**：
 W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-B 的 P0（主核 CI）兜底，
 否则删除之后没有任何自动化手段能证明「主核没被碰坏」。
 
@@ -392,7 +607,27 @@ W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-
 3. P2：每模态 smoke + `measure_build.sh`
 4. 写 `docs/arch/db/multimodal-build-baseline.md`（实测基线）
 
-**执行顺序**：W-B 的 P0 → W-A 全部 → W-B 的 P1/P2 → 文档大改（§5.4 放在 W-A 末尾，与删除同批提交）。
+### 计划 W-C：八模态对称化与功能补全（§6）
+
+1. **C-1**：S1 + S2 —— SPI 第四契约 + 执行器一次性脱钩（**风险最高的一步，先做**）
+2. **C-2**：S3 + S6 —— 关系模态适配器 + B+tree 适配器归位
+3. **C-3**：S5 —— blob 搬进 `modalities/blob/`
+4. **C-4**：PLAN-v1.6 步骤 3~6 —— 文档模态接 SQL（含 S7 / S8）
+5. **C-5**：S9 门禁加强 + `MM` 扩到 8 个 profile + 8 个 smoke
+
+**执行顺序**：
+
+```
+W-B 的 P0（CI 兜底）
+  → W-A 全部（冻结轨退役）
+  → W-C 的 C-1（执行器脱钩，此时 CI 已是绿的，能立刻发现回归）
+  → W-C 的 C-2 / C-3 / C-4
+  → W-B 的 P1 / P2（MM 开关与 smoke，此时 8 个模态已就位，profile 才是真的 8 个）
+  → 文档大改（§5.4 与 §6 的 MODALITIES.md 补写，放在 W-A 末尾，与删除同批提交）
+```
+
+> **W-C 的 C-1 必须在 W-B 的 P1 之前**：P1 的 `MM` 开关要靠 `#if DB_HAS_<MOD>` 裁剪 `db_internal.h` 与 `db.c`；
+> 而 C-2 正在改这两个文件的结构。先脱钩、后裁剪，避免同一批文件被两条工作流同时改。
 
 ---
 
@@ -432,5 +667,27 @@ Select-String -Path "docs/**/*.md","openspec/**/*.md","engine/docs/**/*.md" -Pat
 | `docs/superpowers/plans/2026-11-16-srcdb-asset-triage.md` | 冻结轨逐模块分级（§2.6） |
 | `docs/superpowers/specs/2026-11-15-code-umbrella-and-db-convergence-design.md` | 2026-11-16 路线翻转的来源 |
 | `engine/db/docs/DESIGN.md` | 主核整体设计（D1–D10、SPI 三件套） |
-| `engine/db/docs/MODALITIES.md` | 八模态实现方案（§2.5 跨模态事务语义的出处） |
+| `engine/db/docs/MODALITIES.md` | 八模态实现方案（§2.5 跨模态事务语义、§6.1 对称性定义的出处） |
+| `engine/db/docs/PLAN-v1.6.md` | 文档模态的完整实现计划（§6.4 的执行依据） |
 | `engine/db/README.md` | 主核七条硬规则（§4.3 的边界来源） |
+
+## 附录 C：`SPI_AM_CTX_MAX = 256` 的取值依据
+
+`HeapAmCtx`（`spi/heap_am.h:36-50`）的字段与估算尺寸（64 位平台）：
+
+| 字段 | 类型 | 字节 |
+|---|---|---|
+| `heap` | `Heap *` | 8 |
+| `cols` | `const ColDesc *` | 8 |
+| `ncols` | `int` | 4（+4 对齐填充） |
+| `idxs` | `const IndexInfo *` | 8 |
+| `nidx` | `int` | 4（+4 对齐填充） |
+| `layout` | `RecLayout` | 142 → 144（对齐后） |
+
+**合计 ≈ 184 字节** → `SPI_AM_CTX_MAX = 256` 留 72 字节余量（可容纳一个 `Graph*` 或两个 `u32` 级别的附加状态）。
+
+`RecLayout` 的构成（`storage/record.h:113-125`）：7 个 `u16`（14 字节）+ 2 个 `u16[REC_MAX_COLS]`。
+`REC_MAX_COLS` = 32 → 2 × 32 × 2 = 128 字节 → 合计 142 字节。
+
+> 该常量必须写在 `spi/table_opener.h` 里，并在编译期校验适配器的 ctx 不超过它（超限即编译错），
+> 而不是等到运行时才发现栈溢出。
