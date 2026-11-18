@@ -131,6 +131,52 @@
   }
 
   /**
+   * 页面状态：三选一，别用 `queue.length === 0` 一把梭。
+   *
+   *   null              → 还没有会话（库里一条都没有）
+   *   "empty-pool"      → 有会话但一个单元都没排出来（候选池空）
+   *   "done"            → 会话还在、队列也还在，但全做完了
+   *   "active"          → 还有没做完的
+   *
+   * **为什么不能用 `queue.length === 0` 判「学完了」**：
+   * `GET /api/session` 返回的是**最新一条会话**（不管它关没关），`queue` 是**全部**队列项
+   * （含 `state: "done"` 的）。所以「全做完」时 queue 仍有 N 条 done 项，
+   * `length === 0` 永远不会成立 —— 那条件写出来就是死分支。
+   * （契约 §8.2 明写了这条口径。）
+   *
+   * @param {object} payload GET /api/session 的响应
+   * @param {{total: number, done: number, current: number, left: number}} summary
+   * @returns {"idle"|"empty-pool"|"done"|"active"}
+   */
+  function pageState(payload, summary) {
+    const p = payload || {}
+    if (!p.session) return "idle"
+    const total = summary ? Number(summary.total || 0) : 0
+    const left = summary ? Number(summary.left || 0) : 0
+    if (total === 0) return "empty-pool"
+    if (left === 0) return "done"
+    return "active"
+  }
+
+  /**
+   * 把服务端的 warnings 摊平成可显示的句子。
+   * 后端有好几处只把话说在 warnings 里（候选池空、复用了旧会话、numpy 缺失跳过），
+   * 不显示就等于没说 —— 用户会以为按钮坏了。
+   * @param {object} payload 任意接口响应
+   * @returns {string[]}
+   */
+  function warningsText(payload) {
+    const list = payload && Array.isArray(payload.warnings) ? payload.warnings : []
+    return list
+      .map(function (w) {
+        return String(w || "").trim()
+      })
+      .filter(function (w) {
+        return w !== ""
+      })
+  }
+
+  /**
    * 会话里的轨道列表——库里存的是 JSON 字符串，接口也可能给数组，两种都收。
    * @param {unknown} value
    * @returns {string[]}
@@ -297,14 +343,20 @@
 
   /** 开始一次会话 */
   async function startSession(view, count) {
+    let started = null
     try {
-      await A.postJson("/api/session/start", { n: count })
+      started = await A.postJson("/api/session/start", { n: count })
     } catch (err) {
       view.textContent = ""
       view.appendChild(errorPanel("开始失败", err))
       return
     }
-    await render(view)
+    // 排不出单元时 start 返回 `session: null` + warnings（不是错误码）。
+    // 这条响应**不能丢**：warnings 里那句「没有可学的单元，建议去供给流水线补内容」
+    // 是用户唯一能看到的解释。丢掉它再看一次 GET /api/session，页面就停在同一屏、
+    // 用户只会觉得按钮坏了。把它带到下一屏去。
+    const warnings = started && Array.isArray(started.warnings) ? started.warnings : []
+    await render(view, warnings)
   }
 
   /** 把当前单元标记为完成（P1 只排不判） */
@@ -334,9 +386,10 @@
   /**
    * 渲染首页。
    * @param {HTMLElement} view
+   * @param {string[]} [extraWarnings] 上一次操作带过来的 warnings（如 start 排不出单元时那句）
    * @returns {Promise<void>}
    */
-  async function render(view) {
+  async function render(view, extraWarnings) {
     view.textContent = ""
     view.appendChild(el("div", { class: "panel", text: "正在加载本次学习…" }))
     let payload = null
@@ -374,7 +427,32 @@
       )
     }
 
-    if (!data.session) {
+    // 服务端把话说在 warnings 里的那几种情形，必须显出来 —— 否则用户只会觉得「点了没反应」
+    const warningLines = warningsText(data).concat(
+      Array.isArray(extraWarnings)
+        ? extraWarnings
+            .map(function (w) {
+              return String(w || "").trim()
+            })
+            .filter(function (w) {
+              return w !== ""
+            })
+        : []
+    )
+    if (warningLines.length > 0) {
+      view.appendChild(
+        el("div", { class: "notice" }, [
+          el("p", { class: "notice-title", text: "要注意" }),
+        ].concat(
+          warningLines.map(function (line) {
+            return el("p", { class: "notice-text", text: line })
+          })
+        ))
+      )
+    }
+
+    const state = pageState(data, summary)
+    if (state === "idle") {
       view.appendChild(
         emptyHero(
           cfg,
@@ -383,7 +461,17 @@
           "点「开始一次学习」就会按跨轨权重排一条队列——算法、数据库、AI 混着排，中断了也不会丢。"
         )
       )
-    } else if (rows.length === 0) {
+    } else if (state === "empty-pool") {
+      // 有会话但一个单元都没排出来：给「为什么」和「怎么办」，不是干巴巴一个按钮
+      view.appendChild(
+        emptyHero(
+          cfg,
+          view,
+          "这次排不出单元",
+          "候选池里没有可学的单元了。去「供给」补内容，或在设置里打开被关掉的轨，再点一次。"
+        )
+      )
+    } else if (state === "done") {
       view.appendChild(
         emptyHero(cfg, view, "这次学完了", "这次的单元都做完了。点「开始一次学习」排下一次。")
       )
@@ -407,6 +495,8 @@
       queueSummary: queueSummary,
       trackSummary: trackSummary,
       noticeText: noticeText,
+      pageState: pageState,
+      warningsText: warningsText,
       parseTracks: parseTracks,
       render: render,
     }

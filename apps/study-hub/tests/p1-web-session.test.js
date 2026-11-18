@@ -268,6 +268,9 @@ test("首页：还没有会话时给「开始一次学习」", async function ()
 })
 
 test("首页：队列全做完时说「这次学完了」", async function () {
+  // 夹具必须是**真实形状**：GET /api/session 的 queue 是那个会话的**全部**队列项
+  // （含 state: "done"），不是过滤后的空数组。用 `queue: []` 当「全做完」会掩盖
+  // 「queue.length === 0 判学完了」这个死分支 —— 实测真实后端在全做完时仍返回 3 条 done。
   stubFetch({
     "/api/session": {
       session: {
@@ -278,7 +281,11 @@ test("首页：队列全做完时说「这次学完了」", async function () {
         done_count: 3,
         tracks: ["algorithm"],
       },
-      queue: [],
+      queue: [
+        { unit_id: "algo:lc-00001", seq: 1, state: "done", title: "两数之和", track: "algorithm" },
+        { unit_id: "db:mvcc", seq: 2, state: "done", title: "MVCC：版本链", track: "database" },
+        { unit_id: "ai:cnn", seq: 3, state: "done", title: "卷积神经网络", track: "ai" },
+      ],
       next: null,
       notice: "",
       warnings: [],
@@ -332,6 +339,103 @@ test("首页：当前项有「完成这个」按钮，点了会发 submit", asyn
   await new Promise(function (resolve) { setTimeout(resolve, 0) })
   assert.ok(submitted, "点了要发 submit")
   assert.strictEqual(submitted.unit_id, "db:mvcc", "要带上单元 id")
+})
+
+test("pageState：三选一，不能拿 queue.length 当判据", function () {
+  // 真实形状：全做完时 queue 仍有 N 条 done 项（GET /api/session 不过滤）
+  const allDone = { session: { id: "s" }, queue: new Array(3).fill({ state: "done" }) }
+  assert.strictEqual(sessionPage.pageState(allDone, { total: 3, done: 3, current: 0, left: 0 }), "done")
+  assert.strictEqual(sessionPage.pageState({ session: null, queue: [] }, { total: 0, done: 0, current: 0, left: 0 }), "idle")
+  assert.strictEqual(sessionPage.pageState({ session: { id: "s" }, queue: [] }, { total: 0, done: 0, current: 0, left: 0 }), "empty-pool")
+  assert.strictEqual(sessionPage.pageState(SESSION, { total: 3, done: 1, current: 1, left: 2 }), "active")
+})
+
+test("pageState：候选池空 ≠ 学完了（两者都 queue 为空，判据要靠 session 在不在）", function () {
+  // 这正是原来的 bug：`!session → 还没有会话 / rows.length===0 → 学完了`，
+  // 「有会话但排不出单元」会掉进「学完了」，而真实后端在全做完时 queue 又不为空
+  // → 「学完了」反而永远走不到。三种状态必须用 session + total + left 三个值一起判。
+  const emptyPool = sessionPage.pageState(
+    { session: { id: "s" }, queue: [] },
+    { total: 0, done: 0, current: 0, left: 0 }
+  )
+  assert.strictEqual(emptyPool, "empty-pool", "有会话但没单元 = 排不出单元，不是学完了")
+})
+
+test("首页：一个单元都没有时给「这次排不出单元」，并说清怎么办", async function () {
+  stubFetch({
+    "/api/session": {
+      session: { id: "s-1", started_at: "2026-11-12T00:00:00.000Z", ended_at: null, planned_count: 0, done_count: 0, tracks: [] },
+      queue: [],
+      next: null,
+      notice: "",
+      warnings: ["没有可学的单元，建议去供给流水线补内容"],
+    },
+    "/api/settings": SETTINGS,
+  })
+  const view = mountView()
+  await sessionPage.render(view)
+  const text = collectText(view)
+  assert.ok(text.indexOf("这次排不出单元") !== -1, "要说清是排不出：" + text)
+  assert.ok(text.indexOf("供给") !== -1, "要告诉用户去哪里补内容：" + text)
+})
+
+test("首页：服务端的 warnings 要显出来（不是只放在响应里）", async function () {
+  // 后端有好几处只把话说在 warnings 里：候选池空、复用旧会话、numpy 缺失跳过。
+  // 不显示 = 没说，用户会以为按钮坏了。
+  stubFetch({
+    "/api/session": {
+      session: { id: "s-1", started_at: "2026-11-12T00:00:00.000Z", ended_at: null, planned_count: 3, done_count: 0, tracks: ["algorithm"] },
+      queue: [{ unit_id: "algo:lc-00001", seq: 1, state: "current", title: "两数之和", track: "algorithm" }],
+      next: null,
+      notice: "",
+      warnings: ["「卷积神经网络」依赖 numpy，环境缺失，这次跳过"],
+    },
+    "/api/settings": SETTINGS,
+  })
+  const view = mountView()
+  await sessionPage.render(view)
+  const text = collectText(view)
+  assert.ok(text.indexOf("numpy") !== -1, "warnings 要渲染出来：" + text)
+})
+
+test("首页：点「开始一次学习」但排不出单元时，把 start 的 warnings 带给用户", async function () {
+  // 原来的 bug：startSession 丢弃响应 → 再拉 GET /api/session（它的 warnings 恒为 []）
+  // → 用户反复点「开始一次学习」毫无反应。start 的 warnings 必须传到下一屏。
+  let startCalls = 0
+  // 注意 key 的顺序：stubFetch 是按插入顺序找「第一个前缀匹配」，
+  // `/api/session/start` 也以 `/api/session` 开头 —— 长的必须写在前面。
+  stubFetch({
+    "/api/session/start": function () {
+      startCalls += 1
+      return {
+        ok: true,
+        status: 200,
+        json: async function () {
+          return { session: null, queue: [], quota: {}, warnings: ["没有可学的单元，建议去供给流水线补内容"] }
+        },
+      }
+    },
+    "/api/session": {
+      session: null,
+      queue: [],
+      next: null,
+      notice: "",
+      warnings: [],
+    },
+    "/api/settings": SETTINGS,
+  })
+  const view = mountView()
+  await sessionPage.render(view)
+  const btn = findButton(view, "开始一次学习")
+  assert.ok(btn, "要有开始按钮")
+  btn.dispatch("click")
+  await new Promise(function (resolve) { setTimeout(resolve, 0) })
+  assert.strictEqual(startCalls, 1, "应当发了一次 start")
+  const text = collectText(view)
+  assert.ok(
+    text.indexOf("没有可学的单元") !== -1,
+    "start 返回的 warnings 必须显示出来（否则用户只会觉得按钮坏了）：" + text
+  )
 })
 
 test("首页：接口报错时显示中文错误，不崩", async function () {
