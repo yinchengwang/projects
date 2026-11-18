@@ -3,13 +3,17 @@
 > 依据：`docs/superpowers/specs/2026-11-18-multimodal-db-project-organization-design.md` §5.1 / §5.4 / §5.5 / §5.6
 > 落地日期：2026-11-18
 > 前置：**必须先做完 W-B 的 P0（CI 门禁）** —— 没有红灯就看不出删除有没有打坏东西。
-> 后续：W-C 的 C-1（执行器脱钩）与本计划**不冲突** —— C-1 动的是 `engine/db/src/`（`spi/` / `query/` / `modalities/`），本计划动的是 `engine/src/sdk/` 与 `engine/include/`。
+> 后续：W-C 的 C1（执行器脱钩）与本计划**不冲突** —— C1 动的是 `engine/db/src/`（`spi/` / `query/` / `modalities/`），本计划动的是 `engine/src/sdk/` 与 `engine/include/`。**设计 §9 的顺序块是唯一权威**：`W-B P0 → W-A 全部 → W-C C1 → W-C C2~C5 → W-B P1/P2 → W-C C6/C7 → 文档大改`。
+>
+> ⚠️ **（可执行性修正）本计划的文档大改（Task 5）在设计 §9 里排在最后**，与「删除同批提交」不是一回事：
+> §9 的「文档大改」指 §5.4 与 §6 的 MODALITIES.md 补写；本计划 Task 5 里的**仓级 README / CLAUDE.md / AGENTS.md**
+> 属于「删了就必须改」的连带项，仍跟 Task 4 同批。**两者别混**（规则四）。
 
 ---
 
 ## Goal
 
-把冻结轨 `engine/src/db/`（524 文件 / 209,907 行）整棵拔掉，让仓库里**只剩一个数据库内核**（`engine/db/`），同时保证：
+把冻结轨 `engine/src/db/`（524 文件 / 209,905 行）整棵拔掉，让仓库里**只剩一个数据库内核**（`engine/db/`），同时保证：
 
 1. `engine/db/`（主核，自带 Makefile，不在 CMake 图内）**完全不受影响**；
 2. `engine/src/sdk/`（嵌入式 SDK）继续可构建、可测试，且**不再引用任何冻结轨的源码或公开头**；
@@ -34,13 +38,13 @@
          语义：近似 HNSW → **精确暴力 KNN**（召回率只升不降；延迟换来的）
 
 线 ②  删轨（后做，**一个原子提交**：删了就得同时把构建接线修好）
-    D-1  engine/src/db/                     524 文件 / 209,907 行
+    D-1  engine/src/db/                     524 文件 / 209,905 行
     D-2  engine/test/db/                    289 文件 / ~587 ctest 用例
     D-3  engine/include/db/                 409 个公开头
     D-4  engine/include/rag/ 2 头 + engine/include/tree_index/ 8 头
     D-5  engine/cmake/ModalityProfiles.cmake、engine/cmake/MultimodalConfig.cmake（旧轨机制）
-    D-6  engine/test/smoke/                 13 个文件（全是冻结轨）
-D-7  engine/test/index/                8 个目录（每个目录下的测试都 include `<index/...>`，随冻结轨一起没了 ⇒ 全部要删；设计 D-10 写的「4 个」是错的）
+    D-6  engine/test/smoke/                 13 个 `.c` 冒烟源文件（整目录共 15 个文件：+ `mm_smoke_assert.h` + `CMakeLists.txt`；全是冻结轨）
+    D-7  engine/test/index/                8 个 `.cpp` 测试文件（分布在 4 个索引类型目录 `brin` / `bitmap` / `gin` / `diskann` 下；8 个文件**全部** include `<index/...>` ⇒ 随冻结轨一起没了 ⇒ 全部要删。⚠️ 这棵树未注册进 CMake ⇒ 贡献 0 条 ctest 条目，删它不改变任何用例数）
     D-8  engine/tools/benchmark/c_api/      依赖 mm_vector_index / faiss_hnsw
 D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / faiss_hnsw / mm_vector_index
 ```
@@ -79,7 +83,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 | R3 | SDK 向量检索**语义有没有变差** | 召回率只升不降（HNSW 近似 → 精确）；`mmdb_vectors_search` 的返回结构、`apply_pagination`、`mmdb_metrics_record_query` 调用点一个不少 |
 | R4 | 删轨是不是**一个原子提交** | 删轨提交里必须同时包含构建接线修复；不允许出现"删了但 build 不过"的提交 |
 | R5 | 有没有**误删主核** | `engine/db/` 目录在提交后**仍然完整存在**且 `mingw32-make check` 绿 |
-| R6 | ctest 用例数 | 删除前后差值必须**恰好等于**冻结轨那部分（`engine/test/db/` + `engine/test/smoke/` + `engine/test/index/`）—— ⚠️ **（复审修正）** `engine/test/index/` 实际是 **8 个目录**（设计 D-10 写的「4 个」是错的），差值要按 8 个目录算
+| R6 | ctest 用例数 | 删除前后差值必须**恰好等于**冻结轨那部分（`engine/test/db/` + `engine/test/smoke/`）—— ⚠️ **（可执行性修正）** **`engine/test/index/` 不计入差值**：`engine/test/CMakeLists.txt` 里**没有** `add_subdirectory(index)`，这棵树从未注册进 CMake ⇒ **贡献 0 条 ctest 条目**。把它算进差值，判据永远对不上；删它**不改变任何 ctest 条目** |
 
 ---
 
@@ -114,14 +118,14 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 | 路径 | 规模 |
 |---|---|
-| `engine/src/db/` | 524 文件 / 209,907 行 |
+| `engine/src/db/` | 524 文件 / 209,905 行 |
 | `engine/test/db/` | 289 文件 / ~587 ctest 用例 |
 | `engine/include/db/` | 409 个头 |
 | `engine/include/rag/` | 2 个头 |
 | `engine/include/tree_index/` | 8 个头 |
 | `engine/cmake/ModalityProfiles.cmake`、`engine/cmake/MultimodalConfig.cmake` | 旧轨模态开关机制 |
-| `engine/test/smoke/` | 13 个文件 |
-| `engine/test/index/` | **8 个目录**（不是 8 个文件；设计 D-10 写「4 个目录」有误） |
+| `engine/test/smoke/` | 13 个 `.c` 冒烟源文件（整目录 15 个文件） |
+| `engine/test/index/` | **8 个 `.cpp` 测试文件**（分布在 4 个索引类型目录 `brin` / `bitmap` / `gin` / `diskann` 下；⚠️ 未注册进 CMake ⇒ 0 条 ctest 条目） |
 | `engine/test/sdk/hnsw/` | 2 个文件（测的是冻结轨的 HNSW） |
 | `engine/tools/benchmark/c_api/` | 依赖 `mm_vector_index` / `faiss_hnsw` |
 
@@ -137,6 +141,39 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 **Why 单独一个 Task**：删轨之后没法回看删了什么。基线是后面每个 Task 的验收依据。
 
+- [ ] **1.0 开工前：先把与本计划无关的脏文件处理掉**（⚠️ **（可执行性修正）新增的一步，必须最先做**）
+
+  ⚠️ **工作区当前有 4 个与本计划无关的未提交改动**：
+  `engine/db/src/db_ft.c`、`engine/db/src/modalities/ft/ft_index.c`、
+  `engine/db/src/modalities/ft/ft_index.h`（已修改）与
+  `engine/db/test/integration/test_ft_reclaim_boot.c`（**未跟踪**）。
+  它们是「ft 回收引导」这条**独立线**的工作，不是本计划的产物。
+不先处理掉，Task 4.12 提交时会把它们一起卷进「退役冻结轨」那个原子提交。
+
+  ⇒ **在这 4 个文件被卷进本计划的任何一次提交之前，先二选一处理掉**：
+
+  ```powershell
+  cd C:\code\projects
+  git status --short
+  # 方案 A（推荐）：单独提交，与本计划的提交历史彻底分开
+  git add engine/db/src/db_ft.c engine/db/src/modalities/ft/ft_index.c `
+          engine/db/src/modalities/ft/ft_index.h `
+          engine/db/test/integration/test_ft_reclaim_boot.c
+  git commit -m "feat(kernel): ft 回收引导"
+  # 方案 B：先 stash 起来，W-A 全部结束后再 pop
+  # git stash push -m "ft 回收引导（W-A 开工前暂存）" -- `
+  #   engine/db/src/db_ft.c engine/db/src/modalities/ft/ft_index.c `
+  #   engine/db/src/modalities/ft/ft_index.h `
+  #   engine/db/test/integration/test_ft_reclaim_boot.c
+  ```
+
+  ⚠️ **两条硬规矩**：
+  1. **绝不让这 4 个文件进入本计划的任何一次提交** —— Task 2 / 3 / 4 / 5 的 `git add`
+     一律**逐文件列举**，不用 `-A`、不用 `engine/` 这种目录级通配；
+  2. **stash 要逐路径 `stash push -- <路径>`** —— 不要裸 `git stash`（会把 `StillEvolving/`
+     之类的未跟踪目录也卷进去）。
+
+
 - [ ] **1.1 重建 `build/engine`（CMakeCache 已过期 2 周，必须先重建）**
 
   ```powershell
@@ -150,7 +187,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 - [ ] **1.1b 打回滚 tag `pre-frozen-track-removal`**
 
   ⚠️ **（复审修正）删除前必须留一个能回退的点** ——
-  这次要删掉 **524 个文件 / 209,907 行**，是不可逆的大动作。
+  这次要删掉 **524 个文件 / 209,905 行**，是不可逆的大动作。
   设计 §9 与 §7 的风险表都点名要打 tag，原计划漏了。
 
   ```powershell
@@ -199,16 +236,19 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   ⇒ 把 `failed-baseline.txt` 一起提交（它是**基线**，不是临时文件）。
 
 
-- [ ] **1.2 采 ctest 基线**
 
-  ```powershell
-  ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-baseline.txt
-  (Select-String -Path build/engine/ctest-baseline.txt -Pattern '^\s*Test\s+#').Count
-  ```
+⇒ **同时也要记下用例总数**（与上面的失败集合一起，两者互补：
+失败集合抓「新失败」，总数抓「用例凭空消失」）：
 
-  预期：打印用例总数 N（冻结轨默认关闭，所以 N 里**不含** `engine/test/db/` 的 587 条）。
-  把这个 N 记下来 —— 后面验收要逐条比对。
+```powershell
+ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-baseline.txt
+(Select-String -Path build/engine/ctest-baseline.txt -Pattern '^\s*Test\s+#').Count
+```
 
+预期：打印用例总数 N（冻结轨默认关闭，所以 N 里**不含** `engine/test/db/` 的 587 条）。
+把 N 一并记进基线文件。
+⚠️ **判据方向**：验收时**不比「用例数 == N」**（删轨本来就该让数变少），
+只比「**失败集合 ⊆ 基线失败集合**」+「**用例数减少量 == 预期删除量**」。
 - [ ] **1.3 采"若打开冻结轨测试"的用例总数（用于核对删除量）**
 
   ```powershell
@@ -219,6 +259,30 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
   预期：比 1.2 多出约 587 条。记下差值 **D**（= 冻结轨独占的用例数）。
   删轨后，工程轨的用例数必须**恰好回到 N**。
+
+  ⚠️ **（可执行性修正）这一步可能根本跑不完，必须有退路** ——
+  `-DENABLE_FROZEN_SRC_DB_TESTS=ON` 会把整棵冻结轨测试树（`engine/test/db/` 递归 357 个文件）
+  重新拉进构建图；只要其中**任何一个文件编不过**，`cmake --build` 就停在那里 ——
+  1.3 变成一个无底洞，后面每个 Task 都拿不到基线。
+
+  ⇒ **fallback（编不过就走这条，不要硬啃）**：
+  1. 在基线文件里记「**冻结轨基线不可得**」，D 留空；
+  2. 把**删除前 / 删除后的 ctest 条目差值判据降级**为**集合差集法**（不依赖冻结轨能否编译）：
+
+     ```powershell
+     # 删除前（1.2 已经采过一次）
+     ctest --test-dir build/engine -N | Select-String '^\s*Test\s+#' | Out-File -Encoding utf8 build/engine/ctest-names-before.txt
+     # 删除后（Task 4.9）
+     ctest --test-dir build/engine -N | Select-String '^\s*Test\s+#' | Out-File -Encoding utf8 build/engine/ctest-names-after.txt
+     # 差集：删除后消失的条目，每一条都要能在冻结轨测试目录里找到出处
+     Compare-Object (Get-Content build/engine/ctest-names-before.txt) `
+                  (Get-Content build/engine/ctest-names-after.txt) |
+       Where-Object { $_.SideIndicator -eq '<=' } |
+       Select-Object -ExpandProperty InputObject
+     ```
+
+     判据改为「**消失的条目集合 ⊆ 冻结轨测试来源**」—— 而不是「数量差 == D」。
+  3. **不要**为了让冻结轨编过而去改冻结轨源码（那是本计划要删的东西）。
 
 - [ ] **1.4 采主核测试基线（证明本计划没碰主核）**
 
@@ -235,6 +299,14 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
   `docs/superpowers/plans/2026-11-18-frozen-track-retirement-baseline.md` 内容：
 
+  ⚠️ **（可执行性修正）下面这张表有两个数字要按实测填**：
+  ① `engine/test/index/` **不计入**用例差值 —— `engine/test/CMakeLists.txt` 里没有
+     `add_subdirectory(index)`，这棵树从未注册进 CMake ⇒ 0 条 ctest 条目；
+  ② 「SDK 内存上下文用例数」是 **44 条 ctest 条目**，**不是 6** ——
+     `memory/` 下 6 个 `.cpp` 各编成一个测试二进制，`add_project_test()` 走
+     `gtest_discover_tests()` ⇒ **一个 `TEST()` / `TEST_F()` = 一条 ctest 条目**，
+     实测 6 个文件合计 44 条（9 + 11 + 8 + 5 + 8 + 3）。
+
   ```markdown
   # 冻结轨删除前基线（2026-11-18）
 
@@ -249,11 +321,12 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 - ❌ **不是**「用例数 == N」—— 删轨本来就要让用例数变少，绝对值相等是错的判据。
 - ✅ **是**「**失败用例名集合 ⊆ 基线集合（不新增）**」 + 「主核的 95 个测试全绿」。
 - ✅ 另外对账：删掉的用例数应与 D **大致相符**（多删少删都要能解释清楚 ——
-  W-A 会多删 `engine/test/index/` 的全部 8 个目录，见 Task 4 的偏离说明）。
+  `engine/test/index/` **不计入**：这棵树未注册进 CMake ⇒ 0 条 ctest 条目，
+  删它不改变任何用例数；见 Task 4 的偏离说明）。
   | 主核测试文件数 | 95（64 unit + 31 integration） |
   | 主核测试结果 | 95 通过 / 0 失败 |
   | SDK 用例数 | <ctest -N 里 sdk_* 的条数> |
-  | SDK 内存上下文用例数 | 6（memory/ 下 6 个 .cpp） |
+  | SDK 内存上下文用例数 | 44（memory/ 下 6 个测试二进制，gtest_discover_tests 逐用例注册） |
 
   **删除后验收**：工程轨 ctest 用例数 == N；主核结果与上表一致。
   ```
@@ -339,7 +412,13 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   分散在头与实现两侧。**不要凭记忆判断谁定义在哪** —— 搬完直接编译，
   缺什么编译器会一条条报出来，按报错补。
 
-- [ ] **2.3 改 `engine/include/sdk/impl/mmdb_memctx.h`**
+- [ ] **2.3 改 `engine/include/sdk/impl/mmdb_memctx.h`**（⚠️ **本文件有 3 处要改，不是 1 处**）
+
+  ⚠️ **（可执行性修正）只改 include 那一行不够** ——
+  `engine/include/sdk/impl/mmdb_memctx.h` 实测有 **3 处** `db/sql/memctx` 残留：
+  **L25**（要删的 `#include "db/sql/memctx.h"`）、**L6**（文件头注释）、
+  **L116**（资源析构 API 那段注释）。原计划只覆盖了 L25 ⇒ L6 / L116 留着，
+  Task 3.10 / 6.4 的「零命中」判据必然失败。
 
   ```c
   /* 原：#include "db/sql/memctx.h" */
@@ -347,7 +426,30 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   ```
 
   同时把文件头注释里的 `与 \`db/sql/memctx.h\` 中的核心 API 一一对应`
-  改成 `与 \`sdk/impl/memctx.h\` 中的核心 API 一一对应`。
+  改成 `与 \`sdk/impl/memctx.h\` 中的核心 API 一一对应`（**L6**）。
+
+  ⚠️ **别漏 L116**（资源析构 API 那段注释）：
+
+  ```c
+  /*
+   * 资源析构 API（mmdb_mem_register_resource / mmdb_mem_unregister_resource）
+   * 直接由核心层 sql_engine 提供，本头文件已通过 #include "db/sql/memctx.h"
+   * 自动暴露其声明，SDK 层不重复包装，避免符号冲突。
+   */
+  ```
+
+  改成：
+
+  ```c
+  /*
+   * 资源析构 API（mmdb_mem_register_resource / mmdb_mem_unregister_resource）
+   * 由 SDK 自持的内存上下文（sdk/impl/memctx.h）提供，本头文件已通过
+   * #include "sdk/impl/memctx.h" 自动暴露其声明，SDK 层不重复包装，避免符号冲突。
+   */
+  ```
+
+  ⚠️ **`sql_engine` 这个词也要一并换掉** —— 它是冻结轨的 CMake 目标名，
+  删轨之后这个目标不存在了；留着会让人以为 SDK 还依赖冻结轨。
 
 - [ ] **2.4 改 5 个 SDK 测试的 include**
 
@@ -387,16 +489,39 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 - [ ] **2.6 构建 + 验证（红灯 → 绿灯）**
 
+  ⚠️ **（可执行性修正）`-R` 里的过滤词必须用真实的 gtest Suite 名** ——
+  `ctest -R` 匹配的是 gtest 注册的**条目名**（`Suite.Case`），不是二进制名，
+  而且**大小写敏感**。原计划的 `"memctx|leak|request_scope|root_context"` 里：
+  `request_scope` / `root_context` 带下划线（真实 Suite 名是 `MmdbRequestScopeTest` /
+  `MmdbRootContextTest`）、`memctx` / `leak` 是小写（真实名里是大写 `Memctx` / `Leak`）
+  ⇒ **一个都匹配不上**，这条命令会输出「No tests were found!!」。
+
   ```powershell
   cd C:\code\projects
   cmake -B build/engine -S engine -DBUILD_TESTING=ON
   cmake --build build/engine --parallel 4
-  ctest --test-dir build/engine -R "memctx|leak|request_scope|root_context" --output-on-failure
+  ctest --test-dir build/engine -R "MmdbMemctx|MmdbRootContext|MmdbRequestScope|SdkCoreMemctx|SdkVectorsMemctx|MemoryLeakDetection" --output-on-failure
   ```
 
-  预期：6 个内存上下文用例（`mmdb_memctx_test` / `mmdb_root_context_test` /
-  `mmdb_request_scope_test` / `sdk_core_memctx_test` / `sdk_vectors_memctx_test` /
-  `memory_leak_detection_test`）全部 PASS。
+  预期：**44 条**内存上下文用例全部 PASS（6 个测试二进制 × `gtest_discover_tests()`
+  逐用例注册：9 + 11 + 8 + 5 + 8 + 3）。
+
+  ⚠️ **「44 条」不是 6 条**：`memory/` 下 6 个 `.cpp` 里合计 44 个
+  `TEST()` / `TEST_F()`，每个都是**一条独立的 ctest 条目**。
+  也可以按标签跑（`add_project_test()` 用 `PROPERTIES LABELS "${TEST_NAME}"`
+  把标签设成了二进制名）：
+
+  ```powershell
+  ctest --test-dir build/engine -L "mmdb_memctx_test|mmdb_root_context_test|mmdb_request_scope_test|sdk_core_memctx_test|sdk_vectors_memctx_test|memory_leak_detection_test" --output-on-failure
+  ```
+
+  ⚠️ 跑之前先确认条目数对得上：
+
+  ```powershell
+  ctest --test-dir build/engine -N -R "MmdbMemctx|MmdbRootContext|MmdbRequestScope|SdkCoreMemctx|SdkVectorsMemctx|MemoryLeakDetection" | Select-String 'Total Tests'
+  ```
+
+  预期：`Total Tests: 44`。
 
   ⚠️ **若出现未定义符号**（`palloc` / `pfree` / `AllocSetContextCreate` 等），
   说明移植漏了实现 —— **把它补进 `engine/src/sdk/core/memctx.c`**。
@@ -411,9 +536,16 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   预期：每个符号至少出现一次且标记为 `T`（已定义文本段）。**出现 `U` 就是没移干净。**
 
   ```powershell
-  Select-String -Path engine/src/sdk/*/*.c,engine/include/sdk/*/*.h,engine/include/sdk/impl/*.h -Pattern 'db/sql/memctx|db/parser/sql/parsenodes'
+  Select-String -Path engine/src/sdk/*/*.c,engine/include/sdk/*.h,engine/include/sdk/*/*.h -Pattern 'db/sql/memctx|db/parser/sql/parsenodes'
   ```
 
+  预期：**零命中**。
+
+  ⚠️ **（可执行性修正）检索范围少了 SDK 的 19 个顶层公开头** ——
+  `engine/include/sdk/*/*.h` 只覆盖到 `impl/` 这一层，漏掉了 `engine/include/sdk/`
+  **顶层**的公开头（`mmdb.h` / `mmdb_types.h` / `mmdb_vectors.h` … 共 19 个）。
+  ⇒ 口径统一成 `engine/include/sdk/*.h,engine/include/sdk/*/*.h`
+  （与 Task 3.10 / 6.4 一致）。
   预期：**零命中**。
 
 - [ ] **2.8 全量回归 + 提交**
@@ -616,6 +748,27 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   ⚠️ `faiss_hnsw_filter_fn` 与 `mmdb_flat_filter_fn` 签名一致
   （`int (*)(int32_t, void *)`），所以 `hnsw_filter_predicate` **不用改**。
 
+  ⚠️ **（可执行性修正）上表只列了 11 处代码调用，`faiss_hnsw` 在 `vectors.c` 里实测有 19 处** ——
+  另外 **8 处是注释**（L403 / L583 / L657 / L670 / L984 / L986 / L987 / L1114）。
+  只改代码不改注释 ⇒ Task 3.10 的「零命中」判据**必然失败**；
+  而且注释里留着 `faiss_hnsw` 就是在**误导后来人**（让它以为 HNSW 还在）。
+  ⇒ **这 8 行注释也在本 Task 一并改掉**：
+
+  | 行号 | 注释原文里的 `faiss_hnsw` | 改成 |
+  |---|---|---|
+  | L403 | `/* P4-T4.5：HNSW filter 谓词回调（faiss_hnsw_filter_fn 类型） */` | `（mmdb_flat_filter_fn 类型）` |
+  | L583 | `/* 一次性分配所有向量数据（连续内存，faiss_hnsw_index_add 要求） */` | `（连续内存，mmdb_flat_index_add 要求）` |
+  | L657 | `faiss_hnsw 默认每 add 一个向量就 realloc 5 个数组……` | 整段删掉（扁平索引没有 realloc 行为） |
+  | L670 | `/* faiss_hnsw_index_add 返回成功添加的向量数；…… */` | `/* mmdb_flat_index_add 返回成功添加的向量数；…… */` |
+  | L984 | `/* 标记 HNSW 内部 bitmap（如果 faiss_hnsw 支持） */` | 整段删掉（扁平索引没有 bitmap 字段） |
+  | L986 | `/* faiss_hnsw 不直接暴露 delete API，通过 bitmap 字段标记 */` | 整段删掉（扁平索引靠 `n` 控制有效条数） |
+  | L987 | `/* 搜索时会跳过已删除的向量（由 faiss_hnsw 内部处理） */` | 改成扁平索引的实际做法 |
+  | L1114 | `* 两者最终都使用 faiss_hnsw_search_filtered()：filter 为空时传 NULL 谓词。 */` | `* 两者最终都使用 mmdb_flat_search_filtered()：filter 为空时传 NULL 谓词。 */` |
+
+  ⚠️ **L984 / L986 / L987 描述的是一套已不存在的机制**（用 bitmap 字段标记删除），
+  扁平索引没有这回事 —— **按新实现改写，不要只做字符串替换**，
+  否则注释会与代码讲两套故事。
+
 - [ ] **3.4 把索引选择决策内联（替换 `vector_index_selector_choose`）**
 
   原选择器会在 HNSW / IVF-PQ / DiskANN / 暴力之间选。SDK 现在**只有一种索引**，
@@ -732,15 +885,37 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   - `engine/test/sdk/hnsw/hnsw_filter_test.cpp` —— 测的是冻结轨的 `faiss_hnsw`
   - `engine/test/sdk/integration/selector_integration_test.cpp` —— 测的是冻结轨的 `vector_index_selector`
 
-  并删掉 `engine/test/sdk/CMakeLists.txt:29` 的
-  `target_link_libraries(hnsw_filter_test PRIVATE faiss_hnsw)` 与对应的
-  `add_subdirectory(hnsw)`。
+  ⚠️ **（可执行性修正）`engine/test/sdk/CMakeLists.txt` 里没有 `add_subdirectory(hnsw)`** ——
+  原计划让人去删一个**不存在的行**，执行者会以为自己改错了文件。
+  实测该文件的真实结构是：
+
+  | 行 | 内容 |
+  |---|---|
+  | L8 | `add_subdirectory(memory)` ← **唯一的一条** `add_subdirectory` |
+  | L29 | `hnsw_filter_test   # P4-T4.5：HNSW + filter 公开 API 测试，源码位于 hnsw/ 子目录` ← 是 `SDK_TESTS` **列表项**，不是 `add_subdirectory` |
+  | L46-51 | `elseif(test_name STREQUAL "hnsw_filter_test")` 分支：`add_executable(${test_name} hnsw/${test_name}.cpp)` + `target_link_libraries(${test_name} PRIVATE faiss_hnsw)` + `target_include_directories(...)` |
+
+  ⇒ **要改的是两处**：
+  1. **L46-51 这条 `hnsw` 分支**（连 `elseif` 条件一起删）；
+  2. **L29 那一项**（从 `SDK_TESTS` 列表里去掉 `hnsw_filter_test`）。
+
+  然后 **删掉整个 `engine/test/sdk/hnsw/` 目录**。
+
+  ⚠️ **两个坑**：只删 L29 不删 L46-51 ⇒ 分支留着但列表里没这一项（无害但留垃圾）；
+  只删 L46-51 不删 L29 ⇒ **CMake 直接报「找不到源文件」**。
 
   ⚠️ 这两个文件测的功能**不是消失了，是换了实现** —— 3.8 用新测试补上等价覆盖。
 
 - [ ] **3.8 新建 `engine/test/sdk/vectors/index_flat_test.cpp` + CMakeLists**
 
   覆盖 6 个接口 + 过滤语义：
+
+  ⚠️ **（可执行性修正）过滤用例的断言与谓词相反，原写法必红** ——
+  谓词 `reject_even(vec_id) = (vec_id % 2) != 0` 的语义是「**保留奇数 id**」
+  （返回非 0 = 候选通过）。3 个候选的 id 是 `0` / `1` / `2` ⇒ **只有 id=1 是奇数** ⇒
+  实际结果是 `n == 1`、`ids[0] == 1`。原断言写的是 `n == 2` / `ids[0] == 0` / `ids[1] == 2`
+  （那是按「保留偶数」写的）⇒ **这个测试一定会红，而且红得没道理**。
+  ⇒ 本计划**不动 3.2 的过滤语义**，把断言改成实测值（见下）。
 
   ```cpp
   #include <gtest/gtest.h>
@@ -798,9 +973,9 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
       int32_t ids[3];
       float dist[3];
       int32_t n = mmdb_flat_search_filtered(idx, q, 3, reject_even, nullptr, ids, dist);
-      ASSERT_EQ(n, 2);
-      EXPECT_EQ(ids[0], 0);
-      EXPECT_EQ(ids[1], 2);
+      ASSERT_EQ(n, 1);       /* 谓词保留奇数 ⇒ 3 个候选里只有 id=1 命中 */
+      EXPECT_EQ(ids[0], 1);
+      EXPECT_NEAR(dist[0], 200.0f, 1e-6);  /* 10²+10² */
       mmdb_flat_index_drop(idx);
   }
   ```
@@ -829,11 +1004,15 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 - [ ] **3.10 机械验收 + 全量回归 + 提交**
 
   ```powershell
-  Select-String -Path engine/src/sdk/*/*.c,engine/include/sdk/*.h,engine/include/sdk/impl/*.h `
+  Select-String -Path engine/src/sdk/*/*.c,engine/include/sdk/*.h,engine/include/sdk/*/*.h `
     -Pattern 'faiss_hnsw|vector_index_selector|db/index/vector_index'
   ```
 
   预期：**零命中**。
+
+  ⚠️ **（可执行性修正）这个「零命中」只有把 3.3 列的 8 处注释一并改掉才成立** ——
+  `engine/src/sdk/vectors/vectors.c` 实测有 **19 处** `faiss_hnsw`（11 处代码 + 8 处注释）。
+  只改代码不改注释 ⇒ 这里必然命中，判据不可达。3.3 已把这 8 行注释列进本 Task 的改动清单。
 
   ```powershell
   ctest --test-dir build/engine --output-on-failure
@@ -845,9 +1024,15 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   git push origin main 2>&1 | Out-String | Write-Output
   ```
 
-  ⚠️ **确认用例数没掉**：本 Task 只新增 1 个用例（`index_flat_test`）、
-  删 2 个（`hnsw_filter_test` / `selector_integration_test`）。
-  与 Task 1 的 N 比对，差值应为 **−1**。
+  ⚠️ **确认用例数没掉**：本 Task **新增 1 个测试二进制（`index_flat_test`）= 4 条 ctest 条目**
+  （`add_project_test()` 走 `gtest_discover_tests()`，**一个 `TEST()` = 一条 ctest 条目**；
+  该文件里正好 4 个 `TEST()`），**删 2 条**（`hnsw_filter_test` / `selector_integration_test` ——
+  这两个走 `add_test(NAME ...)`，各只贡献 **1 条**）。
+  与 Task 1 的 N 比对，差值应为 **+4 − 2 = +2**。
+
+  ⚠️ **（可执行性修正）原计划写的「新增 1 个用例 / 差值 −1」是错的** ——
+  它混用了「测试二进制个数」与「ctest 条目数」两个口径。
+  ⇒ 全文统一用「**新增 1 个测试二进制 / 4 个 ctest 条目**」的说法。
 
 ---
 
@@ -856,7 +1041,8 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
   | 项 | 设计文档 | 本计划实测 | 处置 |
   |---|---|---|---|
-  | `engine/test/index/` 删几个 | D-10 写 **4 个目录**（`brin` / `bitmap` / `gin` / `diskann`） | **8 个目录全部**都 include `<index/...>`，而 `index/` 目录随冻结轨一起没了 ⇒ 留任何一个都编不过 | **按 8 个删**；设计 D-10 的「4 个」是错的，回填订正 |
+| `engine/test/index/` 删多少 | D-10 写 **4 个索引类型目录**（`brin` / `bitmap` / `gin` / `diskann`）—— **这个数是对的** | 实测这 4 个索引类型目录下共 **8 个 `.cpp` 测试文件**，**8 个全部** include `<index/...>` ⇒ 冻结轨一删全部编不过 | **8 个 `.cpp` 全部删**。D-10 的「4」是**索引类型目录数**、不是文件数 —— 两者不矛盾，只需在设计里补一句口径澄清 |
+| `engine/test/index/` 的 CMake 状态 | 设计未提 | **整棵树根本没注册进 CMake**：`engine/test/CMakeLists.txt` 里没有 `add_subdirectory(index)`，而 `index/CMakeLists.txt` 自己只列了 `inverted` 与 `block`（连 `diskann` 都没列） | ⇒ 它**从未被构建过、贡献 0 条 ctest 条目** ⇒ 删它不改变任何用例数。**R6 的差值判据里不计入它** |
   | `engine/test/db/` | 289 文件 | **294** 个 `.c/.cpp/.h`（357 个含其它类型） | 以实测为准，设计数字回填订正 |
 
   ⇒ 这两条**必须同步回设计文档**，不能只在计划里改 —— 否则设计与实施长期不一致。
@@ -876,8 +1062,17 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 #### 与设计文档的偏离（复审补入，必须回填设计文档）
 
+| 项 | 设计文档原文 | 本计划实测 | 处置 |
+|---|---|---|---|
+| `engine/test/index/` 的删除量 | D-10：**4 个目录**（`brin` / `bitmap` / `gin` / `diskann`，即**索引类型目录**） | 这 4 个索引类型目录下共 **8 个 `.cpp`**，8 个**全部** include `<index/...>` | **8 个 `.cpp` 全部删**（整个 `engine/test/index/` 目录删掉）。D-10 的「4」不是错的 —— 它是**目录数**，与**文件数 8** 不矛盾。设计里补一句口径澄清即可 |
+| `engine/test/index/` 与 ctest | 设计 §2.9 写「留 5 / 删 3」，理由是「源码零依赖，只是链接目标没了」 | **源码也依赖**（8 个全部 include `<index/...>`）；**且整棵树没注册进 CMake** ⇒ 0 条 ctest 条目 | 设计 §2.9 那张表**两处都要订正**：① 「留 5 / 删 3」→「**全删**」；② 删掉「源码确实零依赖冻结内核（grep 验证）」那句。已在设计 doc 里改 |
+| `engine/test/db/` 文件数 | 289 | **294** 个 `.c/.cpp/.h`（357 个含其它类型） | 设计回填订正（已改） |
+| 冻结轨总行数 | 209,905 | **209,905**（`.c`+`.h` 口径）；连非代码共 676 个文件 / 216,627 行 | 设计回填订正（已改，并补了口径说明） |
+| 主核 `src/` 总行数 | 68,037 | **68,030**（`.c`+`.h`）；其中 `.c` **52,393** | 设计回填订正（已改） |
+| 主核顶层「API + REPL」行数 | 6,722 | **7,487**（18 个 `.c`） | 设计回填订正（已改，并加了合计行） |
 
-
+⇒ 上面这些**已同步回设计文档**。本表留作**双向核对**用：
+执行时必须确认设计文档里的数字与这张表一致。
 - [ ] **4.1 删除前最后一次确认主核是绿的**
 
   ```powershell
@@ -1000,7 +1195,27 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 - [ ] **4.6 修 `engine/test/sdk/CMakeLists.txt`**
 
-  确认 `add_subdirectory(hnsw)` 已随 Task 3 删掉。
+⚠️ **（可执行性修正）`engine/test/sdk/CMakeLists.txt` 里**没有** `add_subdirectory(hnsw)`** ——
+实测该文件 L8 只有 `add_subdirectory(memory)`；`hnsw_filter_test` 是 **L29** 的 `SDK_TESTS`
+列表项，真正建目标在 **L47-48**：
+
+```cmake
+# L29
+  hnsw_filter_test   # P4-T4.5：HNSW + filter 公开 API 测试，源码位于 hnsw/ 子目录
+
+# L46-48（SDK_TESTS 循环里的 hnsw 分支）
+if(test_name STREQUAL "hnsw_filter_test")
+    add_executable(${test_name} hnsw/${test_name}.cpp)
+    target_link_libraries(${test_name} PRIVATE faiss_hnsw)
+endif()
+```
+
+⇒ 做的是 **两件事**，不是去删一行 `add_subdirectory`：
+1. 从 **L29** 的 `SDK_TESTS` 列表里删掉 `hnsw_filter_test` 这一项；
+2. 连同 **L46-48** 的 hnsw 分支一起删（删了列表项后这个分支就成了死代码）；
+3. 再删 `engine/test/sdk/hnsw/` 目录本身。
+
+⚠️ Task 3 那边也一样：**没有** `add_subdirectory(hnsw)` 可删 —— 删的是 L29 的列表项。
 
 - [ ] **4.7 删 `engine/tools/benchmark/CMakeLists.txt` 的 c_api 引用**
 
@@ -1067,8 +1282,26 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
   ```powershell
   cd C:\code\projects
-  git add -A engine/
+  # ⚠️ （可执行性修正）不能用 `git add -A engine/` —— 工作区里有 4 个与本计划无关的改动：
+  #   M engine/db/src/db_ft.c
+  #   M engine/db/src/modalities/ft/ft_index.c
+  #   M engine/db/src/modalities/ft/ft_index.h
+  #   ?? engine/db/test/integration/test_ft_reclaim_boot.c
+  # 它们属于「ft 回收引导」那条独立线，绝不能被卷进「退役冻结轨」这个原子提交；
+  # 而且 `-A` 连未跟踪文件一起纳入，风险更大。
   git status --short | Select-Object -First 20
+
+  # ⇒ 逐路径显式 add（按 Task 4 实际删改的清单）：
+  git add -A engine/src/db engine/include/db engine/include/rag engine/include/tree_index
+  git add -A engine/test/db engine/test/smoke engine/test/index engine/test/sdk
+  git add -A engine/tools/benchmark
+  git add -u engine/cmake engine/CMakeLists.txt engine/test/CMakeLists.txt
+  git add engine/cmake/ModalityProfiles.cmake engine/cmake/MultimodalConfig.cmake
+  git add CLAUDE.md AGENTS.md README.md engine/README.md
+  git add engine/db tools docs
+
+  # 提交前**必须**确认下面这条输出为空（否则说明卷进了无关文件）：
+  git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "refactor(冻结轨): 退役 engine/src/db 主线，SDK 与工程轨完成去冻结化"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
@@ -1178,7 +1411,6 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   它与仓级 README 讲的是同一套事，不改就是两套矛盾的说法。
 
 - [ ] **5.2 改 `CLAUDE.md`**
-- [ ] **5.2 改 `CLAUDE.md`**
 
   把「数据库存储引擎」整章（从「冻结内核参考」那行到「API 使用示例」结束）替换为：
 
@@ -1234,9 +1466,14 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   |---|---|---|---|
   | `CLAUDE.md`「主数据库内核」节的构建命令注释 | `sh test/run.sh  # 55 个测试文件，73 处断言` | **95** 个测试文件（`test/unit/` 64 + `test/integration/` 31） | `# 95 个测试文件` |
   | `CLAUDE.md` 同节的「单文件 ≤ 800 行」条 | 「既有超限文件 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 记在 v1.3 账上」 | 三个文件实测 **614 / 766 / 795** 行，**都已 ≤ 800** | 删掉这个「既有超限文件」从句（或改成「v1.3 账上的历史超限已全部消除」） |
-  | `engine/db/test/run.sh:15` 头部注释 | 「实测 93 个测试里没有任何两个共用同一个 .db 路径」 | **95** 个 | 改成 95 |
+  | `engine/db/test/run.sh:13` 头部注释 | 「实测 93 个测试里没有任何两个共用同一个 .db 路径」 | **95** 个 | 改成 95 |
 
   ⚠️ **`run.sh` 那行注释是并发安全性的证据**（"各测试互不干扰"）——
+⚠️ **（可执行性修正）行号是 L13 不是 L15** —— `engine/db/test/run.sh` 里
+「实测 93 个测试里没有任何两个共用同一个 .db 路径」这句在 **L13**（L14 是另一句
+「没有任何两个共用同一个 .db 路径」的续行说明），**L29** 又出现一次同样的表述。
+⇒ 两处都要改（L13 与 L29），只改 L13 会留下不一致。
+
   数字错一点不影响结论，但复核者会拿它跟 `run.sh` 的实际收集数对账，对不上就会怀疑别的。
 
   ```powershell
@@ -1271,10 +1508,16 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   cd C:\code\projects
   $dirs = 'engine/src','engine/include','engine/test','engine/tools','engine/cmake'
   foreach ($d in $dirs) {
-    Select-String -Path "$d/*" -Recurse -Include '*.c','*.h','*.cpp','*.cmake','CMakeLists.txt' `
-      -Pattern 'src/db/|include/db/' -ErrorAction SilentlyContinue
+  Get-ChildItem $d -Recurse -File -Include '*.c','*.h','*.cpp','*.cmake','CMakeLists.txt' `
+    -ErrorAction SilentlyContinue |
+    Select-String -Pattern 'src/db/|include/db/' -ErrorAction SilentlyContinue
   }
   ```
+
+⚠️ **（可执行性修正）`Select-String` 没有 `-Recurse` 参数** —— 它的参数表里根本没有这一项
+（只有 `-Path` / `-Pattern` / `-Include` / `-Exclude` / `-Context` / `-AllMatches` 等），
+写成 `Select-String -Path "$d/*" -Recurse` 会直接报「找不到与参数名 Recurse 匹配的参数」。
+⇒ 递归**必须**由 `Get-ChildItem -Recurse` 负责，再把结果管道给 `Select-String`。
 
   预期：**零命中**（`engine/db/` 目录本身除外 —— 它是主核，不是冻结轨）。
 
@@ -1383,7 +1626,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   ## 删除量
   | 项 | 行数 |
   |---|---|
-  | engine/src/db/ | 209,907 |
+  | engine/src/db/ | 209,905 |
   | engine/include/db/ | 409 头 |
   | engine/test/db/ | 289 文件 / ~587 用例 |
   ```

@@ -2,7 +2,7 @@
 
 > 依据：`docs/superpowers/specs/2026-11-18-multimodal-db-project-organization-design.md` §4（设计 A）/ §6.5
 > 落地日期：2026-11-18
-> 执行顺序（**以设计 §9 的顺序块为唯一权威**）：**P0 先行**（其余全部依赖它）；**P1 必须在 W-C 的 C-1 ~ C-5 全部完成之后** —— P1 的 B1 会**第一次创建** `tools/mm_profiles.mk`，那时模态文件已在最终位置，**一次建对**；若 C-2/C-3 排在 P1 之后，`MM_FILES_blob` 的三条路径会全部失效 ⇒ `MM=vector` 裁不掉 blob ⇒ P1 验收必失败。
+> 执行顺序（**唯一权威是设计 §9，本行只是它的摘要**）：**P0 先行**（其余全部依赖它）；W-A 全部；**W-C 的 C1 ~ C5 全部完成之后才进 P1** —— P1 的 B1 会**第一次创建** `tools/mm_profiles.mk`，那时模态文件已在最终位置，**一次建对**；若 C2/C3 排在 P1 之后，`MM_FILES_blob` 的路径会全部失效 ⇒ `MM=vector` 裁不掉 blob ⇒ P1 验收必失败。**C6（8 profile + 8 smoke 重跑）在 P1/P2 之后。** 详见设计 §9 的顺序块（含规则一到规则六）。
 > 互不冲突：W-A 动 `engine/src/` 与 `engine/include/`；本计划只动 `engine/db/` 与 `.github/`。
 
 ---
@@ -95,6 +95,7 @@ engine/db/
 | 文件 | 作用 |
 |---|---|
 | `engine/db/tools/mm_profiles.mk` | 8 个 profile 的唯一真相源：模态清单、源文件归属、依赖、宏后缀 |
+| `engine/db/tools/mm_profiles_test.sh` | **（新增）** `mm_profiles.mk` 的正确性测试：profile 模态集合 / 文件存在性 / 依赖闭包前置条件 |
 | `engine/db/tools/measure_build.sh` | 构建度量：按 profile 统计编译文件数 / 目标文件数 / 链接后符号数 / 耗时 |
 | `engine/db/test/smoke/smoke_relational.c` | 关系模态 smoke |
 | `engine/db/test/smoke/smoke_blob.c` | blob 模态 smoke |
@@ -226,7 +227,17 @@ engine/db/
 - [ ] **B0.6 CI 绿了再提交 B0.5 的修复（若有）**
 
   ```powershell
-  git add engine/db/
+# ⚠️ （可执行性修正）不要用 `git add engine/db/` —— 工作区里有 4 个与本计划无关的改动：
+#   M engine/db/src/db_ft.c
+#   M engine/db/src/modalities/ft/ft_index.c
+#   M engine/db/src/modalities/ft/ft_index.h
+#   ?? engine/db/test/integration/test_ft_reclaim_boot.c
+# 它们是「ft 回收引导」这条独立线，不该混进「修 Linux 平台差异」这个提交。
+# ⇒ 逐文件列（按 B0.5 实际改过的文件）：
+git add engine/db/src/<B0.5 实际改过的文件，逐个列>
+
+# 提交前确认没卷进 ft（输出必须为空）：
+git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "fix(kernel): 修 Linux 平台差异（CI 首次跑主核暴露）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
@@ -392,6 +403,94 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   git push origin main 2>&1 | Out-String | Write-Output
   ```
 
+- [ ] **B1.4 写 `engine/db/tools/mm_profiles_test.sh`（先写、跑红）**
+
+⚠️ **（可执行性修正）B1 原来完全没有测试** —— `mm_profiles.mk` 是 8 个 profile 的
+**唯一真相源**，却没有一条断言能验证「某 profile 的文件清单正确」。
+B1.2 只是「用 `make -p` 打印出来用眼睛看」，那不是测试。
+
+⇒ 新建 `engine/db/tools/mm_profiles_test.sh`，对**每个** profile 断言三件事：
+
+```sh
+#!/bin/sh
+# mm_profiles.mk 的正确性测试。
+#
+# 【为什么要有这个测试】
+# mm_profiles.mk 是 8 个 profile 的"唯一真相源"——
+# 它错了，`make MM=xxx` 要么编出完整二进制（裁不掉），
+# 要么 undefined reference（裁多了）。两种都只有到编译期才暴露。
+# 这个脚本把两类错误提前到"改完文件立刻"就能发现。
+set -u
+cd "$(dirname "$0")/.." || exit 1
+fail=0
+
+# ---- 断言 1：每个 profile 的模态集合符合预期 ----
+check_set() {
+    got=$(mingw32-make -f tools/mm_profiles.mk --eval 'print:' \
+          --eval "\t@echo \$(MM_SET_$1)" print 2>/dev/null | tr -d '\r')
+    [ "$got" = "$2" ] || { echo "FAIL MM_SET_$1: 期望 [$2] 实际 [$got]"; fail=1; }
+}
+check_set relational ""
+check_set blob       "blob"
+check_set graph      "graph"
+check_set ft         "ft"
+check_set geo        "geo"
+check_set ts         "ts"
+check_set vector     "vector"
+check_set doc        "doc"
+check_set full       "blob graph vector ft geo ts doc"
+
+# ---- 断言 2：MM_FILES_<m> 列出的文件全部真实存在 ----
+# （列了不存在的文件 ⇒ make 直接 'No rule to make target'）
+for m in blob graph ft geo ts vector doc relational; do
+    for f in $(mingw32-make -f tools/mm_profiles.mk --eval 'print:' \
+               --eval "\t@echo \$(MM_FILES_$m)" print 2>/dev/null | tr -d '\r'); do
+        [ -f "$f" ] || { echo "FAIL MM_FILES_$m 列了不存在的文件: $f"; fail=1; }
+    done
+done
+
+# ---- 断言 3：MM_DEP_<m> 的每个依赖都在 MM_ALL 里 ----
+# （依赖闭包校验器的前置条件：闭包算法只认 MM_ALL 里的名字）
+all=$(mingw32-make -f tools/mm_profiles.mk --eval 'print:' \
+      --eval '\t@echo $(MM_ALL)' print 2>/dev/null | tr -d '\r')
+for m in $all blob graph ft geo ts vector doc; do
+    for d in $(mingw32-make -f tools/mm_profiles.mk --eval 'print:' \
+               --eval "\t@echo \$(MM_DEP_$m)" print 2>/dev/null | tr -d '\r'); do
+        case " $all " in
+            *" $d "*) ;;
+            *) echo "FAIL MM_DEP_$m 依赖了不在 MM_ALL 里的模态: $d"; fail=1 ;;
+        esac
+    done
+done
+
+[ $fail -eq 0 ] && echo "✓ mm_profiles.mk 全部断言通过"
+exit $fail
+```
+
+**TDD 顺序（硬要求）**：
+1. **先写这个脚本**，在 `mm_profiles.mk` 还**没建**的时候跑 → 必须**红**（`make` 报找不到文件）；
+2. 建 `mm_profiles.mk` → 脚本转绿；
+3. 故意把 `MM_FILES_blob` 里的一个文件名改错 → 脚本必须**红**（断言 2 抓到）；
+4. 改回来 → 绿。
+
+第 3 步是**反向验证** —— 没有它，你不知道这个测试是真在跑还是空转。
+
+运行方式（Windows 上没有 `sh` 的 PATH 入口）：
+
+```powershell
+cd C:\code\projects\engine\db
+& "C:\Program Files\Git\usr\bin\sh.exe" tools/mm_profiles_test.sh
+```
+
+⚠️ 这个脚本要加进 `Makefile` 的 `check` 目标，与 `check_deps.sh` 并列：
+
+```make
+check:
+\tsh tools/check_deps.sh
+\tsh tools/mm_profiles_test.sh
+```
+
+---
 ---
 
 ### Task B2：Makefile 接入 `MM`（裁剪源文件 + 生成宏）
@@ -404,7 +503,24 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 - 新增宏：`DB_HAS_RELATIONAL` / `DB_HAS_BLOB` / `DB_HAS_GRAPH` / `DB_HAS_VECTOR` /
   `DB_HAS_FT` / `DB_HAS_GEO` / `DB_HAS_TS` / `DB_HAS_DOC`（恒定定义，值为 0 或 1）。
 
-- [ ] **B2.1 在 `Makefile` 的 `OBJ_DIR ?= build`（L62）之后插入 MM 块**
+- [ ] **B2.1 在 `Makefile` 的 `OBJ_DIR ?= build`（L62）之后、`SRCS :=`（L81）之前插入 MM 块**
+
+  ⚠️ **（可执行性修正）插入点的下界必须写死** ——
+  `Makefile` 里 `SRCS :=`（**L81**）、`OBJS :=`（L82）、`LIB_OBJS :=` 都是
+  **`:=` 立即赋值**：求值那一刻就把右边的 `$(wildcard ...)` 展开并**定死**。
+  ⇒ MM 块若被追加到**文件末尾**，`SRCS` 里仍然是**全量源文件**
+  ⇒ `make MM=vector` 会**静默地链接出完整二进制** ——
+  裁剪「看起来成功」（构建不报错、不报错才最坏），实际**一点都没裁**。
+
+  ⇒ 插入点必须**同时**满足两条：
+  1. **在 `OBJ_DIR ?= build`（L62）之后** —— MM 块要用 `$(OBJ_DIR)`
+     （`OBJ_BASE ?= $(OBJ_DIR)`），上移到 L62 之前会反过来坏掉；
+  2. **在 `SRCS :=`（L81）之前** —— 让 `SRCS := $(filter-out $(MM_CROP_SRCS),$(SRCS_ALL))`
+     在**定义时**就能看到已经算好的 `MM_CROP_SRCS`。
+
+  ⚠️ **`CFLAGS` 是另一条独立的时序**：`Makefile` L57 是 `CFLAGS := ...`
+  （立即赋值）⇒ MM 块必须**晚于 L57**（本插入点满足），
+  且 `CFLAGS` 必须改成**延迟赋值** `=`（B2.3）。
 
   ```make
   # ---------------------------------------------------------------------
@@ -436,8 +552,13 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   endif
 
   # ---- 依赖闭包（展开到不动点；三轮足够 —— 模态只有 8 个）----
-  MM_CLOSED := $(MM_SET_$(MM))
-  MM_CLOSED := $(MM_CLOSED) $(foreach m,$(MM_SET_$(MM)),$(MM_DEP_$(m)))
+  # ⚠️ **（可执行性修正）关系模态恒常驻 ⇒ 永远在闭包里** ——
+  # 原来写的是 `MM_CLOSED := $(MM_SET_$(MM))`，而 `MM_SET_relational` 是**空的**
+  # （关系模态恒常驻，不进「可变集」）⇒ `MM=relational` 时闭包里**没有** relational
+  # ⇒ `DB_HAS_RELATIONAL=0` ⇒ 与「关系模态恒常驻」直接矛盾，
+  # 而且所有 `#if DB_HAS_RELATIONAL` 的代码会被**整块裁掉**。
+  # ⇒ 闭包的种子必须**无条件带上** relational。
+  MM_CLOSED := relational $(MM_SET_$(MM))
   MM_CLOSED := $(MM_CLOSED) $(foreach m,$(MM_CLOSED),$(MM_DEP_$(m)))
   MM_CLOSED := $(MM_CLOSED) $(foreach m,$(MM_CLOSED),$(MM_DEP_$(m)))
   MM_CLOSED := $(sort $(MM_CLOSED))
@@ -514,6 +635,12 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   SRCS := $(filter-out $(MM_CROP_SRCS),$(SRCS_ALL))
   ```
 
+  ⚠️ **（可执行性修正）这一行必须留在 L81 原位（MM 块之下）** ——
+  `SRCS :=` 是**立即赋值**：它在被读到的那一瞬间就把 `$(MM_CROP_SRCS)` 定死。
+  ⇒ MM 块若落在**文件末尾**（`SRCS :=` 之后），此刻 `MM_CROP_SRCS` 还是**空**
+  ⇒ `SRCS` = 全量 ⇒ **裁剪静默失效**（构建照样绿，二进制却是全量的）。
+  ⇒ 所以 B2.1 的插入点是「**L62 之后、L81 之前**」，不是「文件末尾」。
+
 - [ ] **B2.3 把宏加进 CFLAGS（并且把 `CFLAGS` 改成延迟赋值）**
 
   ⚠️ **（复审修正）这一步原来会写出「宏永远到不了编译器」的版本** ——
@@ -560,7 +687,7 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   ⚠️ **此时还没有 `#if` 裁剪点**，所以 `make MM=vector` 会在链接阶段报
   "undefined reference to db_ft_open" —— **这是预期的**，B3 修。
 
-- [ ] **B2.5 验证：裁剪确实生效（只看源文件层面）**
+- [ ] **B2.5 验证：裁剪确实生效（源文件层面 + 链接产物的反向断言）**
 
   ```powershell
   mingw32-make MM=vector -n 2>&1 | Select-String 'ft_am|db_ft' | Measure-Object
@@ -575,6 +702,27 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   ```
 
   预期：`> 0`。
+
+  ⚠️ **（可执行性修正）只验 `make -n` 是不够的，必须补一条 `nm` 反向断言** ——
+  `make -n` 只证明**命令行**里没有 ft 的编译行，
+  证明不了**链接产物**里没有 ft 的符号：
+  若 `SRCS` 的 `:=` 时序错了（MM 块被追加到文件末尾，落在 L81 之下），
+  `make -n` 看不出问题，而 `make MM=vector` 会**静默链接出完整二进制** ——
+  裁剪「看起来成功」，实际没裁。
+
+  ⇒ 补一条**真实构建 + 符号反向断言**：
+
+  ```powershell
+  cd C:\code\projects\engine\db
+  mingw32-make MM=vector clean
+  mingw32-make MM=vector all
+  nm build_mm_vector/db.exe | Select-String 'db_ft_'
+  ```
+
+  预期：**零命中**（`db_ft_*` 一个都不在二进制里）⇒ 证明 ft **真的**被裁掉了。
+  ⇒ 只要有一处命中 ⇒ 裁剪没生效 ⇒ 回去查 B2.1/B2.2 的**插入点与 `:=` 时序**。
+  （`build_mm_vector` 是 `MM=vector` 的产物目录：`OBJ_BASE` 默认 = `build`，
+  非 full 的 profile 落在 `$(OBJ_BASE)_mm_$(MM)`。）
 
 - [ ] **B2.6 提交**
 
@@ -647,73 +795,97 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   所以在 include 之前不需要额外处理；但**所有不经 Makefile 的编译路径**
   （比如 `test/run.sh` 自己编测试）也必须带上这些宏 —— 见 B3.6。
 
-- [ ] **B3.1b `src/db_internal.h`：模态函数的**声明**也要守卫**
+- [ ] **B3.1b `src/db_internal.h`：模态函数的**声明**也要守卫（原位包上，不是新增）**
 
-  ⚠️ **只守 include 和字段不够** —— `db_internal.h` 里还有一堆**模态专属的函数声明**：
-  `db_vec_register` / `db_vec_open` / `db_vec_close`、
-  `db_ft_replay_add` / `db_ft_replay_free` / `db_ft_recovery_hook` /
-  `db_ft_register` / `db_ft_open` / `db_ft_close`、
-  `db_ts_register` / `db_ts_open` / `db_ts_close`、
-  `db_geo_flatten` / `db_geo_tab_free` / `db_geo_register` / `db_geo_open` / `db_geo_close`、
-  `db_graph_register`，
-  以及 geo 专属的类型 `GeoPtEntry` / `GeoTab`。
+  ⚠️ **（可执行性修正）这一步原来写的是「**新增**这些声明」—— 方向写反了** ——
+  `db_internal.h` 里这些声明**本来就存在**（实测：`L233-L371` 连续一段 +
+  `L395`），照抄一遍会变成**重复声明**（同签名重复声明在 C 里合法，
+  但 `-Wall -Wextra -Werror` 下会报 `-Wredundant-decls` ⇒ **直接编译失败**）。
+  更要命的是：原声明**没有被 `#if` 包住** ⇒
+  计划想消除的「裁剪后仍有 ft 声明」这种**残留依然存在**。
+
+  ⇒ **改成：把 `db_internal.h` 里**现有的**声明**原位**包上 `#if DB_HAS_*`。**
+  一个字都不要新写 —— 只在原有声明的**前后**各加一行 `#if` / `#endif`。
+
+  **实测清单（`src/db_internal.h`，共 18 个函数声明 + 2 个 typedef）：**
+
+  | 模态 | 声明 | 行号 |
+  |---|---|---|
+  | vector | `db_vec_register` / `db_vec_open` / `db_vec_close` | L233 / L236 / L239 |
+  | ft | `db_ft_replay_add` / `db_ft_replay_free` / `db_ft_recovery_hook` / `db_ft_register` / `db_ft_open` / `db_ft_close` | L246 / L249 / L265 / L274 / L281 / L284 |
+  | ts | `db_ts_register` / `db_ts_open` / `db_ts_close` | L296 / L304 / L312 |
+  | geo | `db_geo_flatten` / `db_geo_tab_free` / `db_geo_register` / `db_geo_open` / `db_geo_close` | L344 / L347 / L355 / L363 / L371 |
+  | graph | `db_graph_register` | **L395**（在 `db_wal_hook` 之后，**别漏**） |
+  | geo（类型） | `typedef ... GeoPtEntry` / `typedef ... GeoTab` | L329 / L335 |
+  | ft（类型） | `typedef struct {...} FtReplaySet` | **L46-L50**（在 `DbInstance` 之前） |
+
+  ⚠️ **`db_internal.h` 里没有 `db_blob_*` 的声明** —— blob 模态没有内部函数声明
+  （只有 `db.c` / `db_instance.c` 里直接调的 `blob_store_*` / `blob_am_build_*`，
+  它们的头是 `storage/blob.h` / `spi/blob_am.h`，已在 B3.1 里按 `DB_HAS_BLOB` 守 include）。
+  ⇒ **不要往头里补 `db_blob_*` 声明**（补了就是「新增」，属于本步要避免的方向）。
 
   这些声明**不守卫不会编译失败**（声明一个不存在的函数是合法的），
   但会留下"裁剪后的二进制里还有 ft 的声明"这种**误导性残留**，
   而且 `db_ft_recovery_hook` 的**注册点**在 `db.c` 里（`recovery_set_hook(db_ft_recovery_hook, inst)`），
   那处不守卫就会**链接失败**。
 
-  处理：
+  处理（**示意**：下面是「包完之后长什么样」，**不是要你照抄这段代码** ——
+  实际动作是给 `db_internal.h` 里**现有的**那 18 个声明**原位**加上 `#if` / `#endif`）：
 
   ```c
   #if DB_HAS_VECTOR
-  int db_vec_register(DbInstance *inst);
-  int db_vec_open(DbInstance *inst);
-  void db_vec_close(DbInstance *inst);
+  int db_vec_register(DbInstance *inst);   /* L233 */
+  int  db_vec_open(DbInstance *inst);       /* L236 */
+  void db_vec_close(DbInstance *inst);      /* L239 */
   #endif
 
   #if DB_HAS_FT
-  int db_ft_replay_add(FtReplaySet *set, u32 doc_id);
-  void db_ft_replay_free(FtReplaySet *set);
+  int  db_ft_replay_add(FtReplaySet *set, u32 doc_id);        /* L246 */
+  void db_ft_replay_free(FtReplaySet *set);                   /* L249 */
   int db_ft_recovery_hook(void *ctx, u8 type, u32 xid, u32 page_id, u32 lsn,
-                          const u8 *payload, u16 payload_len, RecHookPhase phase);
-  int db_ft_register(DbInstance *inst);
-  int db_ft_open(DbInstance *inst);
-  void db_ft_close(DbInstance *inst);
+                          const u8 *payload, u16 payload_len, RecHookPhase phase);  /* L265 */
+  int db_ft_register(DbInstance *inst);                      /* L274 */
+  int db_ft_open(DbInstance *inst);                          /* L281 */
+  void db_ft_close(DbInstance *inst);                        /* L284 */
   #endif
 
   #if DB_HAS_TS
-  int db_ts_register(DbInstance *inst);
-  int db_ts_open(DbInstance *inst);
-  void db_ts_close(DbInstance *inst);
+  int db_ts_register(DbInstance *inst);   /* L296 */
+  int db_ts_open(DbInstance *inst);       /* L304 */
+  void db_ts_close(DbInstance *inst);     /* L312 */
   #endif
 
   #if DB_HAS_GEO
-  typedef struct { float x; float y; bool dead; } GeoPtEntry;
-  typedef struct { GeoPtEntry *p; u32 cap; u32 n; u32 live; u32 dead_n; } GeoTab;
-  int  db_geo_flatten(DbInstance *inst, GeoTab *tab);
-  void db_geo_tab_free(GeoTab *tab);
-  int  db_geo_register(DbInstance *inst);
-  int  db_geo_open(DbInstance *inst);
-  void db_geo_close(DbInstance *inst);
+  typedef struct { float x; float y; bool dead; } GeoPtEntry;   /* L329 */
+  typedef struct { GeoPtEntry *p; u32 cap; u32 n; u32 live; u32 dead_n; } GeoTab;  /* L335 */
+  int  db_geo_flatten(DbInstance *inst, GeoTab *tab);   /* L344 */
+  void db_geo_tab_free(GeoTab *tab);                   /* L347 */
+  int  db_geo_register(DbInstance *inst);               /* L355 */
+  int  db_geo_open(DbInstance *inst);                   /* L363 */
+  void db_geo_close(DbInstance *inst);                  /* L371 */
   #endif
 
   #if DB_HAS_GRAPH
-  int db_graph_register(DbInstance *inst);
+  int db_graph_register(DbInstance *inst);   /* L395 */
   #endif
   ```
 
-  ⚠️ **`FtReplaySet` 类型本身**也要守卫（它只被 ft 用）：
+  ⚠️ **`FtReplaySet` 类型本身**也要守卫（它只被 ft 用，**现有位置 L46-L50**）：
 
   ```c
   #if DB_HAS_FT
   typedef struct {
       u32 *ids;
-      u32  n;
-      u32  cap;
-  } FtReplaySet;
+      u32 n;
+      u32 cap;
+  } FtReplaySet;     /* L46-L50 */
   #endif
   ```
+
+  ⚠️ **`FtReplaySet` 与 `db_ft_replay_free` 必须**同时**守卫** ——
+  只守声明、不守调用点（或反过来）⇒ 非 ft profile 下
+  `db.c:490` / `db.c:491` 会变成**隐式声明**（`-Werror` ⇒ 编译错误）。
+  这两处的守卫见 B3.3。
 
   ⚠️ **`db_wal_hook` 不守卫** —— 它是 `db.c` 实现的、被多个模态共用，
   且 blob/graph/geo/ts/vector 都要它。留在公共区。
@@ -769,39 +941,97 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   #endif
 
   #if DB_HAS_GEO
-      /* geo 模态的实例字段（原样搬过来） */
-      ...
+      /* geo 模态的实例字段 —— 原文抄自 db_internal.h:166-L170 */
+      GeoState    *geo;
+      bool         geo_ready;
+      StorageAM    geo_am;
+      GeoAmCtx     geo_ctx;
+      u64          geo_tree_reads_seen;
   #endif
 
   #if DB_HAS_TS
-      /* ts 模态的实例字段（原样搬过来） */
-      ...
+      /* ts 模态的实例字段 —— 原文抄自 db_internal.h:192-L197 */
+      TsStore     *ts;
+      bool         ts_ready;
+      StorageAM    ts_am_readings;
+      StorageAM    ts_am_partitions;
+      TsAmExt      ts_ext_readings;
+      TsAmExt      ts_ext_partitions;
   #endif
 
       /* ... 其余字段不变 ... */
   } DbInstance;
   ```
 
-  ⚠️ **geo 与 ts 的字段块要从原文件里原样搬**（本次读取被截断，没拿到 geo/ts 字段的确切名字）。
-  搬的时候**一个字都不要改**，只加 `#if` / `#endif`。
+  ⚠️ **（可执行性修正）geo 与 ts 的字段块原来写的是 `...`** ——
+  计划自己都承认「本次读取被截断，没拿到确切名字」，
+  而这正是执行者**最需要准确**的地方：`...` 一旦被照抄进代码，
+  `DbInstance` 就**编译不过**（缺字段）或者**悄悄少了字段**（行为错）。
+
+  ⇒ 上面已经**按 `db_internal.h` 的原文逐字填好**（geo = L166-L170，ts = L192-L197）：
+
+  | 模态 | 行号 | 字段 |
+  |---|---|---|
+  | geo | `db_internal.h:166` | `GeoState    *geo;` |
+  | geo | `db_internal.h:167` | `bool         geo_ready;` |
+  | geo | `db_internal.h:168` | `StorageAM    geo_am;` |
+  | geo | `db_internal.h:169` | `GeoAmCtx     geo_ctx;` |
+  | geo | `db_internal.h:170` | `u64          geo_tree_reads_seen;` |
+  | ts | `db_internal.h:192` | `TsStore     *ts;` |
+  | ts | `db_internal.h:193` | `bool         ts_ready;` |
+  | ts | `db_internal.h:194` | `StorageAM    ts_am_readings;` |
+  | ts | `db_internal.h:195` | `StorageAM    ts_am_partitions;` |
+  | ts | `db_internal.h:196` | `TsAmExt      ts_ext_readings;` |
+  | ts | `db_internal.h:197` | `TsAmExt      ts_ext_partitions;` |
+
+  ⚠️ **搬的时候**：
+  - **字段名、类型、缩进一个字都不要改**，只加 `#if` / `#endif`；
+  - geo / ts 字段块的**上面那段中文注释**（geo 在 L141-L165、ts 在 L172-L191）
+    是**解释性注释**，可以**留在 `#if` 里面**（跟着字段一起裁掉），
+    也可以留在外面 —— 但**别删**；
+  - `GeoState` / `GeoAmCtx` / `TsStore` / `TsAmExt` 这几个类型来自
+    `modalities/geo/geo_state.h` / `modalities/ts/ts_am_ext.h` / `tsstore.h`，
+    已在 B3.1 里按 `DB_HAS_*` 守 include ⇒ 字段被裁掉时类型也跟着没了，**不会**留下未用类型。
 
 - [ ] **B3.3 `src/db.c`：open 路径守卫**
 
-  实测的 8 个触点，逐个包：
+  实测的触点，逐个包（⚠️ **行号以当前 `db.c` 为准**）：
 
   | 行 | 原来 | 处理 |
   |---|---|---|
-  | L~487 | `recovery_set_hook(db_ft_recovery_hook, inst);` | `#if DB_HAS_FT` … `#endif`（**不守卫会链接失败**：`db_ft_recovery_hook` 已被守卫掉） |
-  | L~489 | `recovery_set_hook(NULL, NULL);` | **不守卫** —— 注销空钩子无害 |
+  | L486 | `recovery_set_hook(db_ft_recovery_hook, inst);` | `#if DB_HAS_FT` … `#endif`（**不守卫会链接失败**：`db_ft_recovery_hook` 已被守卫掉） |
+  | L488 | `recovery_set_hook(NULL, NULL);` | **不守卫** —— 注销空钩子无害 |
+  | **L490** | `db_ft_replay_free(&inst->ft_replay_redo);` | `#if DB_HAS_FT` … `#endif`（⚠️ **原来漏了**） |
+  | **L491** | `db_ft_replay_free(&inst->ft_replay_undo);` | `#if DB_HAS_FT` … `#endif`（⚠️ **原来漏了**） |
   | L506 | `rc = db_ft_open(inst);` | `#if DB_HAS_FT` … `#endif` |
   | L531 | `rc = blob_store_create(pg, db_wal_hook, inst, &inst->blobs);` | `#if DB_HAS_BLOB` … `#endif` |
-  | L562 | `rc = spi_registry_add(inst->reg, "blob_frames", &inst->blob_am_frames);` | `#if DB_HAS_BLOB`（与 L531 同一块内） |
+  | **L556** | `rc = blob_am_build_frames(inst->blobs, &inst->blob_am_frames, &inst->blob_ctx_frames);` | `#if DB_HAS_BLOB` … `#endif`（⚠️ **边界原来没写清**） |
+  | **L559** | `rc = blob_am_build_objects(inst->blobs, &inst->blob_am_objects, &inst->blob_ctx_objects);` | 同上（在同一个 `#if DB_HAS_BLOB` 块内） |
+  | L562 | `rc = spi_registry_add(inst->reg, "blob_frames", &inst->blob_am_frames);` | `#if DB_HAS_BLOB`（与 L531/L556/L559/L564 同一块） |
   | L564 | `rc = spi_registry_add(inst->reg, "blob_objects", &inst->blob_am_objects);` | 同上 |
   | L596 | `rc = db_graph_register(inst);` | `#if DB_HAS_GRAPH` … `#endif` |
   | L622 | `int vrc = db_vec_open(inst);` | `#if DB_HAS_VECTOR` … `#endif` |
   | L641 | `rc = db_ft_register(inst);` | `#if DB_HAS_FT` … `#endif` |
   | L663 | `int grc = db_geo_open(inst);` | `#if DB_HAS_GEO` … `#endif` |
   | L687 | `int trc = db_ts_open(inst);` | `#if DB_HAS_TS` … `#endif` |
+
+  ⚠️ **（可执行性修正）L490 / L491 原来根本没列进来** ——
+  `db_ft_replay_free(&inst->ft_replay_redo)` / `..._undo` 这两处调用
+  在 `db.c:490-491`（`recovery_run` 失败后的清理分支里）。
+  B3.1b 已经把 `db_ft_replay_free` 的**声明**包进 `#if DB_HAS_FT`，
+  而这两处**调用**没被守卫 ⇒ 非 ft profile 下：
+  - 声明被裁掉 ⇒ 调用变成**隐式声明**（C11 下是错误，
+    `-Wall -Wextra -Werror` ⇒ **直接编译失败**）；
+  - 就算侥幸编过，链接期也找不到 `db_ft_replay_free` ⇒ **链接失败**。
+  ⇒ **声明与调用必须同时守卫**，这两行就是那个配对。
+
+  ⚠️ **（可执行性修正）blob 那一块的边界原来只写了「与 L531 同一块」** ——
+  「同一块」是个**含糊**说法：执行者不知道该 `#if` 到哪一行结束。
+  ⇒ 确切边界：**L556 到 L564**（`blob_am_build_frames` / `blob_am_build_objects`
+  / `spi_registry_add("blob_frames")` / `spi_registry_add("blob_objects")`），
+  其中 L556-L560 是一个 `if (rc == OK)` 链、L561-L564 是另一个 `if (rc == OK)` 链。
+  ⇒ 整个 **L556-L564** 放进**同一个** `#if DB_HAS_BLOB` … `#endif`，
+  `#endif` 放在 L564 之后、L565 `if (rc != OK) {` **之前**。
 
   ⚠️ **被 `#if` 掉的分支里如果有变量声明，被跳过后就"未使用" ⇒ `-Werror` 报错。**
   处理办法二选一：
@@ -810,19 +1040,31 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 
   **逐个分支检查**：编译一遍，编译器会精确指出哪个变量没用了。
 
+  ⚠️ **不要按行号区间替换** —— 行号会随前面的改动漂移。
+  ⇒ **按「函数 + 语句内容」定位**（用 `Select-String` 找那一行），
+  再把 `#if` / `#endif` 插在它前后。
+
 - [ ] **B3.4 `src/db.c`：close 路径守卫**
 
-  L200–L205：
+  ⚠️ **（可执行性修正）原来写的是「L200–L205」，实际是「L200–L206」** ——
+  `open_fail_cleanup()` 里连续 7 行（L200-L206），中间夹着
+  **两行不是模态专属的**、**不能被裁掉**的调用：
 
-  ```c
-      db_ft_close(inst);
-      db_geo_close(inst);
-      db_ts_close(inst);
-      graph_destroy(inst->graph);
-      blob_store_destroy(inst->blobs);
+  ```
+  L200     db_ft_close(inst);
+  L201     db_geo_close(inst);
+  L202     db_ts_close(inst);
+  L203     graph_destroy(inst->graph);
+  L204     spi_registry_destroy(inst->reg);     ← 底座（注册表），不守卫
+  L205     blob_store_destroy(inst->blobs);
+  L206     catalog_close(inst->cat);            ← 底座（catalog），不守卫
   ```
 
-  改成：
+  ⇒ 原计划只列了 5 行、且行号区间也少了 1 ——
+  **照着改会把 L204 / L206 两行删掉**（注册表与 catalog 泄漏、catalog 句柄悬空）。
+
+  ⇒ **正确做法**：把 L200-L206 整块抄下来，只给**模态专属的那 5 行**加守卫，
+  L204 / L206 **原样保留**：
 
   ```c
   #if DB_HAS_FT
@@ -837,10 +1079,15 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   #if DB_HAS_GRAPH
       graph_destroy(inst->graph);
   #endif
+      spi_registry_destroy(inst->reg);     /* L204 —— 底座，不守卫，原样保留 */
   #if DB_HAS_BLOB
       blob_store_destroy(inst->blobs);
   #endif
+      catalog_close(inst->cat);            /* L206 —— 底座，不守卫，原样保留 */
   ```
+
+  ⚠️ **不要按行号区间整体替换** —— 行号会随前面的改动漂移。
+  ⇒ 按 `open_fail_cleanup()` 这个**函数**定位，往里逐行加守卫。
 
 - [ ] **B3.5 `src/db_instance.c`：两处关闭路径守卫**
 
@@ -1127,7 +1374,17 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   # 而且 `MOD_OBJS_$(1)` 与 `SUBSTRATE_OBJS` 会**重复包含同一批对象文件**。
   # ⇒ 排除**全部**模态的文件（不管裁没裁）。
   MM_ALL_MOD_SRCS := $(foreach m,$(MM_ALL),$(MM_FILES_$(m)))
-  SUBSTRATE_SRCS := $(filter-out $(MM_ALL_MOD_SRCS) $(SRC_DIR)/main.c,$(SRCS_ALL))
+  # ⚠️ **（可执行性修正）底座集合必须把「根」也排除掉** ——
+  # `$(SRCS_ALL)` 里**含** `src/db.c` 与 `src/db_instance.c`，
+  # 而 smoke 的链接行**又单独加**了 `$(OBJ_DIR)/smoke_$(1)/db.o` 与
+  # `$(OBJ_DIR)/smoke_$(1)/db_instance.o`（B4.1 已述：根要**单独编译**，
+  # 只开一个模态的 `DB_HAS_*`）。
+  # 两个 db.o / 两个 db_instance.o 同时进链接行 ⇒
+  #   db.o         定义 `db_open`（db.c:218）、`db_connect`（db.c:728）
+  #   db_instance.o 定义 `db_close`（db_instance.c:133）
+  # ⇒ **multiple definition** ⇒ **8 个 smoke 全部链接失败**。
+  # ⇒ 根既然要单独编译，就必须同时从底座集合里 filter-out。
+  SUBSTRATE_SRCS := $(filter-out $(MM_ALL_MOD_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/db.c $(SRC_DIR)/db_instance.c,$(SRCS_ALL))
   SUBSTRATE_OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SUBSTRATE_SRCS))
 
   # 模态 $(1) 的对象
@@ -1199,9 +1456,10 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 
   int main(void)
   {
-      DB *db = db_open("test/tmp/smoke_relational.db");
-      if (!db) {
-          fprintf(stderr, "smoke_relational: db_open 失败\n");
+      DB *db = NULL;
+      db_err rc = db_open("test/tmp/smoke_relational.db", &db);
+      if (rc != DB_OK) {
+          fprintf(stderr, "smoke_relational: db_open 失败: %d\n", rc);
           return 1;
       }
 
@@ -1228,8 +1486,39 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   }
   ```
 
-  ⚠️ **`db_open` 的路径参数**：从 `include/db.h` 确认签名（是路径还是目录）。
-  临时库放在 `test/tmp/`（`.gitignore` 已覆盖）。
+  ⚠️ **（可执行性修正）`db_open` 的签名原来写错了** ——
+  计划里写的是 `DB *db = db_open("test/tmp/smoke_relational.db");`，
+  而 `include/db.h:28` 的**真实签名**是：
+
+  ```c
+  db_err db_open(const char *path, DB **out);
+  ```
+
+  ⇒ **返回值是 `db_err`，句柄通过出参 `DB **out` 回填** ——
+  原来那行**根本编不过**（返回值类型不匹配 + 参数个数不对），
+  而 `smoke_relational.c` 是**全计划里唯一的完整样例** ——
+  它编不过 ⇒ 其余 7 个 smoke 会被**照着抄**，8 个全挂。
+
+  ⇒ 正确写法（`db_err` + 出参 + `DB_OK` 比较）：
+
+  ```c
+  DB *db = NULL;
+  db_err rc = db_open("test/tmp/smoke_relational.db", &db);
+  if (rc != DB_OK) {
+      fprintf(stderr, "db_open failed: %d\n", rc);
+      return 1;
+  }
+  ```
+
+  ⇒ 只有这**三行**成立之后，后面的 `db_exec(db, ...)` / `db_close(db)` 才成立。
+  ⇒ 同理，**其余 7 个 smoke 也一律用这个开库形状**。
+  ⚠️ `DB_OK` 是 `db.h:16` 的枚举值（`db_err` 枚举的第一项 = 0）；
+  `db_strerror(db_err)`（`db.h:111`）可拿错误文案。
+
+  ⚠️ **`db_open` 的路径参数**：已从 `include/db.h:28` 确认 ——
+  是**单个库文件路径**（不是目录）。临时库放在 `test/tmp/`（`.gitignore` 已覆盖）。
+  ⇒ 每个 smoke 用**自己的**文件名（`smoke_<m>.db`），别共用一个 ——
+  共用会互相污染，且 `MM=vector` 与 `MM=blob` 的库结构不同。
 
   ⚠️ **（复审修正）smoke 的内容要求被削弱了** —— 设计 §4.3 要求
   「初始化 → 建最小对象 → **写一条 → 读回 → 断言** → 关闭」，
@@ -1243,17 +1532,40 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   `json_parse` + `jsonb_encode`/`jsonb_decode` 往返断言。）
 
 其余 7 个照这个形状写，每个换一个模态：
-  其余 7 个照这个形状写，每个换一个模态：
 
-  | smoke | 调什么 | 备注 |
+  | smoke | 调什么（**只用 `include/db.h` 里真实存在的 API**） | 备注 |
   |---|---|---|
-  | `smoke_blob.c` | `db_blob_stat(db, id, &nframes, &fsize, &total)` | ⚠️ **（复审修正）** 原写的 `db_blob_exists` **全仓不存在** |
-  | `smoke_graph.c` | `db_graph_exists(db)` | ⚠️ **（复审修正）** 原写的 `db_graph_stat` **全仓不存在**；`db_graph_exists` 在 `db_graph.c:239` |
-  | `smoke_vector.c` | `db_vec_exists(db)` | 同上 |
-  | `smoke_ft.c` | `db_ft_exists(db)` | 同上 |
-  | `smoke_geo.c` | `db_geo_exists(db)` | 同上 |
-  | `smoke_ts.c` | `db_ts_exists(db)` | 同上 |
+  | `smoke_blob.c` | `db_blob_stat(db, id, &nframes, &frame_size, &total_len)` + `db_blob_count(db)` + `db_blob_page_reads(db)` | ⚠️ **（可执行性修正）** `db_blob_exists` **全仓不存在**；`db_blob_stat` 的真实签名是 `db_err db_blob_stat(DB *, db_blob_id, uint64_t *nframes, uint32_t *frame_size, uint64_t *total_len)`（`db.h:180`）—— **4 个出参**，少一个就编不过 |
+  | `smoke_graph.c` | `db_graph_exists(db)` + `db_graph_count(db, &nodes, &edges)` + `db_graph_reads(db, &node_reads, &edge_reads)` | ⚠️ **（可执行性修正）** `db_graph_stat` **全仓不存在**；`db_graph_exists` 在 `db_graph.c:239`（`db.h:274`），`db_graph_count` 在 `db.h:334`，`db_graph_reads` 在 `db.h:350` |
+  | `smoke_vector.c` | `db_vec_exists(db)` | `db.h:388` |
+  | `smoke_ft.c` | `db_ft_exists(db)` | `db.h:554` |
+  | `smoke_geo.c` | `db_geo_exists(db)` | `db.h:610` |
+  | `smoke_ts.c` | `db_ts_exists(db)` | `db.h:725` |
   | `smoke_doc.c` | `json_parse` + `jsonb_encode`/`jsonb_decode` 往返 | 文档模态**还没有公开 API**（W-C 才建 `db_json_*`），这里直接调内部 API 做一次往返 |
+
+  ⚠️ **（可执行性修正）表里原来有两个**不存在的** API** ——
+  `smoke_blob.c` 写的 `db_blob_exists(db)` 与 `smoke_graph.c` 写的
+  `db_graph_stat(db, ...)` 在 `include/db.h` 里**都没有**（也不在别处）。
+  ⇒ 照抄 ⇒ **链接期 undefined reference** ⇒ smoke 链接失败，
+  而 smoke 的**全部价值**就是「能链接」⇒ 两个 smoke 直接失去意义。
+
+  ⇒ **存在**的对应物（`include/db.h` 实测）：
+  - blob：`db_blob_stat`（L180）/ `db_blob_count`（L189）/ `db_blob_page_reads`（L200）
+    —— **没有** `db_blob_exists`；
+  - graph：`db_graph_exists`（L274）/ `db_graph_count`（L334）/ `db_graph_reads`（L350）
+    —— **没有** `db_graph_stat`。
+
+  ⚠️ **写 smoke 时的硬规矩**：每个调用的 API 都必须在 `include/db.h` 里
+  **grep 得到**；找不到就**换成一个找得到的**。
+  ⇒ 写完 8 个 smoke 后跑一遍：
+
+  ```powershell
+  # 把 smoke 里调用的 db_* 全部列出来，逐个确认在 db.h 里有声明
+  Select-String -Path test/smoke/*.c -Pattern '\bdb_[a-z_]+\s*\(' -AllMatches |
+      ForEach-Object { $_.Matches.Value } | Sort-Object -Unique
+  ```
+
+  ⇒ 拿这个清单去 `include/db.h` 里逐个核对，**一个都不能缺**。
 
   ⚠️ **`smoke_doc.c` 要 include `modalities/doc/json_parse.h` 与 `modalities/doc/jsonb.h`**
   （内部头）。这**不违反分层** —— smoke 在 `test/` 下，不在 `src/query/` 里，
@@ -1388,7 +1700,6 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   临时在 `src/spi/` 放一个 `fake_am.c` ⇒ 门禁必须红 ⇒ 删掉。
 
 - [ ] **B5.2 反例验证（门禁必须会红）**
-- [ ] **B5.2 反例验证（门禁必须会红）**
 
   临时在 `src/query/exec_scan.c` 顶部加一行：
 
@@ -1440,24 +1751,42 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   cd "$ROOT" || exit 1
 
   CC=${CC:-gcc}
-  MAKE=${MAKE:-make}
+  # ⚠️ **（可执行性修正）Windows 上 PATH 里没有 `make`，只有 `mingw32-make`**
+  # （MinGW-w64 的 make 二进制叫 `mingw32-make`；`make` 是 msys2 的那个）。
+  # ⇒ 默认值改成 `mingw32-make`；Linux CI 上可以 `MAKE=make` 覆盖。
+  MAKE=${MAKE:-mingw32-make}
 
   PROFILES=${*:-"full relational blob graph vector ft geo ts doc"}
 
   printf '%-12s %8s %8s %10s %8s\n' profile srcs objs symbols secs
 
   for m in $PROFILES; do
-  objdir="build_measure_mm_$m"   # ⚠️ 与 Makefile 的 `OBJ_BASE=_mm_$(MM)` 规则一致（复审修正）
-  # ⚠️ **（复审修正）构建产物目录要与 Makefile 的规则对齐** ——
-  # Makefile 里是 `MM_OBJ_DIR := $(OBJ_BASE)_mm_$(MM)`，
-  # 所以这里必须传 `OBJ_BASE=build_measure`，产物落在 `build_measure_mm_<m>`。
-  # 原来脚本直接 `make MM=$m`、却去找 `build_measure_$m` ⇒ nm 取不到符号 ⇒ 度量列全是 0。
+      # ⚠️ **（可执行性修正）产物目录必须与 Makefile 的规则对齐** ——
+      # Makefile（B2.1）里是
+      #   OBJ_BASE ?= $(OBJ_DIR)
+      #   MM_OBJ_DIR := $(if $(filter full,$(MM)),$(OBJ_BASE),$(OBJ_BASE)_mm_$(MM))
+      #   override OBJ_DIR := $(MM_OBJ_DIR)
+      # ⇒ 传 `OBJ_BASE=build_measure` 时：
+      #     MM=full   ⇒ 产物在 `build_measure`
+      #     MM=vector ⇒ 产物在 `build_measure_mm_vector`
+      # 所以目录名要**分 full / 非 full 两支**。
+      case "$m" in
+          full) objdir="build_measure" ;;
+          *)    objdir="build_measure_mm_$m" ;;
+      esac
+
       rm -rf "$objdir"
 
       start=$(date +%s)
 
-      # 用 Makefile 的 MM 开关做一次真实构建（输出目录换掉）
-      OBJ_DIR="$objdir" $MAKE MM="$m" all >/dev/null 2>&1
+      # 用 Makefile 的 MM 开关做一次真实构建（输出目录换掉）。
+      # ⚠️ **必须传 `OBJ_BASE`，不能传 `OBJ_DIR`** —— `OBJ_DIR` 是**命令行变量**，
+      # 在 GNU Make 里**命令行变量 > makefile 赋值**，`override` 也挡不住 ⇒
+      # 传 `OBJ_DIR=xxx` 会把 `override OBJ_DIR := $(MM_OBJ_DIR)` 顶掉，
+      # 真实目录变成 `xxx`（而不是 `xxx_mm_<m>`）⇒ 脚本按 `build_measure_mm_<m>`
+      # 去找就**找不到 `.o`、`nm` 不到符号 ⇒ 度量列全是 0**。
+      # `OBJ_BASE` 是本计划**新引入**的变量，它**不参与**那条覆盖链 ⇒ 由它决定最终目录。
+      $MAKE MM="$m" OBJ_BASE=build_measure all >/dev/null 2>&1
       rc=$?
       if [ "$rc" -ne 0 ]; then
           printf '%-12s %8s\n' "$m" "BUILD-FAIL"
@@ -1466,9 +1795,30 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 
       secs=$(( $(date +%s) - start ))
 
-      srcs=$(find src -name '*.c' | wc -l)
-      objs=$(find "$objdir" -name '*.o' | wc -l)
-      syms=$(nm "$objdir/db.exe" 2>/dev/null | grep -c ' [TtWw] ' || echo 0)
+      # ⚠️ **（可执行性修正）「源文件数」原来数的是**全仓**的 `.c`** ——
+      # `find src -name '*.c' | wc -l` 对**每个 profile 都一样** ⇒ 这一列**没有区分度**，
+      # 读者会误以为「裁剪没减少源文件」。
+      # ⇒ 改成**该 profile 实际编译的**源文件数 = 产物目录里的 `.o` 个数
+      #    （每个编译单元一个 `.o`，一一对应）。
+      srcs=$(find "$objdir" -name '*.o' ! -name 'main.o' ! -path "$objdir/bench/*" 2>/dev/null | wc -l)
+      objs=$(find "$objdir" -name '*.o' ! -name 'main.o' ! -path "$objdir/bench/*" 2>/dev/null | wc -l)
+
+      # ⚠️ **（可执行性修正）`nm` 在 Windows 上只有 `nm.exe`（MinGW 自带），
+      # Linux CI 上要换成 `nm -D`（动态符号表）或 `objdump -T`。
+      # ⇒ 这里按平台自动选；两个都取不到就退化成 0（并在 stderr 上提示）。
+      if [ -f "$objdir/db.exe" ]; then
+          bin="$objdir/db.exe"
+      elif [ -f "$objdir/db" ]; then
+          bin="$objdir/db"
+      else
+          bin=""
+      fi
+      if [ -n "$bin" ]; then
+          syms=$(nm "$bin" 2>/dev/null | grep -c ' [TtWw] ' || echo 0)
+      else
+          echo "warn: 找不到 $objdir 里的可执行文件（符号数记 0）" >&2
+          syms=0
+      fi
 
       printf '%-12s %8s %8s %10s %8s\n' "$m" "$srcs" "$objs" "$syms" "$secs"
 
@@ -1476,23 +1826,31 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   done
   ```
 
-  ⚠️ `OBJ_DIR="$objdir" $MAKE MM="$m" all` 里的 `OBJ_DIR` 覆盖 —— 本计划的
-  `MM_OBJ_DIR` 派生规则是 `$(OBJ_DIR)_mm_$(MM)`，所以覆盖 `OBJ_DIR` 会得到
-  `build_measure_vector_mm_vector`。**没关系**，脚本里 `rm -rf` 的目录名要跟着改：
+  ⚠️ **（可执行性修正）原来的 `OBJ_DIR="$objdir" $MAKE MM="$m" all` 让度量**恒为 0** ——
+  原因：GNU Make 的**命令行变量优先级最高**，`makefile` 里的
+  `override OBJ_DIR := $(MM_OBJ_DIR)` 也**压不住**命令行给的 `OBJ_DIR`
+  ⇒ 真实产物目录 = 脚本传的目录（而不是 `目录_mm_<m>`）
+  ⇒ 脚本却按 `build_measure_mm_<m>` 去找 `.o` ⇒ `find` 找不到 ⇒ `.o` 数 = 0；
+  `nm "$objdir/db.exe"` 也找不到文件 ⇒ 符号数 = 0。
+  ⇒ **每一列都是 0，但脚本「成功」退出** —— 最坏的失败模式。
 
-  ```sh
-      objdir="build_measure_$m"
-      ...
-      OBJ_DIR="$objdir" $MAKE MM="$m" all >/dev/null 2>&1
-      # Makefile 里的实际目录是 $(OBJ_DIR)_mm_$(MM)（full 除外）
-      case "$m" in
-          full) realdir="$objdir" ;;
-          *)    realdir="${objdir}_mm_$m" ;;
-      esac
+  ⇒ **改成传 `OBJ_BASE=build_measure`**（本计划新引入的变量，**不参与**那条覆盖链），
+  由 Makefile 自己派生出 `build_measure`（full）/ `build_measure_mm_<m>`（其余）。
+
+  ⚠️ **Windows 上跑这个脚本**：Git Bash 里 `make` 不在 PATH ⇒ 用
+
+  ```powershell
+  & "C:\Program Files\Git\usr\bin\sh.exe" tools/measure_build.sh
   ```
 
-  然后 `objs=$(find "$realdir" -name '*.o' | wc -l)`、
-  `syms=$(nm "$realdir/db.exe" ...)`。
+  （脚本默认 `MAKE=mingw32-make`；Linux CI 上 `MAKE=make sh tools/measure_build.sh`。）
+
+  ⚠️ **Linux CI 上的 `nm`**：GNU `nm` 默认只列**静态符号表**，
+  动态符号表要用 `nm -D`（或 `objdump -T`）⇒ CI 里改成：
+
+  ```sh
+  MAKE=make NMCMD="nm -D" sh tools/measure_build.sh
+  ```
 
 - [ ] **B5.4 跑度量，写 `engine/db/docs/MM-PROFILES.md`**
 
@@ -1503,9 +1861,9 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 
   预期：9 行输出。
 
-  `engine/db/docs/MM-PROFILES.md`：
+  `engine/db/docs/MM-PROFILES.md`（下面用**四反引号**包住，因为模板里自己也有 ```bash 代码块）：
 
-  ```markdown
+  ````markdown
   # MM 编译期模态裁剪 —— profile 说明与实测
 
   > 生成于 2026-11-18，数据由 `sh tools/measure_build.sh` 产出。
@@ -1526,32 +1884,49 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   | `doc` | 关系 + doc | 文档 / JSON |
 
   > **每个 profile 都含关系模态** —— 它的实现横跨 L1–L3（catalog 直接持有
-  > `Heap*`），关不掉。MM 裁的是"模态"，不是"层"。
+  > `Heap*`），关不掉。MM 裁的是「模态」，不是「层」。
 
-  ## 实测数字
+  ## 实测数字与门禁值
 
-| profile | 源文件数 | 目标文件数 | 二进制符号数 | 代码行数 | 构建秒数 |
-|---|---|---|---|---|---|
-| `full` | （实测） | （实测） | （实测） | （实测） | （实测） |
-| ... | | | | | |
+  > **门禁 = 实测值 × 1.2**（设计 §4.4）。没有门禁值，CI 就只能「记录」不能「拦」。
+  > CI 里比对：**实测 > 门禁值 ⇒ 红**。门禁值**只增不减**
+  > （除非有人显式改基线文件并在 PR 里说明理由）。
 
-⚠️ **（复审修正）本表要加「门禁值」一列** —— 设计 §4.4：
-**门禁 = 实测值 × 1.2**。没有门禁值，CI 就只能「记录」不能「拦」。
-⇒ 每行再加一列「门禁值（×1.2）」，CI 里比对：**实测 > 门禁值 ⇒ 红**。
-⇒ 门禁值**只增不减**（除非有人显式改基线文件并在 PR 里说明理由）。
-  |---|---|---|---|---|
-  | full | | | | |
-  | relational | | | | |
-  | ... | | | | |
+  | profile | 编译源文件数 | 目标文件数 | 二进制符号数 | 代码行数 | 构建秒数 | 门禁值（每个指标 ×1.2） |
+  |---|---|---|---|---|---|---|
+  | `full` | （实测） | （实测） | （实测） | （实测） | （实测） | （实测 ×1.2） |
+  | `relational` | | | | | | |
+  | `blob` | | | | | | |
+  | `graph` | | | | | | |
+  | `vector` | | | | | | |
+  | `ft` | | | | | | |
+  | `geo` | | | | | | |
+  | `ts` | | | | | | |
+  | `doc` | | | | | | |
+
+  ⚠️ **「代码行数」列要有区分度** —— 统计的是**该 profile 实际参与编译的源文件**的行数，
+  不是 `src/` 全量（全量每个 profile 都一样，毫无意义）。
 
   ## 用法
 
   ```bash
-  make MM=vector          # 只编 vector 模态
-  make MM=vector OBJ_DIR=out   # 换输出目录
-  make smoke              # 构建 8 个 smoke
+  make MM=vector                  # 只编 vector 模态
+  make MM=vector OBJ_BASE=out     # 换输出根目录（产物落在 out_mm_vector）
+  make smoke                      # 构建 8 个 smoke
   ```
-  ```
+  ````
+
+  ⚠️ **（可执行性修正）`OBJ_DIR=out` 改成了 `OBJ_BASE=out`** ——
+  `OBJ_DIR` 是**命令行变量**，会**顶掉** makefile 里的
+  `override OBJ_DIR := $(MM_OBJ_DIR)` ⇒ 所有 profile 会共用同一个 `out` 目录
+  ⇒ 裁剪的 `.o` 与 full 的 `.o` 混在一处 ⇒ **跑的是旧二进制**
+  （正是 Makefile 头部警告的那个坑）。要换目录就换 `OBJ_BASE`。
+
+  ⚠️ **（可执行性修正）模板里原来有两个结构错误，已修**：
+  ① 「门禁值」那一列被插到了表格**中间**，导致出现两行 `|---|---|` 分隔线
+  （Markdown 表格只认第一条分隔线，后面那行会变成一行数据）；
+  ② 模板里自带 ```bash 代码块，外层用三反引号包不住 ⇒ 围栏计数变奇数、
+  后面整份文档的 Markdown 渲染全乱。**外层必须用四反引号**。
 
 - [ ] **B5.5 提交**
 
@@ -1630,7 +2005,6 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   ⇒ **结论写「本轮不做」也要写**，并写清**下次评估的触发条件** ——
   「留预备」的意思是「有条件地不做」，不是「没人管」。
 
-- [ ] **B6.6 父仓指针**
 - [ ] **B6.6 父仓指针**
 
   ```powershell

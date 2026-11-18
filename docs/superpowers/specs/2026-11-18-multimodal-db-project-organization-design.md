@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件）；八模态在「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套上补全对称（为此给 SPI 加第四契约 `TableOpener`）；文档模态功能补全（接进 SQL）；冻结轨 `engine/src/db/` 全删（209,907 行），SDK 去冻结化（含 memctx 移植）后保留。**
+**主核保持「一个工程 + 编译期模态裁剪」（不加仓、不加进程、不加插件）；八模态在「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套上补全对称（为此给 SPI 加第四契约 `TableOpener`）；文档模态功能补全（接进 SQL）；冻结轨 `engine/src/db/` 全删（209,905 行），SDK 去冻结化（含 memctx 移植）后保留。**
 
 ---
 
@@ -19,10 +19,10 @@
 
 | | 体量 | 状态 | CI 覆盖 |
 |---|---|---|---|
-| **主核** `engine/db/` | 247 文件 / **68,037 行**（`.c` 52,400） | **唯一在维护**（2026-11-16 路线翻转） | **零** ❌ |
-| **冻结轨** `engine/src/db/` | 524 文件 / **209,907 行** | 已冻结，保留作历史参考 | **在 CI 里被构建** ✅ |
+| **主核** `engine/db/` | 247 个 `.c`/`.h` 文件 / **68,030 行**（`.c` 52,393） | **唯一在维护**（2026-11-16 路线翻转） | **零** ❌ |
+| **冻结轨** `engine/src/db/` | **524 个 `.c`/`.h` 文件 / 209,905 行**（连非代码共 676 个文件） | 已冻结，保留作历史参考 | **在 CI 里被构建** ✅ |
 
-冻结轨体量是主核的 3 倍多（209,907 行 vs 主核 68,037 行），且主核一行 CI 都没有。这带来四个具体问题：
+冻结轨体量是主核的 3 倍多（209,905 行 vs 主核 68,030 行），且主核一行 CI 都没有。这带来四个具体问题：
 
 1. **读者不知道主核在哪** —— 两套内核、两套构建体系（Makefile vs CMake）、两套测试协议、两套目录约定。
 2. **CI 门禁打在了不维护的代码上** —— 冻结轨的测试默认还是关的（`ENABLE_FROZEN_SRC_DB_TESTS=OFF`），但它的**库**仍在被构建。
@@ -51,7 +51,7 @@
 | graph | + `common/crc` + `storage/gstore` | **0** |
 | doc | `common/{config,error,types}` + `storage/{page,pager,value}` | **0** |
 
-**关键数字**：模态可见的底座接口面 = **13 个头文件 / 1,934 行**（全行口径），占 `src/` 68,037 行的 **2.8%**。
+**关键数字**：模态可见的底座接口面 = **13 个头文件 / 1,934 行**（全行口径），占 `src/` 68,030 行的 **2.8%**。
 `pager_internal.h` / `heap_internal.h` / `heap_am_internal.h` / `blob_hdr.h` —— 模态一个都没碰。
 
 ### 2.2 主核的体量分布
@@ -62,9 +62,16 @@
 
 | 部分 | 行数 | 占比 |
 |---|---|---|
-| 共享底座 `common`+`storage`+`wal`+`index`+`txn`+`catalog`+`query`+`spi` | **18,109** | 35% |
-| 六个模态 `ft` 9,490 / `ts` 5,559 / `geo` 3,310 / `vector` 3,104 / `doc` 3,061 / `graph` 2,279 | **26,803** | 51% |
-| 各模态公开 API + REPL（`db_ft.c` / `repl_geo.c` / `main.c` …） | **6,722** | 13% |
+| 共享底座 `common`+`storage`+`wal`+`index`+`txn`+`catalog`+`query`+`spi` | **18,108** | 35% |
+| 六个模态 `ft` 9,487 / `ts` 5,558 / `geo` 3,310 / `vector` 3,103 / `doc` 3,061 / `graph` 2,279 | **26,798** | 51% |
+| 各模态公开 API + REPL（`db_ft.c` / `repl_geo.c` / `main.c` …，顶层 18 个 `.c`） | **7,487** | 14% |
+| **合计（`.c` 口径）** | **52,393** | 100% |
+
+> ⚠️ **（复审修正）第三行原来写 6,722，少了 765 行** —— 顶层 18 个 `.c` 文件实测 7,487 行
+> （`db_ft.c` 796 / `db.c` 766 / `db_vec.c` 694 / `db_geo.c` 615 / `db_graph.c` 616 / `db_ts.c` 479 /
+> `db_stmt.c` 446 / `repl_geo.c` 333 / `db_graph_walk.c` 316 / `db_ckpt.c` 283 / `repl_ts.c` 268 /
+> `repl_vec.c` 242 / `db_instance.c` 232 / `db_blob.c` 196 / `repl_ft.c` 166 / `db_result.c` 116 / `main.c` 670）。
+> 原值会让三行加起来（51,634）对不上全文的 52,393 —— **表格必须自己加得起来**。
 
 ### 2.3 「公共代码抽到单独目录」这个诉求的现状
 
@@ -111,7 +118,10 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 
 ### 2.7 冻结轨的依赖分层（实测，本轮补做）
 
-> **口径**：`.c` + `.h` 的物理行数，全树合计 **524 文件 / 209,907 行**。
+> **口径**：`.c` + `.h` 的物理行数，全树合计 **524 个 `.c`/`.h` 文件 / 209,905 行**。
+> （该目录下另有 **142 个 `.txt`**、8 个 `.md`、1 个 `.y`、1 个 `.l` ——
+> 连非代码文件一起数是 **676 个文件 / 216,627 行**。**「524 文件」指的是 `.c`+`.h` 的代码文件数**，
+> 别与「676 个文件」混用 —— 两个数都对，口径不同。）
 
 | 子树 | 行数 | 是否依赖冻结内核**实现** | 依赖证据 |
 |---|---|---|---|
@@ -120,7 +130,7 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 | `graph/` | 5,850 | **是** | `db/core/func_registry.h`、`db/core/log.h` |
 | `tools/` | 2,922 | **是** | `db/` 顶层（CLI/server） |
 | `protocol/` | 2,847 | 部分 | `sql_compat.c`/`analytics_sql.c` 独立，另两个是 stub |
-| 其余内核本体 | **133,505** | — | storage/sql/parser/executor/core/api/cli/optimizer/vectorized/yang/… （= 209,907 − 上述各行） |
+| 其余内核本体 | **133,505** | — | storage/sql/parser/executor/core/api/cli/optimizer/vectorized/yang/… （= 209,905 − 上述各行） |
 
 > **措辞修正（2026-11-18 复审）**：`index/` 与 `distributed/` 不依赖冻结内核的**实现**，但**依赖它的公开头**
 > （`engine/include/db/` 下的头）。因此 D-1 删 `engine/src/db/` 时，这些子树**暂时还能编译**；
@@ -151,12 +161,18 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 
 ### 2.9 测试面的依赖分类（实测）
 
+> **口径**：下表「文件数」列数的是**源码文件**（`.c`/`.cpp`），不是目录下的全部文件 ——
+> 差异不小：全部文件 / 代码文件（连 `.h`）/ 源码，三者对每个目录分别是
+> `db/` 357 / 294 / **289**、`smoke/` 15 / 14 / **13**、`sdk/` 40 / 37 / **36**、
+> `index/` 15 / 8 / **8**、`kbase/` 10 / 7 / **7**、`algo/`+`self_made_cpp/` 27 / 14 / **14**。
+> 下表用的是**源码数**（即 `.c`/`.cpp`）；写「删 289 个」指的是删 289 个源码文件。
+
 | 目录 | 文件数 | 依赖冻结内核 | 独立 | 处置 |
 |---|---|---|---|---|
 | `engine/test/db/` | 289 | 289 | 0 | **删** |
 | `engine/test/smoke/` | 13 | 13 | 0 | **删**（全是旧轨 profile 冒烟 `mm_*_smoke`） |
-| `engine/test/sdk/` | 36 | 7 | 29 | **拆两类**：HNSW 依赖 2 个 + **memctx 依赖 5 个**（见下表） |
-| `engine/test/index/` | 8 | **3 个链接目标指向冻结库** | 5 | **留 5 / 删 3**（见下表） |
+| `engine/test/sdk/` | 36 | 7 | 29 | **拆两类**：HNSW **直接**依赖 2 个 + memctx **直接**依赖 5 个（第 6 个间接依赖，合计保留 6 个，见下表） |
+| `engine/test/index/` | **8 个 `.cpp`** | **8 个全部**（源码 include `<index/...>` **且**链接目标指向冻结库） | 0 | **全删**（整个 `engine/test/index/` 目录，见下表） |
 | `engine/test/kbase/` | 7 | 0 | 7 | 留 —— 但**全部被注释掉**，零注册目标（无害但也无意义） |
 | `engine/test/algo/`、`self_made_cpp/` | 14 | 0 | 14 | 留 |
 
@@ -166,7 +182,7 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 |---|---|---|
 | `hnsw/hnsw_filter_test.cpp` | HNSW | **删**（或随 B-7 改造保留） |
 | `integration/selector_integration_test.cpp` | `vector_index_selector` | **删**（同上） |
-| `memory/mmdb_memctx_test.cpp` | **memctx** | **保留** —— 移植后是验收依据 |
+| `memory/mmdb_memctx_test.cpp` | **memctx（间接）** | **保留** —— 它不直接 include `db/sql/memctx.h`，而是经 `sdk/impl/mmdb_memctx.h:25` 间接依赖 ⇒ **移植后同样编译不过** |
 | `memory/mmdb_root_context_test.cpp` | **memctx** | **保留** |
 | `memory/mmdb_request_scope_test.cpp` | **memctx** | **保留** |
 | `memory/sdk_core_memctx_test.cpp` | **memctx** | **保留** |
@@ -177,8 +193,41 @@ blob 是 xid=0 的不可变对象；只有 heap + JSON 是 MVCC。
 > 另外 **5 个**依赖的是 memctx（`include/db/sql/memctx.h`）。memctx 移植进 SDK 后（§5.6），
 > 这 5 个测试**从「待删」变成「移植是否成功的验收依据」** —— 删掉等于自己拆掉证据。
 
-**`engine/test/index/` 的 8 个文件**：测试**源码**确实零依赖冻结内核（grep 验证），
-但**链接目标**有 3 个指向冻结库 —— 这是只看文件内容会漏掉的一层：
+> ⚠️ **（复审核实）口径澄清** —— 上面的「5 个」是**直接** include `db/sql/memctx.h` 的个数
+> （`memory_leak_detection_test` / `mmdb_request_scope_test` / `mmdb_root_context_test` /
+> `sdk_core_memctx_test` / `sdk_vectors_memctx_test`）；
+> 加上表里第 6 个 `mmdb_memctx_test.cpp`（**间接**依赖，经 `sdk/impl/mmdb_memctx.h:25`），
+> **实际要保留的是 6 个**。摘要行写「memctx 依赖 5 个」指的是**直接依赖**数，别当成总数。
+
+> ⚠️ **（复审核实）HNSW 那 2 个也核实过**：`hnsw/hnsw_filter_test.cpp` include
+> `<db/index/vector_index/faiss_hnsw/faiss_hnsw.h>`；`integration/selector_integration_test.cpp` include
+> `"db/index/vector_index/vector_index_selector.h"`。
+> （另 3 个文件文本里出现过 `hnsw` 字样，但**只在注释/字符串里**，没有 include 冻结头 ⇒ 不算依赖。）
+
+> ⚠️ **（复审修正）原文写「测试源码确实零依赖冻结内核（grep 验证）」—— 这是错的。**
+> 逐文件 grep 的结果是：**8 个 `.cpp` 全部 include `<index/...>`**：
+>
+> | 文件 | include |
+> |---|---|
+> | `block/brin/brin_test.cpp` | `<index/block/brin/brin.h>` |
+> | `diskann/test_config.cpp` | `<index/vector_index/diskann/diskann.h>` |
+> | `diskann/test_fresh.cpp` | `<index/vector_index/diskann/diskann.h>` + `..._fresh.h` |
+> | `diskann/test_merge.cpp` | `<index/vector_index/diskann/diskann.h>` + `..._merge.h` |
+> | `diskann/test_partition.cpp` | `<index/vector_index/diskann/diskann_partition.h>` |
+> | `diskann/test_spann.cpp` | `<index/vector_index/diskann/diskann.h>` + `..._spann.h` |
+> | `inverted/bitmap/bitmap_test.cpp` | `<index/inverted/bitmap/bitmap.h>` |
+> | `inverted/gin/gin_test.cpp` | `<index/inverted/gin/gin.h>` |
+>
+> ⇒ 这 8 个文件的源码**依赖**冻结内核，**且**链接目标也指向冻结库 ——
+> **两层都依赖**，所以是「**全删**」，不是原文写的「留 5 / 删 3」。
+> （原表格自己列的 4 个子目录也全是「删」，与「留 5」自相矛盾。）
+>
+> ⚠️ **另一层容易漏的事实**：整个 `engine/test/index/` **根本没注册进 CMake** ——
+> `engine/test/CMakeLists.txt` 里**没有** `add_subdirectory(index)`；
+> 而 `engine/test/index/CMakeLists.txt` 自己只有 `add_subdirectory(inverted)` + `add_subdirectory(block)`，
+> 连 `diskann` 都没被列进去。
+> ⇒ **这棵树从来没被构建过，贡献 0 条 ctest 用例** ⇒ 删它对 ctest 用例数**零影响**。
+> ⇒ 这也修正了 R-06 的判据：**ctest 用例数差值里不应计入 `engine/test/index/`**。
 
 | 子目录 | 链接目标 | 判定 |
 |---|---|---|
@@ -276,7 +325,7 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | R-04 | **blob 与 graph 的 REPL 不在 `repl_<m>.c` 里** | `handle_blob` / `handle_graph` 是 `src/main.c` 内的 `static` 函数 | §6.1 的「③ REPL 族 = `src/repl_<m>.c`」对这两个模态**不成立** ⇒ 对称化动作清单要加两条：搬成 `repl_blob.c` / `repl_graph.c` | §6.1（已补） |
 | R-05 | **§5.6 的「5 个 memctx 测试」是笔误** | `engine/test/sdk/memory/` 实有 **6** 个 `.cpp` | §2.9 的 6 行清单是对的；§5.6 的两处「5 个」已改正 | §5.6（已改） |
 | R-06 | **doc 模态的完整计数是 3,787 行，不是 2,829** | `src/modalities/doc/` 10 个文件（.c + .h） | 2,829 是早期**部分计数**。⚠️ §2.2 该表的合计口径与本次测量**不同**，故**不做加减**（避免改出一组自相矛盾的总和）—— 权威数字由 W-B 的 `tools/measure_build.sh` 产出 | W-B Task B5 |
-| R-07 | **`engine/test/index/` 的源码 include `<index/...>`** | 这些路径只能经 `engine/include/db/` 解析 | 删掉 `engine/include/db/` ⇒ 这 8 个文件**连编译都过不了**，不只是链接目标消失 | W-A Task 4 |
+| R-07 | **`engine/test/index/` 的源码 include `<index/...>`** | 这些路径只能经 `engine/include/db/` 解析 | 删掉 `engine/include/db/` ⇒ 这 8 个文件**连编译都过不了**，不只是链接目标消失。**（复审核实：8 个 `.cpp` 全部 include `<index/...>`，§2.9 原写「源码零依赖」是错的，已订正）** | W-A Task 4 |
 | R-08 | **`ALLOCSET_PRESET_SMALL高频` 是混写标识符** | 全仓仅 **2 处**：`memctx.h:58`（枚举定义）+ `memctx.c:543`（case） | 移植时**逐字保留** —— 改名要连带改测试，且属"顺手优化相邻代码" | W-A Task 2 |
 | R-09 | **`SQL_MAX_COLS` 是 32，注释仍写 16** | `query/parser.h:36`、`query/exec_internal.h:69-72` | 既有文档债，**本轮不改**（精准修改纪律），但新代码按 32 写 | W-C Task C1 |
 | R-10 | **裁剪点是五处不是四处** | `src/main.c` 直接调用 `handle_vec` / `handle_ft` / `handle_geo` / `handle_ts` 与 `static` 的 `handle_blob` / `handle_graph` | §4.2 补第 5 处（REPL 入口级）；且 `db_internal.h` 的**模态函数声明**也要守卫 —— 否则 `db_ft_recovery_hook` 的注册点链接失败 | §4.2（已补） |
@@ -290,7 +339,7 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | **R-18** | **`test/run.sh` 的头部注释写着「实测 93 个测试里没有任何两个共用同一个 .db 路径」** | `test/run.sh:15` | 实测是 **95** 个。这条注释是**并发安全性的证据**（"各测试互不干扰"），数字错一点不影响结论，但会让复核者对不上 | W-A Task 5 |
 | **R-19** | **`memctx` 的行数被记小了** | `engine/include/db/sql/memctx.h` 实测 **503 行**、`engine/src/db/sql/memctx.c` 实测 **834 行** | 本文档 §5.6 原写「742 行 `memctx.c` + 354 行 `memctx.h`」「其余 352 行」—— 三个数字都偏小。**移植的工作量估计按偏小的数给的**，已订正 | §5.6（已改） |
 | **R-20** | **本文档的体量数字是「早快照」，且口径未标注** | §2.2 的表、§2.7 的冻结轨分层表、§2.1 的「1,313 行 / 2.6%」 | 三处都**没写统计口径**，读者无从判断"行数"是含头文件、含注释、含空行还是只算 `.c`。本文档 §2.2 现在把口径写死为「`.c` 文件的物理行数」、§2.7 写死为「`.c` + `.h` 全行」，并按 2026-11-18 实测值重算 | §2.1 / §2.2 / §2.7（已改） |
-| **R-21** | **冻结轨的体量比本文档记录的还大** | `engine/src/db/` 实测 **524 文件 / 209,907 行**（`.c` + `.h`）；`index/` 子树 **56,647 行**（原记 46,805） | 「冻结轨是主核 3 倍多」这个**结论方向不变**，但绝对值全线偏小。删除的**风险评估**（§7）用的是偏小的数 ⇒ 实际删除量更大 | §2.7 / D-1 / D-4（已改） |
+| **R-21** | **冻结轨的体量比本文档记录的还大** | `engine/src/db/` 实测 **524 文件 / 209,905 行**（`.c` + `.h`）；`index/` 子树 **56,647 行**（原记 46,805） | 「冻结轨是主核 3 倍多」这个**结论方向不变**，但绝对值全线偏小。删除的**风险评估**（§7）用的是偏小的数 ⇒ 实际删除量更大 | §2.7 / D-1 / D-4（已改） |
 
 ---
 
@@ -301,9 +350,9 @@ L2 直接持有 `Heap*` → 搬到 L4 就是 `L2 → L4` 反向依赖，门禁�
 | **D1** | 主核保持**单仓单二进制**，用**编译期模态裁剪**实现「模态可单独构建/单独部署」 | 模态共享同一套运行时（pager/WAL/xid/缓冲池），进程内耦合无法靠目录结构切断；§2.4 的**四项**阻断决定了多进程当前不可行 |
 | **D2** | **不做**插件化（`.so` 动态加载） | 要把 C 头文件 SPI 升级成稳定 ABI 契约（结构体布局 / 函数指针表 / 内存所有权跨模块 / CRT 差异），成本远大于「发版便利」的收益；且 `spi/storage_am.h` 151 行含 11 个宏与 14 个函数指针字段，ABI 易碎 |
 | **D3** | **不重构 L1–L3 的公共机制**（pager / WAL / btree / txn / catalog / query 的内部形状与已有 SPI 三契约一律不动）；**模态归属的搬迁由 D9 管辖** | §2.1/§2.3：接口面已收敛到 1,934 行薄契约、零 internal 泄漏。**（复审修正）** 原文只写「不重构目录」，但 `storage/` 就是 L1 底座，把 `blob.c` 搬走属底座改动 —— 两个判决会在实施时打架，故收窄为「不动 L1–L3 的**机制与形状**」 |
-| **D4** | **删除** `engine/src/db/` 全树（524 文件 / 209,907 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3 倍多（209,907 行 vs 主核 68,037 行）且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
+| **D4** | **删除** `engine/src/db/` 全树（524 文件 / 209,905 行）+ `engine/test/db/`（289）+ `engine/include/db/`（**409 头**） | 用户裁决 2026-11-18。§2.2：冻结轨体量是主核 3 倍多（209,905 行 vs 主核 68,030 行）且无人维护。**D-1 与 D-4 必须同批删**（§2.7：`index/`、`distributed/` 依赖 `include/db/` 的公开头，拆批会中间态编译不过） |
 | **D5** | **保留 SDK，去冻结化**：摘掉 `faiss_hnsw`/`mm_vector_index`/`sql_engine` 三个链接依赖；`sdk/vectors` 的 HNSW 后端改为 `index_flat.c` 实现真扁平索引；**并把 memctx 移植进 SDK 内部**（§5.6） | §2.8：SDK 6/7 模块是 SQLite 后端，与冻结内核无关；`index_flat.c` 本就是为此预留的占位。**（复审修正）** 原文漏了 memctx —— SDK 的 `MemoryContext` 类型**真的**来自 `include/db/sql/memctx.h`，实现**真的**在 `src/db/sql/memctx.c`，不处理则 `mmsdk` 链接必失败 |
-| **D6** | **主核补 CI** | 主核 52,400 行 `.c`（含 `.h` 是 68,037 行 / 247 文件）/ 95 个测试文件（64 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
+| **D6** | **主核补 CI** | 主核 52,393 行 `.c`（含 `.h` 是 68,030 行 / 247 文件）/ 95 个测试文件（64 unit + 31 integration）当前**零 CI 覆盖**，而冻结轨在 CI 里 |
 | **D7** | 编译期裁剪用**单一 `MM` 变量**（不是 14 个独立布尔开关） | 2026-10-27 设计明列的反目标：「宏组合爆炸」 |
 | **D8** | **方案 C（多进程 / 多仓）留预备**，seam 固定为 §2.1 的 1,934 行头文件 | 真要拆的那天按这条缝切即可。现在拆只会先付进程间协调成本，且会堵死已排期的 v1.7 跨模态联合查询 |
 | **D9** | **八模态对称化**：8 个模态统一为「SPI 适配器 + 公开 API + REPL 族 + 模态文档」四件套，且**适配器一律在 `src/modalities/<m>/` 下** | §2.1：模态可见的底座接口面已是 1,934 行薄契约，**边界够干净到可以谈对称**；对称化让「八模态」从文档说法变成结构事实 |
@@ -508,7 +557,7 @@ engine/db/
 
 | # | 对象 | 规模 | 依据 |
 |---|---|---|---|
-| D-1 | `engine/src/db/` | 524 文件 / 209,907 行 | 用户裁决；§2.7 依赖分层已查实 |
+| D-1 | `engine/src/db/` | 524 文件 / 209,905 行 | 用户裁决；§2.7 依赖分层已查实 |
 | D-2 | `engine/test/db/` | 289 文件（≈587 条 ctest 用例） | 测的都是被删的内核 |
 | D-3 | `engine/test/smoke/` | 13 文件 | 全是旧轨 profile 冒烟（`mm_*_smoke`） |
 | D-4 | `engine/include/db/` | **409** 个 `.h` | 冻结内核的公开 API。**必须与 D-1 同批删**（§2.7：`index/`、`distributed/` 依赖这里的头） |
@@ -517,7 +566,7 @@ engine/db/
 | D-7 | `engine/cmake/ModalityProfiles.cmake`、`engine/cmake/MultimodalConfig.cmake` | 2 文件 | 旧轨的 profile 机制；主核用 Makefile，不进 CMake 图 |
 | D-8 | `engine/tools/benchmark/c_api/` | 目录 | 链 `mm_vector_index`/`faiss_hnsw`；**删了必须同时删 `tools/benchmark/CMakeLists.txt:5` 的 `add_subdirectory(c_api)`**（见 B-9） |
 | D-9a | `engine/test/sdk/hnsw/hnsw_filter_test.cpp`、`engine/test/sdk/integration/selector_integration_test.cpp` | 2 文件 | 依赖 HNSW / `vector_index_selector`（随 B-7 改造或删除） |
-| D-10 | `engine/test/index/{block/brin,inverted/bitmap,inverted/gin,diskann}/` | 4 目录 | 链接目标 `mm_vector_index` / `diskann_index` 随 D-1 消失（§2.9）。`diskann/` 那个**现在就是坏的**（目标名应为 `diskann`） |
+| D-10 | `engine/test/index/{block/brin,inverted/bitmap,inverted/gin,diskann}/` | **4 个索引类型目录 / 8 个 `.cpp` 测试文件** | 链接目标 `mm_vector_index` / `diskann_index` 随 D-1 消失（§2.9）。`diskann/` 那个**现在就是坏的**（目标名应为 `diskann`）。⚠️ **口径**：这里的「4」是**索引类型目录数**（brin / bitmap / gin / diskann），而实际要删的是这 4 个目录下的 **8 个 `.cpp` 文件** —— 两个数不矛盾，但**别混用**。且整棵树未注册进 CMake ⇒ 删它对 ctest 用例数零影响（§2.9） |
 
 > **D-9 的编号拆分（复审修正）**：原文 D-9 是「`engine/test/sdk/` 中依赖 HNSW 的 7 个文件」。
 > 实测这 7 个里只有 **2 个**依赖 HNSW（→ D-9a），另外 **5 个**依赖的是 **memctx** ——
@@ -551,7 +600,7 @@ engine/db/
 | **B-9** | `engine/tools/benchmark/CMakeLists.txt:5` | **（复审补入）** 删 `add_subdirectory(c_api)` —— 否则 D-8 删目录后 **CMake 配置期 fatal error** |
 | **B-10** | `engine/test/CMakeLists.txt:23` | **（复审补入）** 删 `add_subdirectory(smoke)` —— 否则 D-3 删目录后**同样 fatal** |
 | **B-11** | `engine/test/CMakeLists.txt:32-68` 的 `_test_targets` 列表 | **（复审补入）** 27 个目标名里约 20 个指向冻结轨。`if(TARGET ${_t})` 守卫会**静默跳过**（不报错也不提示）—— 必须**显式清理列表**，否则残留目标名会长期伪装成「已清理」 |
-| **B-12** | `engine/test/index/{block,inverted}/CMakeLists.txt` 及 4 个子目录 | **（复审补入）** 删 D-10 的 4 个目录及其 `add_subdirectory` 链；`block/CMakeLists.txt` 与 `inverted/CMakeLists.txt` 变成空目录后一并删除 |
+| **B-12** | `engine/test/index/{block,inverted}/CMakeLists.txt` 及 4 个子目录 | **（复审补入）** **整个 `engine/test/index/` 目录删除**（D-10 的 4 个索引类型目录 + 8 个 `.cpp` + 各级 `CMakeLists.txt`）。⚠️ **（复审修正）** 这棵树**没注册进 CMake**（`engine/test/CMakeLists.txt` 无 `add_subdirectory(index)`）⇒ 删它**不影响任何 ctest 用例数** ⇒ **R-06 的差值判据里不应计入它** |
 | **B-13** | `engine/src/db/index/vector_index/CMakeLists.txt` 等 | **（复审补入）** 随 D-1 整树删除，无需单独处理；但要确认 `engine/src/db/CMakeLists.txt:180` 的 `if(MMDB_ENABLE_RELATIONAL AND TARGET sql_engine AND TARGET db_executor)` 分支不残留在别处 |
 | **B-14** | `engine/src/sdk/core/memctx.{c,h}` + `engine/include/sdk/impl/mmdb_memctx.h` | **（复审补入）** memctx 移植 —— 见 §5.6 |
 
@@ -986,9 +1035,14 @@ W-A（删除 524 个文件）动的是整个仓库的构建面，必须先有 W-
 
 | 计划 | 计划文件 | Task 数 | 勾选项数 |
 |---|---|---|---|
-| W-A 冻结轨退役 | `docs/superpowers/plans/2026-11-18-frozen-track-retirement.md` | 6 | 51 |
-| W-B 主核工程组织 | `docs/superpowers/plans/2026-11-18-main-kernel-build-organization.md` | 7 | 44 |
-| W-C 八模态对称化 | `docs/superpowers/plans/2026-11-18-eight-modality-symmetry.md` | 7 | 47 |
+| W-A 冻结轨退役 | `docs/superpowers/plans/2026-11-18-frozen-track-retirement.md` | 6 | 58 |
+| W-B 主核工程组织 | `docs/superpowers/plans/2026-11-18-main-kernel-build-organization.md` | 7 | 47 |
+| W-C 八模态对称化 | `docs/superpowers/plans/2026-11-18-eight-modality-symmetry.md` | 8 | 50 |
+
+> ⚠️ **（复审修正）本表的 Task 数与勾选数按实测重填（2026-11-18 末轮）** ——
+> 原值 `6/51`、`7/44`、`7/47` 是三轮复审**之前**的数。复审往三份计划里加了 C0（开工前处理脏文件）
+> 与 B1.4（`mm_profiles_test.sh`）等步骤，所以 W-C 变成 **8 个 Task**、三份计划的勾选项也各增了 3~7 个。
+> 这些数会随着后续编辑继续变 —— **它们是参考值，不是验收判据**。
 
 ### 计划 W-A：冻结轨退役（§5，风险最高、依赖最多）
 
@@ -1071,6 +1125,21 @@ W-B 的 P0（CI 兜底）
 > C-6 对 `mm_profiles.mk` 的动作是**核对/校准**，不是"补同步"。
 
 > **规则四**：W-A 的**文档大改**（§5.4）放在 W-A 末尾，与删除同批提交。
+
+> **规则五**：`src/db_internal.h` 被 **W-C 的 C1** 与 **W-B 的 B3** 连续改**同一块** ——
+> C1 改它的 include 块（去掉模态头），B3 再在**同一块**加 `#if DB_HAS_*` 守卫。
+> ⇒ **B3 必须在 C1 之后**，且 B3 的做法是「**在 C1 的结果上原位包 `#if`**」，
+> **不是**把 C1 之前的版本整段抄回去 —— 整段覆盖会把 C1 的脱钩改没。
+> ⇒ 两个计划里凡是涉及 `db_internal.h` 的步骤，都必须写明
+> 「**基于上一条工作流的结果改，不回退**」。
+
+> **规则六**：**开工前先处理与本轮无关的脏工作区**。
+> 当前工作区有 4 个与本轮无关的改动（`engine/db/src/db_ft.c`、
+> `engine/db/src/modalities/ft/ft_index.c`、`engine/db/src/modalities/ft/ft_index.h`、
+> `engine/db/test/integration/test_ft_reclaim_boot.c`）——
+> 三份计划里都有 `git add engine/db/` 这类宽范围命令，会把它们卷进提交。
+> ⇒ **开工第一步**：先把这 4 个文件单独提交，或 `git stash push` 收起来；
+> 之后所有 `git add` 一律**逐文件列路径**。
 ### 9.1 本地执行环境的前提（复审补入）
 
 三条工作流里有两处依赖 POSIX `sh`，**Windows 本地 `sh` 不在 PATH**：

@@ -4,19 +4,41 @@
 > 实施依据：`engine/db/docs/PLAN-v1.6.md`（文档模态的原始方案，本计划是它的落地切片）
 > 落地日期：2026-11-18
 >
-> **执行顺序（硬约束）**：
-> ```
-> W-B P0（CI 门禁） → W-A 全部 → 【本计划 C-1】 → W-B P1 / P2
-> ```
-> C-1 **必须**先于 W-B P1 —— 两者都改 `db_internal.h` / `db.c` / `db_instance.c`，
-> 顺序反了必然冲突。
-> C-2 / C-3 / C-4 / C-5 与 W-B P1 无文件重叠，但它们**都改了模态的文件归属** ——
-> 所以必须全部排在 W-B P1 **之前**：P1 的 B1 会**第一次创建** `tools/mm_profiles.mk`，
-> 那时文件归属已定，**一次建对**。反过来做就要多出「同步 `mm_profiles.mk`」这一步，
-> 而且极易漏 —— 设计 §9 的顺序块是唯一权威。
+> **执行顺序（硬约束）—— 唯一权威是设计 §9，本块只是它的副本**：
 >
-> ⚠️ **本计划自己新加的 C5.14（`src/db_json.c`）与 C5.15（`src/repl_json.c`）
-> 也属于「改了文件归属」** —— 它们同样必须在 P1 之前完成。
+> ```
+> W-B 的 P0（CI 兜底）
+>   → W-A 全部（冻结轨退役，含 §5.6 的 memctx 移植）
+>   → 【本计划 Task C1】（执行器脱钩，此时 CI 已是绿的，能立刻发现回归）
+>   → 【本计划 Task C2 / C3 / C4 / C5】
+>   → W-B 的 P1 / P2（MM 开关与 smoke —— 此时文件归属已定，`tools/mm_profiles.mk` 一次建对）
+>   → 【本计划 Task C6】（8 profile + 8 smoke 重跑）
+>   → 【本计划 Task C7】（文档收官 + 父仓指针）
+> ```
+>
+> ⚠️ **（可执行性修正）本块原来与设计 §9 冲突**：原文写「→ 本计划 C-1 → W-B P1 / P2」，
+> 把 **C-2/C-3/C-4/C-5 漏在了 P1 之后**；紧接着的下一段又自己说「C-2 ~ C-5 必须全部排在 P1 之前」
+> —— **同一段文字前后矛盾**，照任一顺序执行都会让 `MM_FILES_blob` 的文件归属失效。
+> ⇒ 现按设计 §9 逐字对齐，**以设计 §9 为准**；本块若与之不符，改本块。
+>
+> **为什么 C1 ~ C5 全部要在 P1 之前**：P1 的 B1 会**第一次创建** `tools/mm_profiles.mk`，
+> 那时文件归属必须已经定下来（C2/C3 搬完、C4/C5 建好 `src/repl_blob.c` / `src/repl_graph.c` /
+> `src/db_json.c` / `src/repl_json.c`），才能**一次写对**。
+> 反过来做（先 P1 再搬家）会让 B1 写下的 `MM_FILES_blob := src/storage/blob.c …` 全部失效
+> ⇒ `MM=vector` 裁不掉 blob ⇒ P1 的验收必失败。
+>
+> **本计划 Task 编号 vs 设计 §9 的 `C-x` 编号**（两套编号，别混）：
+>
+> | 设计 §9 | 本计划 Task | 内容 |
+> |---|---|---|
+> | （无） | **C0** | 开工前处理无关脏文件（设计 §9 规则六） |
+> | C-1 | **C1** | S1 + S2 —— `TableOpener` 契约 + 执行器脱钩 |
+> | C-2 | **C2** | S3 + S6 —— 关系模态 / B+tree 适配器归位 |
+> | C-3 | **C3** | S5 —— blob 归位 |
+> | C-6 | **C4** | S10 —— blob / graph 的 REPL 归位 |
+> | C-4 | **C5** | PLAN-v1.6 步骤 3~6 —— 文档模态接 SQL（含 S7 / S8） |
+> | C-5 | **C6** | S9 门禁 + 8 profile + 8 smoke 重跑 |
+> | （无） | **C7** | 文档收官 + 父仓指针 |
 
 ---
 
@@ -166,13 +188,59 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
 ---
 
+### Task C0：开工前先处理无关脏文件（**本计划的前置，不可跳过**）
+
+  ⚠️ **（可执行性修正）这一步是必需的，不是可选的卫生工作。**
+  工作区里现在有**与本计划完全无关**的未提交改动：
+
+  | 状态 | 文件 |
+  |---|---|
+  | `M` | `engine/db/src/db_ft.c` |
+  | `M` | `engine/db/src/modalities/ft/ft_index.c` |
+  | `M` | `engine/db/src/modalities/ft/ft_index.h` |
+  | `??` | `engine/db/test/integration/test_ft_reclaim_boot.c` |
+
+  这 4 个文件**会被本计划后面几条目录级 `git add` 卷进去**
+  （`git add engine/db/src/` / `git add engine/db/`），
+  ⇒ 一次提交里混进别人的改动 ⇒ 提交历史被污染，回滚粒度也坏了。
+
+  ⇒ **开工前先处理掉**，二选一（**不要带进本计划的任何一次提交**）：
+
+  ```powershell
+  cd C:\code\projects
+  # 方案 A：单独提交（推荐 —— 保留工作成果，且与本计划的提交彻底分开）
+  git add engine/db/src/db_ft.c engine/db/src/modalities/ft/ft_index.c `
+          engine/db/src/modalities/ft/ft_index.h `
+          engine/db/test/integration/test_ft_reclaim_boot.c
+  git commit -m "fix(ft): 全文检索的回收与索引修正（与八模态对称化无关）"
+
+  # 方案 B：先 stash（改动留在 stash 里，本计划做完再 pop）
+  git stash push -m "ft 改动：与八模态对称化无关" -- `
+      engine/db/src/db_ft.c engine/db/src/modalities/ft/ft_index.c `
+      engine/db/src/modalities/ft/ft_index.h `
+      engine/db/test/integration/test_ft_reclaim_boot.c
+  ```
+
+  ⚠️ **处理完必须确认工作区干净**（否则后面的显式路径 `git add` 也会把它们带上）：
+
+  ```powershell
+  git status --porcelain
+  ```
+
+  预期：**无输出**。
+
+---
+
 ### Task C1：第四个 SPI 契约 `TableOpener` + 执行器脱钩
 
 **Files**
 - 新建：`engine/db/src/spi/table_opener.h`、`engine/db/src/spi/table_opener.c`、
-  `engine/db/src/modalities/relational/rel_opener.h`、`engine/db/src/modalities/relational/rel_opener.c`
+  `engine/db/src/modalities/relational/rel_opener.h`、`engine/db/src/modalities/relational/rel_opener.c`、
+  **`engine/db/test/unit/test_table_opener.c`**（C1.5b 新增，见下）
 - 修改：`engine/db/src/query/exec.h`、`engine/db/src/query/exec_internal.h`、
-  `engine/db/src/query/exec_scan.c`、`engine/db/src/db_internal.h`、`engine/db/src/db.c`
+  `engine/db/src/query/exec_scan.c`、**`engine/db/src/query/parser.h`**、
+  **`engine/db/src/common/types.h`**（`SQL_MAX_COLS` 的新家，见 C1.3）、
+  `engine/db/src/db_internal.h`、`engine/db/src/db.c`
 
 **Interfaces**
 - 新增契约（`spi/table_opener.h`）：
@@ -322,7 +390,13 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   #include <string.h>
 
-  #include "modalities/relational/heap_am.h"
+  /*
+   * ⚠️ **（可执行性修正）C-1 期间用现路径 `spi/heap_am.h`** ——
+   * `modalities/relational/heap_am.h` 要到 **C-2** 才 `git mv` 过来。
+   * 现在就写新路径 ⇒ **C-1 单独编不过**（"零警告 + 全绿"在 C-1 不可达）。
+   * ⇒ **C-2 搬完家后必须同步改这一行**（已写进 C2.1 的清单）。
+   */
+  #include "spi/heap_am.h"
   #include "storage/heap.h"
 
   /*
@@ -387,11 +461,88 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
       if (!heap)
           return E_CORRUPT;
 
-      /* catalog_table_cols 写进调用方给的数组，不返回指针 */
+      /*
+       * 列定义：catalog 写进**调用方给的数组**，不返回指针。
+       * （catalog.h 的两段式用法：先问要多少，再拷。）
+       */
       int ncols = 0;
       int rc = catalog_table_cols(cat, tid, cols_buf, SQL_MAX_COLS, &ncols);
-      ...
+      if (rc != OK)
+          return rc;
+
+      /*
+       * 索引：同样拷进调用方给的数组。
+       *
+       * ⚠️ **（可执行性修正）这一步原来整段被 `...` 占掉了** ——
+       * 没有索引列表，`heap_am_build` 拿到的 nidx = 0，
+       * 建出来的 AM **不认任何索引** ⇒ 索引扫描静默失效
+       * （查出来的结果看着永远对，但实际走的全是全扫，EXPLAIN 的理由还会误导人）。
+       */
+      int nidx = 0;
+      rc = catalog_table_indexes(cat, tid, idxs_buf, SQL_MAX_COLS, &nidx);
+      if (rc != OK)
+          return rc;
+
+      /*
+       * 构造关系模态的 StorageAM。
+       * AM 本体与它的上下文都住在**调用方给的 priv 缓冲**里
+       * （AM 每条查询现构造 —— 见 heap_am.h 的文件头注释）。
+       */
+      rc = heap_am_build(heap, cols_buf, ncols, idxs_buf, nidx,
+                         &rp->am_storage, &rp->am_ctx);
+      if (rc != OK)
+          return rc;
+
+      rp->heap = heap;
+      return rel_fill(rp, cols_buf, ncols, idxs_buf, nidx, tid, out);
   }
+
+  /*
+   * ⚠️ **（可执行性修正）按名打开 —— 契约里的 `open` 是主入口，原来整个没写**。
+   *
+   * 【为什么它比 open_by_id 更重要】
+   * `resolve_table` 走的就是它（SQL 里的表名解析）；
+   * `open_by_id` 只在"按表 id 打开"时用（少数内部路径）。
+   * 少了它，C-1 就只是"契约已定"，执行器并没有真的脱钩。
+   *
+   * 【查不到表 ⇒ 返回 E_NOTFOUND】
+   * E_NOTFOUND 是契约里约定的"我没这个表" ——
+   * 执行器据此去问下一个 opener（虚拟表那边）。
+   * 其它错误码一律原样透传（执行器不会再问下一个 opener）。
+   */
+  static int rel_open(const TableOpener *op, void *owner, const char *name,
+                      TableOpenResult *out,
+                      ColDesc *cols_buf, IndexInfo *idxs_buf,
+                      void *priv, size_t priv_bytes)
+  {
+      Catalog *cat = (Catalog *)owner;
+
+      u32 tid = 0;
+      int rc = catalog_find_table(cat, name, &tid);
+      if (rc != OK)
+          return E_NOTFOUND;     /* 我没这张表 —— 让执行器去问下一个 opener */
+
+      /* 找到之后与按 id 打开完全同一条路 */
+      return rel_open_by_id(op, owner, tid, out, cols_buf, idxs_buf,
+                            priv, priv_bytes);
+  }
+
+  /*
+   * ⚠️ **（可执行性修正）opener 的初始化式 —— 契约里的 `priv_bytes` 原来没有来源**。
+   *
+   * `priv_bytes` 是"打开器的私有状态要多少字节"。
+   * 不填它（或者填 0），执行器就按 0 字节给缓冲 ⇒
+   * `rel_open_by_id` 里的 `priv_bytes < sizeof(RelPriv)` 恒真 ⇒
+   * **每一次 opener 调用都返回 E_INVAL** ⇒ 表永远打不开。
+   *
+   * ⇒ 这里必须填 `sizeof(RelPriv)`，与 C1.1 契约里的字段一一对应。
+   */
+  const TableOpener rel_table_opener = {
+      "catalog",
+      rel_open,
+      rel_open_by_id,
+      sizeof(RelPriv)
+  };
   ```
 
   ⚠️ **`catalog_table_cols` 的真实签名要照抄现有代码**：
@@ -510,8 +661,15 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   ```
 
   ⚠️ `SQL_MAX_COLS` 定义在 `query/parser.h` —— 但 `spi/` 不该依赖 `query/`（分层是 L3 同层，
-  但方向不对）。**解决**：把 `SQL_MAX_COLS` 挪到 `spi/table_opener.h` 或
-  `common/types.h`，`query/parser.h` 改为 include 它。
+  但方向不对）。
+
+  ⚠️ **（可执行性修正）落点定死，不留二选一** ——
+  **`SQL_MAX_COLS` 挪到 `src/common/types.h`**（L0 层，谁都能 include），
+  `query/parser.h` 改成 include 它（它本来就已经 include 了 `common/types.h`，零新增依赖）。
+  **不要**挪到 `spi/table_opener.h` ——
+  那样 `query/` 与 `common/` 就都得反过来依赖 `spi/`，方向比现在更糟。
+  ⇒ 与 C1.2 里那段「本 Task 一并把 `SQL_MAX_COLS` 挪到 `src/common/types.h`」是同一件事，
+  两个地方口径必须一致。
   ⚠️ 这会牵动 `query/parser.h` 与 `exec_internal.h` 的 include ——
   **改完跑一遍分层门禁**（`check_deps.sh` 里 `forbid src/spi ... query/` **不存在**，
   所以 spi→query 现在不违规；但方向上是反的，仍然要挪）。
@@ -586,7 +744,17 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
        * 只负责给它一块够大的地方并交给打开器。
        */
       TableOpenResult open_result;
-      unsigned char    priv[SPI_AM_CTX_MAX];
+
+      /*
+       * 打开器的私有状态缓冲。
+       *
+       * ⚠️ **（可执行性修正）常量名必须是 `SPI_OPENER_PRIV_MAX`** ——
+       * C1.1 已经把常量**改名**了（原名 `SPI_AM_CTX_MAX` 已不存在）。
+       * 写旧名 ⇒ **编译不过**（未定义标识符）。
+       * **同名同值**：与 C1.1 的契约一致，`SPI_OPENER_PRIV_MAX = 512`
+       * （原 256 装不下 344 字节的 `RelPriv`）。
+       */
+      unsigned char    priv[SPI_OPENER_PRIV_MAX];
   } TableCtx;
   ```
 
@@ -648,10 +816,16 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   ⇒ **两处都要装**：
 
   ```c
-  /* db_open() 里，建完 conn 之后 */
-  conn->db.opener_catalog = &rel_table_opener;
-  conn->db.opener_virtual = &spi_table_opener;
-  ```
+/* (可执行性修正) db_open() 里**没有** `conn` 这个变量 —— 它用 `db->db.*`
+ *
+ * db.c 的两个入口名字不一样：
+ *   L218  db_err db_open(const char *path, DB **out)   -> 内部变量是 db，字段是 db->db.*
+ *   L728  db_err db_connect(DB *db, DB **out)         -> L734 DB *conn = calloc(...)，字段是 conn->db.*
+ *
+ * 照抄成 conn->db.* 会直接编译不过（未定义标识符 conn）。
+ */
+db->db.opener_catalog = &rel_table_opener;
+db->db.opener_virtual = &spi_table_opener;
 
   ```c
   /* db_connect() 里（db.c:728 起），逐字段填完 conn->db.* 之后 */
@@ -668,25 +842,53 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
 - [ ] **C1.8 机械验收：执行器不认识模态了**
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  Select-String -Path src/query/exec*.c,src/query/exec_internal.h `
-    -Pattern 'heap|Heap|relational|blob_am'
-  ```
+⚠️ **（可执行性修正）原来写「零命中（连注释都不该有）」这条判据不可达** ——
+`src/query/` 下实测还有下面这些命中，而且**大部分不该删**：
 
-  预期：**零命中**（连注释都不该有）。
+| 位置 | 内容 | 能不能删 |
+|---|---|---|
+| `exec_scan.c:199/200/222/268/269/286` | `catalog_heap(...)` / `heap_am_build(...)` **真实调用** | **本 Task 就是要消掉它们** |
+| `exec_internal.h:5` | `#include "spi/heap_am.h"` | **本 Task 就是要删掉它** |
+| `exec_internal.h:79` | `Heap *heap;` 字段 | 要改成 `const TableOpenResult *opened;` 之类 |
+| `exec.c:6` | 注释「改造前：执行器直接用 heap_* / btree_*…」 | 可以留（这句是**历史说明**，不是残留） |
+| `exec_batch.c:405` / `:579` | 注释「可见性由模态判断（heap 走 MVCC…）」 | 可以留（讲的是语义） |
+| `exec_internal.h:42` | 注释「【为什么关系模态要单独放 heap / am_ctx / am_storage】」 | 要改（设计已改用 TableOpener） |
+| `exec_cost.c:82` | **宏名** `CBO_HEAP_FETCH` | **重命名**成 `CBO_REL_FETCH`，不是删 |
 
-  ```powershell
-  Select-String -Path src/query/exec*.c,src/query/exec_internal.h -Pattern 'include "spi/heap_am.h"'
-  ```
+⇒ 判据拆成**三层**，每层都能机械判定：
 
-  预期：**零命中**。
+**第 1 层 — 标识符零命中（这是硬判据）**
 
-  ⚠️ **（复审修正）与 R1 的口径要统一** —— R1 写的是「只命中注释」，
-  本步写的是「零命中（连注释都不该有）」，**两条判据互相矛盾**。
-  ⇒ 以本步为准：**零命中**。R1 已改成同一口径。
-  ⇒ 若执行时发现注释里有 `heap` 字样（如「这里以前是 heap 的活」），
-  **一并删掉** —— 留着的唯一好处是让人以为这条路还没走完。
+```powershell
+cd C:\code\projects\engine\db
+Get-ChildItem src/query -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern '\bheap_am_build\b|\bHeapAmCtx\b|\bcatalog_heap\b|\bHeap\s*\*'
+```
+
+预期：**零命中**。（`exec_scan.c` 那 6 处、`exec_internal.h:79` 那个字段都在这条判据里。）
+
+**第 2 层 — 不再 include 模态头**
+
+```powershell
+Get-ChildItem src/query -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern '#include\s+"spi/heap_am\.h"'
+```
+
+预期：**零命中**。
+
+**第 3 层 — 剩余的 `heap` 字样必须都在「已知例外」清单里**
+
+```powershell
+Get-ChildItem src/query -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern 'heap|Heap' |
+  ForEach-Object { "{0}:{1}" -f $_.Filename, $_.LineNumber }
+```
+
+允许残留的**只有**这 5 处（执行时逐条核对，多一处就要处置）：
+`exec.c:6`（历史注释）、`exec_batch.c:405`、`exec_batch.c:579`（语义注释）、
+`exec_cost.c:82`（宏名，**要重命名为 `CBO_REL_FETCH`**）、`exec_internal.h:42`（**要改写成 TableOpener 的说法**）。
+
+⇒ **宏重命名与注释改写都算在本步内**；剩下的 3 处历史/语义注释**明确保留**。
 
 
 - [ ] **C1.9 构建 + 全量测试**
@@ -706,11 +908,18 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
   ```powershell
   cd C:\code\projects\engine\db
   & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh   # 跑一次
-  # 从输出里抽出全部用例名，存成 before.txt / after.txt，再 diff
-  ```
+# (可执行性修正) run.sh 的每行输出形状是 printf '  %-34s [PASS]'（L94）
+#    / '[FAIL]'（L97）/ '[COMPILE FAIL]'（L89），所以用例名可以用这个正则抽：
+& "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh 2>&1 |
+  Select-String -Pattern '^\s*(\S+)\s+\[(PASS|FAIL|COMPILE FAIL)\]' |
+  ForEach-Object { $_.Matches[0].Groups[1].Value } |
+  Sort-Object | Out-File -Encoding utf8 before.txt
 
-  ⇒ 改造前跑一次存 `before.txt`，改造后跑一次存 `after.txt`，
-  `diff before.txt after.txt` 必须**为空**。
+# 改造后同样跑一次，存 after.txt，然后逐条比对：
+Compare-Object (Get-Content before.txt) (Get-Content after.txt)
+
+# 预期：**无输出**（集合完全相同 —— 不新增、不减少、不改名）。
+# 若只想看数量：(Get-Content before.txt).Count  -> 应为 95
   ⚠️ 只比「用例数相等」不够 —— 数量相同但名字换了，是另一种回归。
 
 
@@ -762,9 +971,16 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 - [ ] **C2.2 改 include 路径**
 
   ```powershell
-  Select-String -Path engine/db/src/**/*.c,engine/db/src/**/*.h `
+Get-ChildItem engine/db/src -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern 'spi/heap_am|spi/btree_am'
     -Pattern 'spi/heap_am|spi/btree_am'
   ```
+
+⚠️ **（可执行性修正）不能用 `Select-String -Path engine/db/src/**/*.c`** ——
+PowerShell 的 `**` **至少要匹配一层目录**，`src/db_internal.h` / `src/db.c` / `src/db_blob.c`
+这些**顶层文件一个都搜不到**（实测：`**` 只命中子目录里的文件），
+而 `db_internal.h:31/33` 恰恰是最关键的引用点。
+⇒ 递归必须交给 `Get-ChildItem -Recurse`。
 
   逐个改成 `modalities/relational/heap_am` / `modalities/relational/btree_am`。
 
@@ -806,7 +1022,20 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   ```powershell
   cd C:\code\projects
-  git add engine/db/src/
+# ⚠️ （可执行性修正）不要用目录级 add —— 工作区里有 4 个与本任务无关的改动：
+#   M engine/db/src/db_ft.c
+#   M engine/db/src/modalities/ft/ft_index.c
+#   M engine/db/src/modalities/ft/ft_index.h
+#   ?? engine/db/test/integration/test_ft_reclaim_boot.c
+# ⇒ 按本 Task 实际改动的文件逐条列：
+git add engine/db/src/spi/heap_am.c engine/db/src/spi/heap_am.h `
+        engine/db/src/spi/heap_am_batch.c engine/db/src/spi/heap_am_internal.h `
+        engine/db/src/spi/btree_am.c engine/db/src/spi/btree_am.h `
+        engine/db/src/modalities/relational `
+        engine/db/src/query/exec_scan.c engine/db/src/query/exec_internal.h
+
+# 提交前确认没卷进 ft（输出必须为空）：
+git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "refactor(kernel): 关系模态的 SPI 适配器归位 modalities/relational/"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
@@ -843,9 +1072,16 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 - [ ] **C3.2 改 include 路径**
 
   ```powershell
-  Select-String -Path engine/db/src/**/*.c,engine/db/src/**/*.h `
+Get-ChildItem engine/db/src -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern 'storage/blob|spi/blob_am'
     -Pattern 'storage/blob|spi/blob_am'
   ```
+
+⚠️ **（可执行性修正）不能用 `Select-String -Path engine/db/src/**/*.c`** ——
+PowerShell 的 `**` **至少要匹配一层目录**，`src/db_internal.h` / `src/db.c` / `src/db_blob.c`
+这些**顶层文件一个都搜不到**（实测：`**` 只命中子目录里的文件），
+而 `db_internal.h:31/33` 恰恰是最关键的引用点。
+⇒ 递归必须交给 `Get-ChildItem -Recurse`。
 
   逐个改成 `modalities/blob/blob` / `modalities/blob/blob_am`。
 
@@ -877,7 +1113,20 @@ engine/db/src/modalities/          ← 改造后：8 个模态，形态一致
 
   ```powershell
   cd C:\code\projects
-  git add engine/db/src/
+# ⚠️ （可执行性修正）不要用目录级 add —— 工作区里有 4 个与本任务无关的改动：
+#   M engine/db/src/db_ft.c
+#   M engine/db/src/modalities/ft/ft_index.c
+#   M engine/db/src/modalities/ft/ft_index.h
+#   ?? engine/db/test/integration/test_ft_reclaim_boot.c
+# ⇒ 按本 Task 实际改动的文件逐条列：
+git add engine/db/src/spi/heap_am.c engine/db/src/spi/heap_am.h `
+        engine/db/src/spi/heap_am_batch.c engine/db/src/spi/heap_am_internal.h `
+        engine/db/src/spi/btree_am.c engine/db/src/spi/btree_am.h `
+        engine/db/src/modalities/relational `
+        engine/db/src/query/exec_scan.c engine/db/src/query/exec_internal.h
+
+# 提交前确认没卷进 ft（输出必须为空）：
+git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "refactor(kernel): blob 模态归位 modalities/blob/（src/storage 与 src/spi 不再有模态代码）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
@@ -932,7 +1181,11 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   - 加 `#include "repl_blob.h"` / `#include "repl_graph.h"`
   - 派发分支**不动**
 
-  ⚠️ **`main.c` 会从 670 行掉到大约 240 行**（blob 约 130 + graph 约 300 搬走）。
+⚠️ **`main.c` 会从 670 行掉到大约 240 行**（blob 约 130 + graph 约 300 搬走）。
+
+实测 `engine/db/src/main.c` = **670 行**（`handle_blob` 在 **L113**、`handle_graph` 在 **L393**，
+两个都是 `static` 函数）。搬家后这两个函数连同它们的辅助函数一起走，
+`main.c` 剩 REPL 主循环 + catalog/heap/txn 那几族动词 ≈ 240 行。
   ⚠️ **`main.c` 的文件头注释要补一句**：
   「blob 与 graph 的 REPL 实现在 `repl_blob.c` / `repl_graph.c`」——
   否则下一个读代码的人会以为它们还在 `main.c` 里。
@@ -1072,9 +1325,8 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 - [ ] **C5.3 值层：JSON 值变体**
 
   `src/storage/value.h` 的 `DbValue` 已有 `T_JSON` 的类型位（`record.h` 有 `T_JSON = 6`），
-  但 `value.h` 里的 `DbValue.type` 用的是 `ValType`。
-
-  ⚠️ **先查清楚 `ValType` 与 `ColType` 是两套还是一套**：
+⚠️ **（可执行性修正）这句原来是错的** —— `value.h` 里就是 `u8 type; /* ColType */`，
+**没有 `ValType` 这个类型**。`T_JSON` 直接来自 `storage/record.h` 的 `ColType`。
   `record.h` 定义 `ColType {T_TEXT=4, T_REAL=5, T_JSON=6}`，
   `value.h` 定义 `DbValue.type`（字段名也是 `type`）。
   如果是两套枚举，需要在值层加 `T_JSON` 并写清映射。
@@ -1131,8 +1383,40 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   };
   ```
 
-  `src/query/parser.c` 的 `p_parse_expr` 增加**函数调用**分支：
-  识别 `IDENT (` → 解析实参列表（逗号分隔的表达式）→ `EX_FUNC`。
+`src/query/parser.c` 的 `p_parse_expr` 增加**函数调用**分支：
+识别 `IDENT (` → 解析实参列表（逗号分隔的表达式）→ `EX_FUNC`。
+
+⚠️ **（可执行性修正）加了 `args` / `nargs` 之后，有两处必须同步改，否则一个泄漏、一个跑错**：
+
+1. **`src/query/parser.c` 的 `free_stmt()`** —— 必须**递归**释放 `args` 链。
+   现在它按 `kind` 释放 `EX_BIN` 的左右子树、`EX_UN` 的操作数、`EX_AGG` 的子树，
+   但**没有 `EX_FUNC` 分支** ⇒ 每个函数调用的实参数组与节点全部泄漏
+   （`test/run.sh` 里的 memcheck 用例会抓到）。
+
+   ```c
+   case EX_FUNC:
+       for (int i = 0; i < e->nargs; i++)
+           free_expr(e->args[i]);
+       free(e->args);
+       break;
+   ```
+
+2. **`src/query/exec_internal.h` 的 `bind_expr()`** —— 必须**递归**绑定 `args` 里的列号。
+   `bind_expr` 的作用是把 `EX_COL` 的列名解析成列下标；
+   如果只绑 `EX_FUNC` 节点本身而**不进 `args`**，那么 `json_match(doc, '$.a')` 的
+   `doc` 那一列**永远绑定不上**（列号停在初值，取到错列或空值）⇒ 结果静默错误。
+
+   ```c
+   case EX_FUNC:
+       for (int i = 0; i < e->nargs; i++) {
+           int rc = bind_expr(e->args[i], cols, ncols);
+           if (rc != OK)
+               return rc;
+       }
+       break;
+   ```
+
+⇒ 这两处与 `EX_FUNC` 的求值入口（C5.6）是**同一个改动的三面**，必须同批提交。
 
   ⚠️ **与 `EX_AGG` 的区别**：`EX_AGG` 是**聚合**（AVG / COUNT / SUM），
   在 `exec_scan.c` 里有专门的聚合求值路径；`EX_FUNC` 是**标量函数**，
@@ -1150,8 +1434,14 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
       st->col_type = T_JSON;
   ```
 
-  ⚠️ **`T_JSON` 定义在 `storage/record.h`**（`ColType`），而 `parser.h` 用的是 `ValType`。
-  **先确认两套枚举的对应关系**（C5.3 已经查过一次），别猜。
+⚠️ **（可执行性修正）不存在第二套枚举 —— 全树只有 `ColType` 这一套**
+（本计划 C5.3b 已经核实过，这里原写的「`parser.h` 用的是 `ValType`」是错的）：
+
+- `engine/db/src/storage/record.h` 的 `ColType` 里 **`T_JSON = 6`**；
+- `engine/db/src/storage/value.h:79` 的 `DbValue.type` 就是 `u8   type;   /* ColType */`；
+- 全树 grep `ValType` **零命中**（除本计划自己写错的地方）。
+
+⇒ 直接用 `T_JSON`，不要引入第二套类型枚举。
 
   **路径字面量**（`CREATE INDEX ... ON t (json '$.a.b')`）：
   `p_parse_create_index` 现在的 `p_expect_ident(p, st->index_col)` 只认标识符。
@@ -1179,7 +1469,10 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
 - [ ] **C5.6 evaluator：`EX_FUNC` 的求值入口**
 
-  `src/query/exec_eval.c` 的 `eval_expr`（L42）加一个 case：
+`src/query/exec_scan.c` 的 `eval_expr`（**L42**）加一个 case：
+
+⚠️ **（可执行性修正）位置搞错了** —— `eval_expr` 在 **`exec_scan.c:42`**（行式路径）；
+`exec_eval.c` 里那个叫 **`eval_where`（L201）**（列式路径）。两路都要加，见本步末尾。
 
   ```c
   case EX_FUNC: {
@@ -1212,8 +1505,59 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
   ⚠️ **`eval_expr` 有两路**（行式 `exec_scan.c::eval_expr` 与列式 `exec_eval.c::eval_where`）——
   **两路都要加**！只加一路 ⇒ A3 的"两路全等"验收必然失败。
-  ⚠️ 具体地：`exec_scan.c::eval_expr` 是行式路径，`exec_eval.c::eval_where` 是列式路径。
-  `EX_FUNC` 在两处都要能求值。
+⚠️ 具体地：`exec_scan.c::eval_expr` 是行式路径，`exec_eval.c::eval_where` 是列式路径。
+`EX_FUNC` 在两处都要能求值。
+
+⚠️ **（可执行性修正）列式路径不能照抄行式的写法** —— 两路签名根本不同：
+
+```c
+/* 行式：能拿到 row */
+int eval_expr(const Expr *e, const DbValue *row, DbValue *out);
+
+/* 列式：**没有 row**，拿到的是批上下文 + 列描述 + 行号…… */
+int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
+               int col, DbValue *out, int flags);   /* exec_eval.c:201 */
+```
+
+⇒ 上面那段 `eval_expr(e->args[i], row, &args[i])` 是**行式**的，列式里没有 `row` 可传。
+**本计划采用「物化单行」的降级方案**（比给 `BatchCtx` 加取行 API 改动面小）：
+
+1. 在 `src/query/exec_batch.h` 加一个辅助函数（**这是本步要新增的**）：
+
+   ```c
+   /*
+    * 把批上下文里第 i 行物化成一个 DbValue 行。
+    *
+    * 【为什么需要它】
+    * 列式求值是按列扫的，天然拿不到「一整行」。
+    * 但通用函数调用（EX_FUNC）的实参可能是任意表达式，
+    * 而值层的函数签名是 (args[], nargs, out) —— 它是**按行**的。
+    * 所以这里必须能把一行拼出来。
+    *
+    * 【代价】
+    * EX_FUNC 出现在 WHERE 里时，列式路径会退化成逐行物化。
+    * 这是**有意接受**的：通用函数本来就带不走列式向量化的好处；
+    * 而 json_match 这类函数占比很小，不值得为它把列式框架重构。
+    */
+   int batch_row_at(BatchCtx *bc, int i, DbValue *row_out);
+   ```
+
+2. `eval_where` 的 `EX_FUNC` case 写成：
+
+   ```c
+   case EX_FUNC: {
+       DbValue row[SQL_MAX_COLS];
+       int rc = batch_row_at(bc, col, row);   /* col 就是当前行号 */
+       if (rc != OK)
+           return rc;
+       /* 之后照行式的写法：逐个求实参、查函数表、调用 */
+       return eval_func_common(e, row, out);
+   }
+   ```
+
+3. **把两路的公共部分抽成 `eval_func_common(const Expr *e, const DbValue *row, DbValue *out)`**
+   （放在 `exec_internal.h` 声明、`exec_scan.c` 实现），行式与列式各调用它 ——
+   这样 A3「两路全等」在 EX_FUNC 上**结构上就成立**，不靠两处手写对齐。
 
 - [ ] **C5.7 文档模态：注册 `json_match` 与 `json_extract`**
 
@@ -1399,11 +1743,8 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
         路径谓词的"能不能下推、推给谁"由**下推契约**表达，
         执行器**不**直接问文档模态"这个谓词你认不认"。
 
-  4. **查询路径（执行器用索引）**：
-     - WHERE 里有 `json_match(doc, '$.a.b = 5')` → 解析出 path + op + 值。
-     - 在表的索引里找"路径索引且 path 相同且 op 可用"的。
-     - 用它做索引扫描 → 拿到候选行 → **执行器重新求值整个 WHERE**（超集契约）。
-     - 索引扫描的结果必须**是超集**（索引可能给出不完全匹配的候选）。
+⚠️ **（可执行性修正）这里原来重复了一遍「4. 查询路径」，内容与上面完全相同 —— 已删。**
+（上面那段含「谓词下推必须走 `spi/pushdown.h` 的下推契约」，是完整版。）
 
 - [ ] **C5.9 A3 验收：两路全等**
   ⚠️ **（复审修正）PLAN-v1.6 的「反向验证 2 处」原来只做了一处** ——
@@ -1514,7 +1855,45 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   Select-String -Path src/query/*.c,src/query/*.h -Pattern 'json'
   ```
 
-  **逐行**核对：命中必须**逐行对上 A7 清单五处中的某一格**；落在五处之外 = 零容忍。
+⚠️ **（可执行性修正）这条判据执行时一跑就红** —— 基线里本来就有 2 处 `json` 命中，
+而落点表（五处）里没有它们：
+
+| 基线位置 | 内容 | 处置 |
+|---|---|---|
+| `src/query/lexer.c:81` | 注释「v1.1 加了 REAL 类型（AVG 的结果、地理坐标、时序数值、**JSON** 数字）」 | **保留** —— 这是讲 `REAL` 用途的枚举，与文档模态无关 |
+| `src/query/parser_stmt.c:39` | 注释「值层与记录层早就有 T_REAL 了（AVG 的结果、坐标、时序数值、**JSON** 数字）」 | **保留** —— 同上 |
+
+⇒ 把判据改成：**「改动前后对比，新增命中为零」**，而不是「绝对零容忍」：
+
+1. **改 C5 之前**先跑一遍 `grep -in json src/query/`，把结果存成 `before-json.txt`
+   （预期恰好上面 2 行）；
+2. 每改完一步再跑，结果与 `before-json.txt` 做差集；
+3. **差集必须只落在 A7 落点表五格之内** —— 落在五格之外 = 违规。
+
+```powershell
+cd C:\code\projects\engine\db
+# 改动前（一次性）
+Get-ChildItem src/query -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern 'json' -CaseSensitive:$false |
+  ForEach-Object { "{0}:{1}" -f $_.Filename, $_.LineNumber } |
+  Sort-Object | Out-File -Encoding utf8 before-json.txt
+
+# 每步之后
+Get-ChildItem src/query -Recurse -File -Include '*.c','*.h' |
+  Select-String -Pattern 'json' -CaseSensitive:$false |
+  ForEach-Object { "{0}:{1}" -f $_.Filename, $_.LineNumber } |
+  Sort-Object | Out-File -Encoding utf8 after-json.txt
+Compare-Object (Get-Content before-json.txt) (Get-Content after-json.txt)
+```
+
+`Compare-Object` 的输出里，**每个 `=>`（SideIndicator = `=>`，新增）的行**都必须能对上 A7 五格之一：
+① 值层（`storage/`）② 求值入口（`exec_scan.c` / `exec_eval.c`）③ lexer ④ parser 表达式 ⑤ parser DDL。
+`<=`（消失）的行不需要解释（那是被改掉的）。
+
+⇒ **行号会漂移**，所以比对用「文件名:行号」会误报 —— 更稳的做法是同时存**整行内容**，
+按内容做差集（`Select-String` 的 `-Raw`，或用 `$_.Line`）。执行时以内容为准。
+
+**原始要求（保留）**：逐行核对，写进 `engine/db/docs/MODALITIES.md` 的执行记录。
   写进 `engine/db/docs/MODALITIES.md` 的执行记录。
 
   ```powershell
@@ -1571,10 +1950,27 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   #endif
   ```
 
-  ⚠️ **W-B P1 在 W-C C-1/C-5 之后执行**（设计 §9 的顺序），
-  所以**这一步要等 W-B P1 的守卫落地后再做**，或者在这一步就把
-  `#if DB_HAS_DOC` 一起写好（W-B B3.3 只需补齐其余触点）。
-  **二选一，但必须在本步的记录里写明选了哪个。**
+⚠️ **（可执行性修正）`#if DB_HAS_DOC` 在本步执行时**该宏还不存在** —— 这是个死锁**：
+
+- `DB_HAS_DOC` 由 W-B **B2.3 的 `MM_FLAGS`** 引入（`-DDB_HAS_DOC=1`）；
+- 而 B2.3 在 **W-B P1** 里；设计 §9 的顺序把 P1 排在 **C-1 ~ C-5 之后**；
+- ⇒ 执行 C5.14 时宏未定义 ⇒ **`#if DB_HAS_DOC` 恒假** ⇒ `db_json_init()` **永不调用**
+  ⇒ 值层函数表永远注册不上 ⇒ `json_match` 永远返回 `E_NOTSUP` ⇒ C5.9 / C5.10 的验收全绿不了。
+
+⇒ **本计划定死：C5.14 无条件调用，不写 `#if`**：
+
+```c
+/* db.c 的 db_open() 里 */
+db_json_init();
+```
+
+理由与后续：
+1. C-5 阶段还没有裁剪机制，「无条件调用」是**唯一能编过又能跑通**的写法；
+2. **裁剪守卫交给 W-B 去做**：W-B **B3.3** 的裁剪触点清单里**必须包含**
+   `db.c` 里这一行 `db_json_init();` —— 到时候由 B3.3 就地包上 `#if DB_HAS_DOC`；
+3. 本步的**执行记录必须写下这句话**：「`db.c` 的 `db_json_init()` 是 W-B B3.3 的裁剪触点之一，勿漏」。
+
+⇒ **本步与 W-B B3.3 的接口就这一句话**，不需要等 P1 先落地。
 
 - [ ] **C5.15 文档模态的 REPL 族：`src/repl_json.c` + `DOC` 动词族**（S8）
 
@@ -1592,8 +1988,127 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   | `DOC MATCH <json> <spec>` | 匹配规格求值，打印 true/false |
   | `DOC PATH <json> <path>` | 取路径值（调试用） |
 
-  仿照 `repl_vec.c` / `repl_ft.c` 的既有形状（`repl_xxx_init(...)` 注册动词 +
-  `handle_xxx(...)` 处理）。
+⚠️ **（可执行性修正）「`repl_xxx_init(...)` 注册动词」这个形状不存在** ——
+实测全树**没有任何 `repl_*_init` 函数**，也**没有**「注册动词」这套机制。
+真实形状是**最简单的那种**：`repl_xxx.c` 里定义一个 `int handle_xxx(DB *db, char *line)`，
+`main.c` 里直接调用它。
+
+```c
+/* engine/db/src/repl_vec.c:26 */
+int handle_vec(DB *db, char *line)
+
+/* engine/db/src/repl_ft.c:48 */
+int handle_ft(DB *db, char *line)
+
+/* engine/db/src/main.c:593-629 的派发 */
+if (strncmp(line, "VEC", 3) == 0)
+    handle_vec(db, line);
+else if (strncmp(line, "FT", 2) == 0)
+    handle_ft(db, line);
+```
+
+⇒ `repl_json.c` 照这个形状写，**不要发明注册机制**：
+
+**`engine/db/src/repl_json.h`**
+
+```c
+#ifndef MMDB_REPL_JSON_H
+#define MMDB_REPL_JSON_H
+
+#include "db.h"
+
+/* DOC 动词族的入口。line 是整行输入（已含 "DOC" 前缀）。 */
+int handle_json(DB *db, char *line);
+
+#endif /* MMDB_REPL_JSON_H */
+```
+
+**`engine/db/src/repl_json.c`**
+
+```c
+#include "repl_json.h"
+#include "db.h"
+#include <stdio.h>
+#include <string.h>
+
+/*
+ * DOC 动词族。
+ *
+ * 【为什么动词分派写在这里而不是 main.c】
+ * main.c 只按首词（DOC）分派到本文件；DOC 之下再有几个动词
+ * 是文档模态自己的事 —— 这样别处加模态时 main.c 不用改。
+ */
+static int doc_encode(const char *text)
+{
+    u8  *buf = NULL;
+    u16  len = 0;
+    db_err rc = db_json_encode(text, &buf, &len);
+    if (rc != OK) {
+        printf("DOC ENCODE: rc=%d\n", (int)rc);
+        return 1;
+    }
+    for (u16 i = 0; i < len; i++)
+        printf("%02x", buf[i]);
+    printf("\n");
+    free(buf);
+    return 0;
+}
+
+static int doc_decode(const char *hex)
+{
+    /* 先把 hex 解成字节，再调 db_json_decode */
+    size_t n = strlen(hex) / 2;
+    u8 *raw = (u8 *)malloc(n ? n : 1);
+    if (!raw)
+        return 1;
+    for (size_t i = 0; i < n; i++) {
+        unsigned v = 0;
+        if (sscanf(hex + 2 * i, "%2x", &v) != 1) { free(raw); return 1; }
+        raw[i] = (u8)v;
+    }
+    char *text = NULL;
+    db_err rc = db_json_decode(raw, (u16)n, &text);
+    free(raw);
+    if (rc != OK) { printf("DOC DECODE: rc=%d\n", (int)rc); return 1; }
+    printf("%s\n", text);
+    free(text);
+    return 0;
+}
+
+static int doc_match(const char *json, const char *spec)
+{
+    bool m = false;
+    db_err rc = db_json_match(json, spec, &m);
+    if (rc != OK) { printf("DOC MATCH: rc=%d\n", (int)rc); return 1; }
+    printf("%s\n", m ? "true" : "false");
+    return 0;
+}
+
+int handle_json(DB *db, char *line)
+{
+    (void)db;
+    /* 跳过 "DOC" 这 3 个字符 */
+    const char *p = line + 3;
+    while (*p == ' ' || *p == '\t')
+        p++;
+
+    if (strncmp(p, "ENCODE", 6) == 0)
+        return doc_encode(p + 6);
+    if (strncmp(p, "DECODE", 6) == 0)
+        return doc_decode(p + 6);
+    if (strncmp(p, "MATCH", 5) == 0) {
+        /* MATCH <json> <spec>：按第一个空格切 */
+        ...
+    }
+    printf("用法: DOC ENCODE <json> | DOC DECODE <hex> | DOC MATCH <json> <spec> | DOC PATH <json> <path>\n");
+    return 1;
+}
+```
+
+⚠️ `DOC PATH` 要不要在本步做，取决于 `db_json_*` 是否已经有取路径的公开函数 ——
+C5.14 只定义了 `encode` / `decode` / `match` 三个。
+⇒ **`DOC PATH` 要么本步补一个 `db_json_extract()` 公开函数，要么从动词表里去掉**。
+本计划选**去掉**（`PATH` 只是调试用，等真有需要再加），并在执行记录里写明。
 
   ⚠️ **接线点有两处**：
   1. `main.c` 的 `#include "repl_json.h"`（在 L62-65 那一组 `repl_*.h` 里）
@@ -1610,12 +2125,25 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   ⚠️ **`repl_json.c` 不属于任何 `MM_FILES_*` 的通配**（它在 `src/` 顶层，
   不在 `src/modalities/doc/` 下）—— 必须**显式**加进 `MM_FILES_doc`。
 
-- [ ] **C5.16 提交**
-- [ ] **C5.14 提交**
+- [ ] **C5.16 提交（C5 整段一个原子提交）**
 
   ```powershell
   cd C:\code\projects
-  git add engine/db/
+# ⚠️ （可执行性修正）不要用 `git add engine/db/` —— 会卷进上面那 4 个无关的 ft 改动。
+# 逐路径显式 add：
+git add engine/db/src/db_json.c engine/db/src/db_json.h `
+        engine/db/src/repl_json.c engine/db/src/repl_json.h `
+        engine/db/src/modalities/doc `
+        engine/db/src/query engine/db/src/storage engine/db/src/catalog `
+        engine/db/src/db.c engine/db/src/db_internal.h engine/db/src/main.c `
+        engine/db/include/db.h `
+        engine/db/test/unit/test_json_match.c `
+        engine/db/test/integration/test_json_sql.c `
+        engine/db/test/integration/test_json_index_equiv.c `
+        engine/db/docs/MODALITIES.md engine/db/Makefile
+
+# 提交前确认没卷进 ft（输出必须为空）：
+git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "feat(kernel): 文档模态接进 SQL（JSON 列 + 路径索引 + json_match）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
@@ -1633,30 +2161,67 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 - `MM_FILES_blob` 的文件归属要更新（blob 搬家了）。
 - `MM_FILES_relational` 是新的（关系模态的适配器搬到了 `modalities/relational/`）。
 
-- [ ] **C6.1 核对 `tools/mm_profiles.mk`（不是「更新」—— B1 已一次建对）**
+- [ ] **C6.1 校准 `tools/mm_profiles.mk`（不是「核对」—— 是补全）**
 
-  ```make
-  # blob 的实现搬进了 modalities/blob/（C-3）；REPL 也归位了（C-4）
-  MM_FILES_blob := $(wildcard src/modalities/blob/*.c) src/db_blob.c src/repl_blob.c
+⚠️ **（可执行性修正）口径定死：B1 建骨架，C6.1 校准补全。**
 
-  # graph 的 REPL 归位了（C-4）
-  MM_FILES_graph := $(wildcard src/modalities/graph/*.c) src/db_graph.c \
-                    src/db_graph_walk.c src/repl_graph.c
+原文写「B1 已一次建对，本步只核对」是**错的**，而且与本计划 C5.14 / C5.15
+「此时 `mm_profiles.mk` 还不存在」**自相矛盾**。实际情形是：
 
-  # 关系模态的 SPI 适配器搬进了 modalities/relational/（C-2）
-  # 关系模态是**恒常驻**的底座型模态，所以这行只用于文档，
-  # 不参与裁剪（裁剪的是"可变模态"）。
-  MM_FILES_relational := $(wildcard src/modalities/relational/*.c) \
-                         $(wildcard src/storage/heap*.c) \
-                         src/storage/record.c src/storage/value.c
-  ```
+- W-B 的 **B1** 按设计 §9 排在 C-1~C-5 **之后**，那时 `src/db_json.c` / `src/repl_json.c` /
+  `src/repl_blob.c` / `src/repl_graph.c` 都已存在；
+- 但 B1 的清单是照 `src/modalities/<m>/` 通配写的，**顶层新文件它不会自动包含**；
+- ⇒ B1 建出来是**骨架**，`src/db_json.c` / `src/repl_json.c` 这些**必须由 C6.1 补进去**。
 
-  ⚠️ **`MM_FILES_relational` 不参与 `MM_CROP_SRCS`** —— 关系模态恒常驻，
-  所以 `MM_CROPPABLE` 里没有它。✓
+⚠️ **而且原文的片段里根本没有 `MM_FILES_doc`** —— 文档模态是 C-5 的主角，
+它的裁剪清单在这步必须写出来（否则 `MM=vector` 时 `db_json_*` 符号还在）。
 
-  ⚠️ **`repl_blob.c` / `repl_graph.c` 必须跟着搬家一起进裁剪清单** ——
-  它们是模态的实现，不裁的话 `MM=vector` 的二进制里会**残留 blob / graph 的 REPL 符号**，
-  链接期证明就作废了。
+```make
+# blob 的实现搬进了 modalities/blob/（C-3）；REPL 也归位了（C-4）
+MM_FILES_blob := $(wildcard src/modalities/blob/*.c) src/db_blob.c src/repl_blob.c
+
+# graph 的 REPL 归位了（C-4）
+MM_FILES_graph := $(wildcard src/modalities/graph/*.c) src/db_graph.c \
+                  src/db_graph_walk.c src/repl_graph.c
+
+# doc 的公开 API 与 REPL 都在顶层（C-5 新建的），必须显式列出
+MM_FILES_doc := $(wildcard src/modalities/doc/*.c) \
+                src/db_json.c \
+                src/repl_json.c
+
+# 关系模态的 SPI 适配器搬进了 modalities/relational/（C-2）
+# 关系模态是**恒常驻**的底座型模态，所以这行只用于文档，
+# 不参与裁剪（裁剪的是"可变模态"）。
+MM_FILES_relational := $(wildcard src/modalities/relational/*.c) \
+                       $(wildcard src/storage/heap*.c) \
+                       src/storage/record.c src/storage/value.c
+```
+
+⚠️ **`MM_FILES_relational` 不参与 `MM_CROP_SRCS`** —— 关系模态恒常驻，
+所以 `MM_CROPPABLE` 里没有它。✓
+
+⚠️ **`repl_blob.c` / `repl_graph.c` / `repl_json.c` 必须跟着搬家一起进裁剪清单** ——
+它们是模态的实现，不裁的话 `MM=vector` 的二进制里会**残留这些模态的 REPL 符号**，
+链接期证明就作废了。
+
+**本步的硬判据（三条，缺一不可）**：
+
+1. `MM_FILES_doc` 含 `src/db_json.c` 与 `src/repl_json.c`；
+2. `MM_FILES_blob` 含 `src/repl_blob.c`，`MM_FILES_graph` 含 `src/repl_graph.c`；
+3. 每个 `MM_FILES_<m>` 里列出的文件**全部** `Test-Path` 为真（没有列了不存在的文件 ——
+   那会让 `make` 直接报 `No rule to make target`）。
+
+```powershell
+cd C:\code\projects\engine\db
+# 逐模态核对"列出的文件都存在"
+foreach ($m in @('blob','graph','doc','ft','geo','ts','vector')) {
+    $files = (& mingw32-make -f tools/mm_profiles.mk --eval "print:" --eval "\t@echo \$(MM_FILES_$m)" print 2>$null)
+    foreach ($f in ($files -split '\s+' | Where-Object { $_ })) {
+        if (-not (Test-Path $f)) { Write-Output "!! $m 列了不存在的文件: $f" }
+    }
+}
+Write-Output "核对完毕（无 !! 行 = 通过）"
+```
 
 - [ ] **C6.2 9 个 profile 全部编译**
 
@@ -1712,7 +2277,21 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
 
   ```powershell
   cd C:\code\projects
-  git add engine/db/
+# ⚠️ （可执行性修正）不要用 `git add engine/db/` —— 会卷进上面那 4 个无关的 ft 改动。
+# 逐路径显式 add：
+git add engine/db/src/db_json.c engine/db/src/db_json.h `
+        engine/db/src/repl_json.c engine/db/src/repl_json.h `
+        engine/db/src/modalities/doc `
+        engine/db/src/query engine/db/src/storage engine/db/src/catalog `
+        engine/db/src/db.c engine/db/src/db_internal.h engine/db/src/main.c `
+        engine/db/include/db.h `
+        engine/db/test/unit/test_json_match.c `
+        engine/db/test/integration/test_json_sql.c `
+        engine/db/test/integration/test_json_index_equiv.c `
+        engine/db/docs/MODALITIES.md engine/db/Makefile
+
+# 提交前确认没卷进 ft（输出必须为空）：
+git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
   git commit -m "feat(kernel): 八模态对称化收尾（profile 归属更新 + SPI 层 purity 门禁）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
