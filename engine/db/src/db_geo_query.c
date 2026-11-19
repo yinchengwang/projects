@@ -136,23 +136,47 @@ db_err db_geo_window(DB *db, float minx, float miny, float maxx, float maxy,
     *n_out = m;
     return DB_OK;
 }
-
 /*
- * 近邻查询（精确 KNN）。
+ * ==================== 近邻查询（精确 KNN，W-D 的 D-5） ====================
  *
- * 【为什么要扫两遍树】
+ * 【这一版和上一版的关键区别：只扫一遍树】
  *
- * ① rtree_knn 给出最近的若干 row_id（**不带距离**，坑 M5-13）；
- * ② 为了填 db_geo_hit 的距离字段，要再扫一遍树把坐标捞回来。
- * 第 ② 遍是本轮的**额外成本**，如实记在这里。
+ * 上一版要扫两遍：
+ *   ① rtree_knn 给出若干 row_id（**不带距离**，坑 M5-13）；
+ *   ② 为了填 db_geo_hit.dist，再摊平整棵树把坐标捞回来。
  *
- * 树不知道哪些条目是死的 —— 死条目会混在结果里占位，所以向树要
- * "k + 死条目数 + 余量" 个候选，滤掉死条目之后才截到 k 个。
- * 余量是为了挡住"距离并列时边界上的那一个"。
+ * 实测 10 万点 k=10：rtree_knn 自己只要 **11** 次页读，
+ * 而整个 db_geo_knn 花了 **739** 次 —— **728 次全是那第二遍**。
+ *
+ * 根因不是"树没有坐标"：rtree_knn 在叶子条目上**已经算出了真实距离**
+ * （`geo_dist2(qx, qy, m.minx, m.miny)`），只是拿去排序之后丢掉了。
+ * 所以现在走 `rtree_knn_points()`，把它本来就有的一并带回来。
+ *
+ * 【顺带解决了死条目占位】
+ *
+ * 上一版要"k + 死条目数 + 16 个候选"再滤再截，因为旧实现不知道谁是死的，
+ * 而要知道死条目数就得先摊平全树 —— 那正是第二遍扫描的**动机**。
+ * 新实现在叶子条目上就过滤死条目（`id & RT_ENT_DEAD`），
+ * 所以"要 k 个"就是**k 个活点**，不需要预先知道死条目数。
+ *
+ * 【为什么还要自己再排一遍】
+ *
+ * KNN 内部的次序是 (d2 升序, row_id 升序) —— 与暴力基准同一口径，
+ * 但那种"并列"是浮点相等。本层用与 geo_brute_knn **同一个比较器**
+ * （dg_hit_cmp）再排一遍，保证"逐位对照"这件事不依赖两个实现内部怎么排。
+ * 代价是 O(k log k)，与页读相比可以忽略。
  */
 db_err db_geo_knn(DB *db, float qx, float qy, uint32_t k,
                   db_geo_hit *out, uint32_t max_out, uint32_t *n_out)
 {
+    DbInstance *inst;
+    GeoState *st;
+    KnPoint *pts = NULL;
+    u64 reads = 0;
+    u32 nid = 0;
+    u32 m;
+    int rc;
+
     if (!db || !out || !n_out)
         return DB_E_INVAL;
 
@@ -161,83 +185,45 @@ db_err db_geo_knn(DB *db, float qx, float qy, uint32_t k,
         return DB_OK;
     }
 
-    DbInstance *inst = db->inst;
+    inst = db->inst;
     if (!inst->geo_ready) {
         snprintf(db->errmsg, sizeof(db->errmsg), "%s", "几何存储还不存在");
         return DB_E_NOTFOUND;
     }
 
-    GeoState *st = inst->geo;
+    st = inst->geo;
+
+    /*
+     * 候选缓冲按 k 分配（不是 k + 死条目 + 余量）：
+     * rtree_knn_points 内部已经过滤死条目 ⇒ 最多只需要 k 个。
+     */
+    pts = (KnPoint *)calloc((size_t)k, sizeof(KnPoint));
+    if (!pts)
+        return DB_E_IO;
 
     latch_lock();
+    rc = rtree_knn_points(inst->pager, rtree_root_page(st->tree), qx, qy, k,
+                          pts, max_out, &nid, &reads);
+    st->page_reads += reads;
+    latch_unlock();
 
-    /* ① 摊平全树：拿坐标 + 死条目数 */
-    GeoTab tab;
-    int rc = db_geo_flatten(inst, &tab);
-    if (rc != OK) {
-        latch_unlock();
-        snprintf(db->errmsg, sizeof(db->errmsg), "%s", "扫描几何树失败");
-        return map_rc(rc);
-    }
-
-    u32 need = (k < tab.live) ? k : tab.live;
-
-    if (need > max_out) {
-        db_geo_tab_free(&tab);
-        latch_unlock();
+    if (rc == E_NOSPACE) {
+        free(pts);
         snprintf(db->errmsg, sizeof(db->errmsg), "%s", "近邻结果装不下（max_out 太小）");
         return DB_E_NOSPACE;
     }
-
-    /* ② 向树要候选：k + 死条目 + 余量 */
-    u32 kk = k + tab.dead_n + 16u;
-    if (kk > st->n_total)
-        kk = st->n_total;
-    if (kk < need)
-        kk = need;
-    if (kk == 0) {
-        db_geo_tab_free(&tab);
-        latch_unlock();
-        *n_out = 0;
-        return DB_OK;
-    }
-
-    u32 *ids = (u32 *)malloc((size_t)kk * sizeof(u32));
-    if (!ids) {
-        db_geo_tab_free(&tab);
-        latch_unlock();
-        return DB_E_IO;
-    }
-
-    u32 nid = 0;
-    u64 reads = 0;
-    rc = rtree_knn(inst->pager, rtree_root_page(st->tree), qx, qy, kk,
-                    ids, kk, &nid, &reads);
-    st->page_reads += reads;
-
     if (rc != OK) {
-        free(ids);
-        db_geo_tab_free(&tab);
-        latch_unlock();
+        free(pts);
         snprintf(db->errmsg, sizeof(db->errmsg), "%s", "近邻查询失败");
         return map_rc(rc);
     }
 
-    /* ③ 滤死条目 + 补距离（结果直接写进 out：need <= max_out） */
-    u32 m = 0;
-    for (u32 i = 0; i < nid && m < need; i++) {
-        u32 id = ids[i] & GEO_ROW_MASK;
-        if (id >= tab.cap)
-            continue;                    /* 不该发生：row_id 越界 */
-        if (tab.p[id].dead)
-            continue;                    /* 死条目不算 */
-        out[m].row_id = (uint64_t)id;
-        out[m].dist = geo_dist2(qx, qy, tab.p[id].x, tab.p[id].y);
-        m++;
+    /* 结果直接写进 out：nid ≤ max_out 已由 rtree_knn_points 保证 */
+    m = (nid < max_out) ? nid : max_out;
+    for (u32 i = 0; i < m; i++) {
+        out[i].row_id = (uint64_t)pts[i].row_id;
+        out[i].dist = pts[i].dist;
     }
-
-    free(ids);
-    db_geo_tab_free(&tab);
 
     /*
      * ④ 排序：(距离升序, row_id 升序)。自己再排一遍是因为本层要用
@@ -246,8 +232,7 @@ db_err db_geo_knn(DB *db, float qx, float qy, uint32_t k,
     if (m > 1)
         qsort(out, m, sizeof(out[0]), dg_hit_cmp);
 
-    latch_unlock();
-
+    free(pts);
     *n_out = m;
     return DB_OK;
 }

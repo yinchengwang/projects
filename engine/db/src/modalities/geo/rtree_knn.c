@@ -144,8 +144,9 @@ static bool kn_heap_pop(KnHeap *h, KnNode *out)
 /* ---------------- 结果集 ---------------- */
 
 typedef struct {
-    float d2;
-    u32   row_id;
+    float d2;      /* 到查询点的**平方**距离（geo_dist2 的口径） */
+    u32   row_id;  /* 已剥掉 RT_ENT_DEAD 标志 */
+    float x, y;    /* 那个点的坐标（叶子条目 MBR 退化 ⇒ minx/miny 就是它） */
 } KnHit;
 
 /*
@@ -154,7 +155,8 @@ typedef struct {
  * 结果集最多 k 个：满了之后，只有"比最后一个更好"的才挤掉它。
  * 并列时按 row_id 升序 —— 这就是 tie-break（计划 §1.2 判决 4）。
  */
-static void kn_res_insert(KnHit *hits, u32 *n, u32 k, float d2, u32 row_id)
+static void kn_res_insert(KnHit *hits, u32 *n, u32 k, float d2, u32 row_id,
+                        float x, float y)
 {
     u32 i = *n;
     u32 j;
@@ -177,6 +179,8 @@ static void kn_res_insert(KnHit *hits, u32 *n, u32 k, float d2, u32 row_id)
         hits[j] = hits[j - 1u];
     hits[i].d2 = d2;
     hits[i].row_id = row_id;
+    hits[i].x = x;
+    hits[i].y = y;
     (*n)++;
 }
 
@@ -227,26 +231,33 @@ u32 rtree_knn_npoints(Pager *pg, u32 root_page)
     return n;
 }
 
-int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
-              u32 *out_ids, u32 max_out, u32 *n_out, u64 *page_reads_out)
+/*
+ * ==================== KNN 的**唯一**实现（W-D 的 D-5） ====================
+ *
+ * 两个对外函数（rtree_knn / rtree_knn_points）都走这里 ——
+ * 一份算法、一份剪枝、一份 tie-break，只是"把什么带回去"不同。
+ *
+ * 【为什么必须合成一份】
+ * 若各写一遍，迟早会写出两套剪枝条件，然后其中一套悄悄漏点。
+ * 这类错误**不报错**，只是答案少几个 —— geo_brute_knn 存在的全部理由就是这个。
+ *
+ * hits 由调用方分配，容量必须 **≥ k**（impl 不扩容）。
+ * qx / qy / k 的合法性由调用方先判（两个对外函数都判过了）。
+ */
+static int rtk_knn_impl(Pager *pg, u32 root_page, float qx, float qy, u32 k,
+                        KnHit *hits, u32 max_out, u32 *n_out, u64 *page_reads_out)
 {
     u8 *buf = NULL;
-    KnHit *hits = NULL;
     KnHeap heap;
     u32 nhit = 0;
     u64 reads = 0;
     int rc = OK;
     u32 i;
 
-    if (pg == NULL || out_ids == NULL || n_out == NULL)
-        return E_INVAL;
+    memset(&heap, 0, sizeof(heap));
     *n_out = 0;
     if (page_reads_out != NULL)
         *page_reads_out = 0;
-    if (k == 0 || root_page == PAGE_ID_NIL)
-        return OK;
-
-    memset(&heap, 0, sizeof(heap));
 
     buf = (u8 *)malloc(PAGE_SIZE);
     if (buf == NULL)
@@ -263,27 +274,10 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
      * 结果个数 = min(k, **活点**数)；死条目不进结果集。
      *
      * ⚠️ **坑 M5-11（2026-11-04 修）**：这里**不能**再用"树里的总点数"
-     * 去做"装不装得下"的前置检查。
-     *
-     * 第一版是这么写的：
-     *     nres = (k < npoints) ? k : npoints;
-     *     if (nres > max_out) return E_NOSPACE;
-     * 而 npoints 是**总**点数（含死条目）⇒ 当"活点数 ≤ max_out < 总点数"时
-     * 会**保守地误报** E_NOSPACE —— 明明放得下却报错。
-     * 场景很现实：删掉一批点之后，用"实际活点数"当 max_out 查一次。
-     *
-     * 改成**事后精确判**：先把活点全找出来（nhit = min(k, 活点数)），
-     * 再判 nhit > max_out 才报错。
-     * 代价是"缓冲区太小"这件事要到查完才知道（白做一遍功），
-     * 但换来的是判据与真实结果个数**逐位一致** ——
-     * 这正是"装不下就报错、不静默截断"这条铁律要保证的东西。
+     * 去做"装不装得下"的前置检查 —— 那是**总**点数（含死条目），
+     * 当"活点数 ≤ max_out < 总点数"时会保守误报 E_NOSPACE。
+     * 改成**事后精确判**（见下面的 nhit > max_out）。
      */
-
-    hits = (KnHit *)calloc((size_t)(k > 0 ? k : 1u), sizeof(KnHit));
-    if (hits == NULL) {
-        free(buf);
-        return E_NOSPACE;
-    }
 
     /*
      * 根节点单独处理：把它的孩子按 mindist2 压栈（根是叶子则直接算候选点）。
@@ -306,8 +300,8 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
             if (id & RT_ENT_DEAD)
                 continue;
             /* 叶子条目的 MBR 是点的退化矩形 ⇒ 取中心就是那个点 */
-            kn_res_insert(hits, &nhit, k,
-                          geo_dist2(qx, qy, m.minx, m.miny), id & RT_ROWID_MAX);
+            kn_res_insert(hits, &nhit, k, geo_dist2(qx, qy, m.minx, m.miny),
+                          id & RT_ROWID_MAX, m.minx, m.miny);
         }
     } else {
         u16 n = rtk_nent(buf);
@@ -343,7 +337,6 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
          * mindist2 是子树 MBR 到查询点的距离下界，而 MBR 记的是
          * **所有**点（含死点）的包围盒 ⇒ 这个下界对"活点"同样成立。
          * 所以含死点的子树被剪掉只是**保守地白读**，不会漏掉活点。
-         * 换句话说：死点让"提前终止"变得不那么早，但不会变得不正确。
          */
         if (nhit == k && nd.md2 > hits[k - 1u].d2)
             break;
@@ -364,8 +357,8 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
                 /* 死条目不进结果集（与根是叶子的那条路径同一口径） */
                 if (id & RT_ENT_DEAD)
                     continue;
-                kn_res_insert(hits, &nhit, k,
-                              geo_dist2(qx, qy, m.minx, m.miny), id & RT_ROWID_MAX);
+                kn_res_insert(hits, &nhit, k, geo_dist2(qx, qy, m.minx, m.miny),
+                              id & RT_ROWID_MAX, m.minx, m.miny);
             }
         } else {
             u16 n = rtk_nent(buf);
@@ -384,24 +377,89 @@ int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
         }
     }
 
-    for (i = 0; i < nhit; i++)
-        out_ids[i] = hits[i].row_id;
     *n_out = nhit;
 
     /*
      * 精确的"装不下"判据（见上面的坑 M5-11）：
      * nhit = min(k, **活点**数) ⇒ nhit > max_out 才是真的装不下。
      */
-    if (nhit > max_out) {
+    if (nhit > max_out)
         rc = E_NOSPACE;
-        goto done;
-    }
 
 done:
     if (page_reads_out != NULL)
         *page_reads_out = reads;
-    free(hits);
     free(buf);
     free(heap.a);
     return rc;
 }
+
+/* ---------------- 两个对外入口（同一份实现的两种"带回去"） ---------------- */
+
+int rtree_knn(Pager *pg, u32 root_page, float qx, float qy, u32 k,
+              u32 *out_ids, u32 max_out, u32 *n_out, u64 *page_reads_out)
+{
+    KnHit *hits = NULL;
+    u32 nhit = 0;
+    u32 i;
+    int rc;
+
+    if (pg == NULL || out_ids == NULL || n_out == NULL)
+        return E_INVAL;
+    *n_out = 0;
+    if (page_reads_out != NULL)
+        *page_reads_out = 0;
+    if (k == 0 || root_page == PAGE_ID_NIL)
+        return OK;
+
+    hits = (KnHit *)calloc((size_t)k, sizeof(KnHit));
+    if (hits == NULL)
+        return E_NOSPACE;
+
+    rc = rtk_knn_impl(pg, root_page, qx, qy, k, hits, max_out, &nhit, page_reads_out);
+    for (i = 0; i < nhit; i++)
+        out_ids[i] = hits[i].row_id;
+    *n_out = nhit;
+
+    free(hits);
+    return rc;
+}
+
+int rtree_knn_points(Pager *pg, u32 root_page, float qx, float qy, u32 k,
+                     KnPoint *out, u32 max_out, u32 *n_out, u64 *page_reads_out)
+{
+    KnHit *hits = NULL;
+    u32 nhit = 0;
+    u32 i;
+    int rc;
+
+    if (pg == NULL || out == NULL || n_out == NULL)
+        return E_INVAL;
+    *n_out = 0;
+    if (page_reads_out != NULL)
+        *page_reads_out = 0;
+    if (k == 0 || root_page == PAGE_ID_NIL)
+        return OK;
+
+    hits = (KnHit *)calloc((size_t)k, sizeof(KnHit));
+    if (hits == NULL)
+        return E_NOSPACE;
+
+    rc = rtk_knn_impl(pg, root_page, qx, qy, k, hits, max_out, &nhit, page_reads_out);
+
+    /*
+     * ⚠️ 装不下时也把**半截结果**填出来：调用方必须按返回值判断，
+     * 不能只看 *n_out（契约见 rtree_knn.h）。
+     */
+    for (i = 0; i < nhit && i < max_out; i++) {
+        out[i].row_id = hits[i].row_id;
+        out[i].dist = hits[i].d2;
+        out[i].x = hits[i].x;
+        out[i].y = hits[i].y;
+    }
+    *n_out = nhit;
+
+    free(hits);
+    return rc;
+}
+
