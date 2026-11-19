@@ -170,9 +170,16 @@ static void t5_crc_break(void)
     if (f) {
         long rec = (long)(WAL_HDR + 7 + 4);   /* 每条记录的长度
                                               * = 28 头 + 7 载荷 + 4 crc */
-        fseek(f, rec * 2 + WAL_HDR + 1, SEEK_SET);
+        /*
+         * ⚠️ 起点必须加 **文件头长度**（v1.3 欠账 6 / W-D 的 D-1）：
+         * 记录区从文件头的下一个字节开始，不是从 0 开始。
+         * 加了头之后这里若不改，改到的是第 4 条记录的 crc ——
+         * 于是截断点落在第 3 条之后，n 会变成 3 而不是 2。
+         */
+        long at = (long)WAL_FILE_HDR_SIZE + rec * 2 + WAL_HDR + 1;
+        fseek(f, at, SEEK_SET);
         int c = fgetc(f);
-        fseek(f, rec * 2 + WAL_HDR + 1, SEEK_SET);
+        fseek(f, at, SEEK_SET);
         fputc(c ^ 0xFF, f);
         fclose(f);
     }

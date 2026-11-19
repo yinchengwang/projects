@@ -103,6 +103,60 @@ typedef enum {
 #define WAL_HDR         28u
 #define WAL_MAX_PAYLOAD 8192u
 
+/*
+ * ==================== 文件头（与记录头是两回事） ====================
+ *
+ * ⚠️ 别把 WAL_FILE_HDR_SIZE 与 WAL_HDR 混了：
+ *   WAL_HDR          = **记录头**（28 字节，每条记录一份，见上面的布局）
+ *   WAL_FILE_HDR_SIZE= **文件头**（32 字节，**整个文件一份**，在最前面）
+ *
+ * 【为什么必须有文件头】（v1.3 欠账 6 / W-D 的 D-1）
+ *
+ * 原来 wal_open 直接 fopen，**不校验格式**。于是一份格式不兼容的 WAL
+ * （旧版本写的、或者根本不是 WAL）被打开后，恢复逻辑会按自己的格式
+ * 去解析它 —— 最坏情况不是报错，而是**恢复出错误的数据**。
+ *
+ * 文件头解决的就是这件事：把「不兼容」变成**开库时的一个显式错误**。
+ *
+ * 【为什么旧格式不提供兼容读 —— 这不是偷懒，是没有依据】
+ *
+ * 文件头之前的那套格式**没有任何版本标记**。所以一份「看起来像 v0」的文件，
+ * 和一份「被改坏了的 v1」，在字节层面**无法区分**。
+ * 「兼容 v0」只能靠猜，而猜错的代价是恢复出错误数据。
+ * ⇒ 取「明确报 E_CORRUPT」：宁可让用户重建库，不可静默读错。
+ *
+ * 升级代价说白了：**加了文件头之后，旧库需要重建**（或另写迁移工具）。
+ */
+#define WAL_MAGIC          0x57414C31u   /* "WAL1" —— 认错文件名的第一道闸 */
+#define WAL_FORMAT_VERSION 1u            /* 记录格式版本；改布局必须 +1 */
+#define WAL_FILE_HDR_SIZE  32u
+#define WAL_ENDIAN_MARKER  0x01020304u   /* 字节序探针（见下面的校验说明） */
+
+/*
+ * 文件头布局（32 字节）：
+ *   0  u32 magic          必须是 WAL_MAGIC
+ *   4  u32 format_version 必须是 WAL_FORMAT_VERSION
+ *   8  u32 page_size      写日志时的 PAGE_SIZE
+ *  12  u32 endian_marker  0x01020304 —— 字节序探针
+ *  16  u32 hdr_size       必须是 WAL_FILE_HDR_SIZE
+ *  20  u32 reserved[2]    必须为 0（留给未来字段，不预留就没地方加）
+ *
+ * 【为什么 page_size 与 endian_marker 也要校验】
+ *
+ * 这两项比版本号**更容易造成静默损坏**：
+ *   - page_size 变了 ⇒ 载荷里的页内偏移全错，读出来是别的字段；
+ *   - 字节序反了   ⇒ 载荷每一个整数都错。
+ * 两者都不会报错，只会读出垃圾 —— 所以必须一起拦。
+ */
+typedef struct {
+    u32 magic;
+    u32 format_version;
+    u32 page_size;
+    u32 endian_marker;
+    u32 hdr_size;
+    u32 reserved[2];
+} WalFileHeader;
+
 typedef struct {
     u32  lsn;
     u32  prev_lsn;

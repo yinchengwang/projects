@@ -26,6 +26,61 @@
 #include "common/lockstat.h"
 
 /*
+ * ==================== 文件头的读写（v1.3 欠账 6 / W-D 的 D-1） ====================
+ *
+ * 三件事：
+ *   ① wal_file_hdr_peek  —— 只读文件开头 32 字节，**不改文件位置以外的东西**
+ *   ② wal_file_hdr_write —— 在文件**最前面**写一个头（空文件才调）
+ *   ③ wal_file_hdr_check —— 把一个读出来的头逐字段校验
+ *
+ * 【为什么校验要单独一个函数】
+ *
+ * 三个调用点（wal_open 的新库分支、老库分支、wal_reset 之后）共用同一套判据。
+ * 判据散在三处 ⇒ 早晚有一处漏字段，而漏掉的那个字段恰好就是静默损坏的来源。
+ */
+
+/* 写一个合法的文件头到 FILE 的最前面（调用方保证此刻文件是空的） */
+static int wal_file_hdr_write(FILE *f)
+{
+    u8 h[WAL_FILE_HDR_SIZE];
+
+    memset(h, 0, sizeof(h));
+    put_u32(h + 0,  WAL_MAGIC);
+    put_u32(h + 4,  WAL_FORMAT_VERSION);
+    put_u32(h + 8,  PAGE_SIZE);
+    put_u32(h + 12, WAL_ENDIAN_MARKER);
+    put_u32(h + 16, WAL_FILE_HDR_SIZE);
+    /* 20..27 是 reserved，必须为 0（memset 已经是 0）*/
+
+    if (FSEEK(f, 0, SEEK_SET) != 0)
+        return E_IO;
+    if (fwrite(h, 1, sizeof(h), f) != sizeof(h))
+        return E_IO;
+    return OK;
+}
+
+/*
+ * 校验一个读出来的头。返回 OK 或 E_CORRUPT。
+ *
+ * ⚠️ 每个字段都必须查，不能只查 magic：见 wal.h 里「为什么 page_size 与
+ * endian_marker 也要校验」那段 —— 这两项搞错不会报错，只会读出垃圾。
+ */
+static int wal_file_hdr_check(const u8 *h)
+{
+    if (get_u32(h + 0) != WAL_MAGIC)
+        return E_CORRUPT;
+    if (get_u32(h + 4) != WAL_FORMAT_VERSION)
+        return E_CORRUPT;
+    if (get_u32(h + 8) != PAGE_SIZE)
+        return E_CORRUPT;
+    if (get_u32(h + 12) != WAL_ENDIAN_MARKER)
+        return E_CORRUPT;
+    if (get_u32(h + 16) != WAL_FILE_HDR_SIZE)
+        return E_CORRUPT;
+    return OK;
+}
+
+/*
  * 每个事务的 undo 链尾。
  *
  * prev_lsn 记录"同一事务的上一条日志"，恢复阶段靠它倒序回滚。
@@ -229,18 +284,71 @@ int wal_open(const char *path, Wal **out)
         return E_IO;
     }
     strcpy(w->path, path);
-    /*
-     * 字节数从文件当前大小起算（打开一个已存在的库时，
-     * 日志里已经有记录了）。
-     */
+
+    /* ---------- 文件头校验 / 补写（v1.3 欠账 6 / W-D 的 D-1） ---------- */
     {
+        u8 h[WAL_FILE_HDR_SIZE];
         u64 sz = 0;
+
         if (FSEEK(f, 0, SEEK_END) == 0) {
             long long p = FTELL(f);
             if (p > 0)
                 sz = (u64)p;
         }
-        atomic_store(&w->bytes, sz);
+
+        if (sz == 0) {
+            /*
+             * 空文件 = 全新日志（或者被 wal_reset / 上一个会话清空过）。
+             * 这不是错误，要**写一个头** —— 否则下次开库会把它当成
+             * 「截断的头」而报错（自相矛盾）。
+             */
+            int rc = wal_file_hdr_write(f);
+            if (rc != OK) {
+                fclose(f);
+                free(w->path);
+                free(w);
+                return rc;
+            }
+            sz = WAL_FILE_HDR_SIZE;
+        } else {
+            /*
+             * 非空文件：必须**至少**装得下一个头。
+             *
+             * ⚠️ 与「空文件」是两个不同的分支，不能合并：
+             *   0 字节        ⇒ 全新库，写头
+             *   1..31 字节    ⇒ 写到一半断电，**半个头** ⇒ 报错
+             */
+            if (sz < WAL_FILE_HDR_SIZE) {
+                fclose(f);
+                free(w->path);
+                free(w);
+                return E_CORRUPT;
+            }
+            if (FSEEK(f, 0, SEEK_SET) != 0 ||
+                fread(h, 1, sizeof(h), f) != sizeof(h)) {
+                fclose(f);
+                free(w->path);
+                free(w);
+                return E_IO;
+            }
+            int rc = wal_file_hdr_check(h);
+            if (rc != OK) {
+                fclose(f);
+                free(w->path);
+                free(w);
+                return rc;
+            }
+        }
+
+        /*
+         * 字节数只算**记录区**（不含文件头）。
+         *
+         * 为什么不含：wal_bytes() 是「还在日志里的记录占多少字节」，
+         * 与 checkpoint 阈值比。把头算进去会让阈值永远多 32 字节，
+         * 而且每 reset 一次就漂一次 —— 口径不一致导致判据不可复现。
+         */
+        atomic_store(&w->bytes, (sz > WAL_FILE_HDR_SIZE)
+                                ? (sz - WAL_FILE_HDR_SIZE) : 0u);
     }
     w->scratch = malloc(WAL_HDR + WAL_MAX_PAYLOAD + 4);
     if (!w->scratch) {
@@ -301,12 +409,21 @@ int wal_reset(Wal *w)
     }
     setvbuf(w->f, NULL, _IONBF, 0);
 
+    /*
+     * ⚠️ "wb" 会把**文件头一起截掉**，所以必须立刻补写一个。
+     * 漏了这一步 = 下次开库读到「截断的头」⇒ 自己把自己锁死。
+     */
+    if (wal_file_hdr_write(w->f) != OK) {
+        wal_unlock(w);
+        return E_IO;
+    }
+
     atomic_store(&w->last_lsn, 0);
     atomic_store(&w->flushed_lsn, 0);
     atomic_store(&w->nrecords, 0);
     atomic_store(&w->max_xid, 0);
     atomic_store(&w->bytes, 0);
-    w->scan_pos = 0;
+    w->scan_pos = (long)WAL_FILE_HDR_SIZE;
     memset(w->prev, 0, sizeof(w->prev));
     wal_unlock(w);
     return OK;
@@ -595,12 +712,18 @@ int wal_truncate(Wal *w, u32 keep_lsn)
         nrec = 1;
     }
 
-    /* 把 [cut, last_end) 挪到文件头 */
+    /*
+     * 把 [cut, last_end) 挪到**文件头之后**（v1.3 欠账 6 / W-D 的 D-1）。
+     *
+     * ⚠️ dst 的起点是 WAL_FILE_HDR_SIZE，不是 0：
+     * 挪到 0 会把文件头覆盖掉 ⇒ 下次开库读到「被记录覆盖的垃圾头」⇒ 报
+     * E_CORRUPT ⇒ 库打不开。这是加文件头之后最容易踩的一处。
+     */
     long long newlen = last_end - cut;
     if (newlen > 0) {
         u8 buf[65536];
         long long src = cut;
-        long long dst = 0;
+        long long dst = (long long)WAL_FILE_HDR_SIZE;
         while (src < last_end) {
             long long n = last_end - src;
             if (n > (long long)sizeof(buf))
@@ -626,8 +749,8 @@ int wal_truncate(Wal *w, u32 keep_lsn)
         }
     }
 
-    /* 截短文件 —— 尾部那些不要的字节必须真的消失 */
-    if (WAL_TRUNCATE(w->f, newlen) != 0) {
+    /* 截短文件 —— 尾部那些不要的字节必须真的消失（长度含文件头） */
+    if (WAL_TRUNCATE(w->f, (long long)WAL_FILE_HDR_SIZE + newlen) != 0) {
         wal_unlock(w);
         return E_IO;
     }
@@ -637,9 +760,9 @@ int wal_truncate(Wal *w, u32 keep_lsn)
     atomic_store(&w->max_xid, max_xid);
     /* 保留的记录本来就已经落盘了（截断之前调用方 fsync 过） */
     atomic_store(&w->flushed_lsn, max_lsn);
-    /* 文件长度变了 → 字节数跟着变（wal_bytes() 靠它） */
+    /* 文件长度变了 → 字节数跟着变（wal_bytes() 的口径：**不含文件头**） */
     atomic_store(&w->bytes, (u64)newlen);
-    w->scan_pos = 0;
+    w->scan_pos = (long)WAL_FILE_HDR_SIZE;
 
     /* 截断本身也要落盘（文件长度变了） */
     fflush(w->f);
@@ -660,13 +783,19 @@ int wal_truncate(Wal *w, u32 keep_lsn)
 
 static int wal_scan_begin_locked(Wal *w)
 {
-    w->scan_pos = 0;
+    /*
+     * 从**文件头之后**开始扫（v1.3 欠账 6 / W-D 的 D-1）。
+     * 从 0 开始的话，那 32 字节头会被当成一条记录：
+     * lsn 会读成 WAL_MAGIC（天文数字），载荷长度是垃圾 ⇒ CRC 失败 ⇒
+     * 扫描在第一条就 E_EOF ⇒ **整份日志一个字都读不出来**。
+     */
+    w->scan_pos = (long)WAL_FILE_HDR_SIZE;
     return OK;
 }
 
 static void wal_scan_end_locked(Wal *w)
 {
-    w->scan_pos = 0;
+    w->scan_pos = (long)WAL_FILE_HDR_SIZE;
 }
 
 static int wal_scan_next_locked(Wal *w, WalRec *r)
