@@ -55,8 +55,6 @@ void ts_am_mat_free(TsAmMat *m)
         return;
     }
     free(m->rows);
-    free(m->pstart);
-    free(m->pend);
     memset(m, 0, sizeof(*m));
 }
 
@@ -96,173 +94,23 @@ static int ts_am_mat_append(TsAmMat *m, const u8 *row)
     return OK;
 }
 
-/* 追加一个选中的分区区间 */
-static int ts_am_mat_add_part(TsAmMat *m, i64 start_ms, i64 end_ms)
-{
-    if (m->nparts == m->cap_parts) {
-        u32 ncap = (m->cap_parts == 0u) ? 16u : m->cap_parts * 2u;
-        i64 *ns = (i64 *)realloc(m->pstart, (size_t)ncap * sizeof(i64));
-        i64 *ne;
 
-        if (ns == NULL) {
-            return E_NOSPACE;
-        }
-        m->pstart = ns;
-        ne = (i64 *)realloc(m->pend, (size_t)ncap * sizeof(i64));
-        if (ne == NULL) {
-            return E_NOSPACE;
-        }
-        m->pend = ne;
-        m->cap_parts = ncap;
-    }
-    m->pstart[m->nparts] = start_ms;
-    m->pend[m->nparts] = end_ms;
-    m->nparts++;
-    return OK;
-}
 
-/* ---------------- 裁剪 ---------------- */
-
-/*
- * 这个时间戳落在选中的分区里吗？
- *
- * 二分找到"最后一个 start <= t"的区间，再往回看一格 ——
- * 往回看是因为**分区区间理论上可能重叠**（改过分区窗口之后，
- * 新老窗口的边界可能套在一起，见 tsstore.h 的说明）。
- * 正常情况下往回看的那一格不重叠 ⇒ 白看一次而已。
- */
-static bool ts_am_in_parts(const TsAmMat *m, i64 t)
-{
-    u32 lo = 0;
-    u32 hi = m->nparts;
-
-    if (m->nparts == 0u) {
-        return true;        /* 不裁剪 ⇒ 全要 */
-    }
-
-    /* 二分：找第一个 start > t 的位置 */
-    while (lo < hi) {
-        u32 mid = lo + (hi - lo) / 2u;
-
-        if (m->pstart[mid] <= t) {
-            lo = mid + 1u;
-        } else {
-            hi = mid;
-        }
-    }
-    /* lo == 第一个 start > t 的下标 ⇒ lo-1 是最后一个 start <= t 的区间 */
-    while (lo > 0u) {
-        lo--;
-        if (t < m->pend[lo]) {
-            return true;    /* 区间覆盖 t */
-        }
-        /* 这一格不覆盖 t：只有当下一格也不覆盖时才继续往回看 */
-        if (lo == 0u || m->pend[lo] <= m->pstart[lo - 1u]) {
-            break;           /* 没有重叠 ⇒ 往回看也没用 */
-        }
-    }
-    return false;
-}
-
-/*
- * 选出与 [lo, hi] 相交的分区。
- *
- * ⚠️ **这里必须调 ts_prune，不能自己再写一遍判定**（坑 M6-63）。
- *
- * 之前这一层自己写了一份"分区是左闭右开 ⇒ start <= hi && end > lo"的判定，
- * 而步骤 4 的 `ts_prune` 里也有一份 —— **两套并行的裁剪实现**。
- * 后果不是"重复代码难看"，而是：
- *   - 步骤 4 的 `ts_prune` **根本没接到任何真实读路径上**（等于做完了但没上线）；
- *   - "超集铁律"这条安全判据散落在两处，改一处忘另一处 ⇒ 少给 ⇒ 静默漏数据。
- *     （反向验证已经抓到过这个形态：在这一层注入"不可解析 ⇒ 只给第一个分区"，
- *      步骤 4 的单测全绿，而 SPI 层静默丢掉了 2/3 的行。）
- *
- * 现在：判定只有 `ts_prune_window_hits()` 一处，两条读路径都走它。
- */
-static int ts_am_select_parts(TsStore *st, bool has_range, i64 lo, i64 hi, TsAmMat *m)
-{
-    TsPruneWindow *wins = NULL;
-    u32 nwins = 0;
-    TsPruneSet set;
-    int rc;
-
-    /*
-     * 没有可解析的时间谓词 ⇒ **不裁剪**（全部分区都要）。
-     *
-     * ⚠️ 这里的"不裁剪"必须表达成"集合里什么都没有"，
-     * 由 `ts_am_in_parts()` 把"空集合"解释成"全要"
-     * —— 而不是"选第一个分区"或"选前 N 个分区"（那就是子集 ⇒ 少给）。
-     */
-    if (!has_range) {
-        return OK;
-    }
-
-    rc = ts_prune_windows_of_store(st, &wins, &nwins);
-    if (rc != OK) {
-        return rc;
-    }
-
-    rc = ts_prune_set_init(&set);
-    if (rc != OK) {
-        free(wins);
-        return rc;
-    }
-
-    rc = ts_prune_select(&set, wins, nwins, lo, hi, has_range);
-    free(wins);
-    if (rc != OK) {
-        ts_prune_set_destroy(&set);
-        return rc;
-    }
-
-    /*
-     * 范围反了（t_lo > t_hi）⇒ ts_prune_select 会给出"全部分区"（all = true）。
-     * 那时**不往 m 里加任何分区** ⇒ 集合为空 ⇒ ts_am_in_parts 解释成"全要"。
-     */
-    if (!ts_prune_all(&set)) {
-        u32 nsel = ts_prune_count(&set);
-
-        for (u32 i = 0; i < nsel; i++) {
-            i64 s_ms;
-            i64 e_ms;
-            u32 state;
-
-            if (!ts_prune_window_at(&set, i, &s_ms, &e_ms, &state)) {
-                continue;
-            }
-            /*
-             * ⚠️ **DROPPED 的分区不选**（本层的老规矩，保留）：
-             * 它已经被 TTL 回收了 —— 页都还回去了，选它等于去读**别人的页**。
-             * `ts_prune_windows_of_store()` 把**所有**分区都列出来
-             * （状态带在窗口里），跳过 DROPPED 是调用方的事。
-             */
-            if (state == (u32)TS_PART_DROPPED) {
-                continue;
-            }
-            rc = ts_am_mat_add_part(m, s_ms, e_ms);
-            if (rc != OK) {
-                ts_prune_set_destroy(&set);
-                return rc;
-            }
-        }
-    }
-
-    ts_prune_set_destroy(&set);
-    return OK;
-}
 
 /* ---------------- 读数的物化 ---------------- */
 
-/* 枚举回调：把一条读数收成一行 */
-static int ts_am_collect_reading(const TsReading *r, void *vctx)
+/*
+ * 枚举回调：把一条读数收成一行。
+ *
+ * ⚠️ **这里不再做行过滤**（W-D 的 D-6.1）：
+ * 上一版在这里用 ts_am_in_parts 丢掉不要的读数 —— 而那时**所有分区都已经读过了**，
+ * 过滤只是让行数对，页读一点没省。
+ * 现在是 ts_prune_scan 在**分区级**跳过 ⇒ 到这里来的每一条都是要的。
+ */
+static int ts_am_collect_row(const TsReading *r, void *vctx)
 {
     TsAmMat *m = (TsAmMat *)vctx;
     u8 row[TS_READING_ROW_BYTES];
-
-    /* 裁剪：不在选中分区里的读数直接丢掉 */
-    if (!ts_am_in_parts(m, r->time)) {
-        return OK;
-    }
 
     put_u64(row + TS_ROW_TIME_OFF, (u64)r->time);
     put_u64(row + TS_ROW_TAG_OFF, (u64)r->tag);
@@ -270,8 +118,47 @@ static int ts_am_collect_reading(const TsReading *r, void *vctx)
     return ts_am_mat_append(m, row);
 }
 
+/*
+ * 物化读数（W-D 的 D-6.1 改造：从"全扫 + 行过滤"改成"分区级跳过"）。
+ *
+ * ==================== 改之前是什么样 ====================
+ *
+ * 上一版：
+ *   ① ts_am_select_parts 算出"要哪几个分区的区间"；
+ *   ② ts_store_scan 把**所有分区**的页读一遍；
+ *   ③ 逐行用 ts_am_in_parts 过滤掉不要的。
+ *
+ * 行数是**对的**，但一页都没少读 —— 实测 3 个分区、查其中 1 天：
+ *
+ *   无 WHERE     900 行 / 6 页
+ *   只要第 1 天   300 行 / 6 页   ← 行对了，IO 一页没降
+ *
+ * 也就是说「时间谓词参与分区裁剪」这句话在**行数上成立、在 IO 上不成立**。
+ * 而 T1–T4 那套判据测的是 bench 直调 `ts_prune_scan`，绕开了这条真实路径 ——
+ * 所以它们**证明不了**这件事。
+ *
+ * ==================== 改之后 ====================
+ *
+ * 走 `ts_prune_scan`：它先算裁剪集合，然后对**不在集合里的分区整段跳过**
+ *（连页都不碰）。行过滤那一步就不再需要了 —— 少读的就是跳过的那些分区。
+ *
+ * 【为什么返回值必须与老的实现完全一致】
+ *
+ * 两条路径的行集合必须相同：`ts_store_scan` 是"创建序"，
+ * `ts_prune_scan` 是"时间序"。这个差别在**本层看不见** ——
+ * 物化之后 `scan_next` 按输出序号给 RID，执行器不依赖顺序。
+ * 所以换路径不改变任何可见行为，只改变 IO。
+ *
+ * 【不设范围时必须与全扫全等】
+ *
+ * `has_range == false` ⇒ `ts_prune_select` 给出 all = true ⇒
+ * 每个分区都允许 ⇒ 与 `ts_store_scan` 读到的**集合**完全一样（坑 M6-48）。
+ * 这一条由 test_ts_page_prune.c 的第 1 项钉住。
+ */
 int ts_am_mat_readings(TsStore *st, bool has_range, i64 lo, i64 hi, TsAmMat *m)
 {
+    Pager *pg;
+    u64 reads = 0;
     int rc;
 
     if (!st || !m) {
@@ -280,12 +167,21 @@ int ts_am_mat_readings(TsStore *st, bool has_range, i64 lo, i64 hi, TsAmMat *m)
 
     ts_am_mat_init(m, TS_READING_ROW_BYTES);
 
-    rc = ts_am_select_parts(st, has_range, lo, hi, m);
-    if (rc != OK) {
+    pg = ts_store_pager(st);
+    if (pg == NULL) {
         ts_am_mat_free(m);
-        return rc;
+        return E_INVAL;
     }
-    rc = ts_store_scan(st, ts_am_collect_reading, m);
+
+    rc = ts_prune_scan(pg, st, lo, hi, has_range, ts_am_collect_row, m, &reads);
+
+    /*
+     * ⚠️ 页读要记进存储自己的计数器：诊断口径是
+     * "这个模态累计读了多少页"（db_ts_page_reads 读的就是它）。
+     * 不记的话裁剪省的页在读路径上看不出来 —— 那 D-6.1 就没有可测的判据。
+     */
+    ts_store_note_reads(st, reads);
+
     if (rc != OK) {
         ts_am_mat_free(m);
         return rc;

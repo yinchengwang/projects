@@ -531,3 +531,17 @@ u64 ts_store_page_reads(const TsStore *st)
         return 0;
     return st->page_reads + ts_dir_page_reads(st->dir);
 }
+
+Pager *ts_store_pager(const TsStore *st)
+{
+    if (!st)
+        return NULL;
+    return st->pg;
+}
+
+void ts_store_note_reads(TsStore *st, u64 reads)
+{
+    if (!st)
+        return;
+    st->page_reads += reads;
+}

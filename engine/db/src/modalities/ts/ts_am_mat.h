@@ -48,22 +48,20 @@ extern "C" {
 #define TS_PROW_PAGES_OFF 32u
 
 /*
- * 一次物化的结果：行字节流 + 裁剪用的分区区间表。
+ * 一次物化的结果：行字节流。
  *
  * 行是变长吗？不是 —— 两种表各自的行宽是固定的，
  * 所以这里存的是"每行 row_bytes 字节"的连续块。
+ *
+ * ⚠️ 这里**不再**存"选中的分区区间表"：W-D 的 D-6.1 把裁剪从
+ * "全扫之后逐行过滤"改成"分区级整段跳过"（走 ts_prune_scan），
+ * 于是那些区间只在裁剪那一步内部有用，物化结果里不需要留。
  */
 typedef struct {
     u8 *rows;        /* 行字节流 */
     u32 nrows;
     u32 cap_rows;
     u32 row_bytes;
-
-    /* 选中的分区区间（按 start 升序）；nparts == 0 ⇒ 不裁剪 */
-    i64 *pstart;
-    i64 *pend;
-    u32  nparts;
-    u32  cap_parts;
 } TsAmMat;
 
 /* 初始化（row_bytes 决定行宽） */

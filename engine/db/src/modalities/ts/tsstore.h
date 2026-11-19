@@ -196,6 +196,32 @@ const struct TsDir *ts_store_dir(const TsStore *st);
 /* 累计逻辑页读（与 db_geo_page_reads / db_ft_page_reads 同一口径） */
 u64 ts_store_page_reads(const TsStore *st);
 
+/*
+ * 存储持有的页分配器（W-D 的 D-6.1 需要）。
+ *
+ * 【为什么需要这个出口】
+ *
+ * 能**整分区跳过页链**的 `ts_prune_scan(pg, st, ...)` 要一个 `Pager*`，
+ * 而 Pager 在 TsStore 内部（不入对外契约）。
+ * 真实查询路径（`ts_am_mat_readings`）只有 TsStore ⇒ 没有这个出口就接不上，
+ * 于是"时间谓词参与分区裁剪"只能停在 bench 里，真实查询一页都不少读。
+ *
+ * ⚠️ **只读用途**：调用方拿到它只能传给读路径（ts_prune_scan / ts_column_scan）。
+ * 分配 / 回收页仍由模态内部的写路径负责。
+ */
+Pager *ts_store_pager(const TsStore *st);
+
+/*
+ * 记一笔页读（读路径自己走 ts_prune_scan 时用）。
+ *
+ * 【为什么要有这个入口】
+ *
+ * `ts_prune_scan` 拿到的 pg 是外部传的，它读了多少页只能由调用方回收；
+ * 而"时序模态累计读了多少页"这个诊断数字在 TsStore 里（`db_ts_page_reads` 读它）。
+ * 不记的话，裁剪省下来的页在读路径上看不出来 —— D-6.1 就没有可测的判据。
+ */
+void ts_store_note_reads(TsStore *st, u64 reads);
+
 #ifdef __cplusplus
 }
 #endif
