@@ -17,9 +17,11 @@
 > | D-1 WAL 文件头 | ✅ 完成 | `5d1ae2d4a` + `ea26666d8` | 拆成两个提交：先做文件头，再把读写拆出 `wal_hdr.{h,c}`（原实现把 `wal.c` 推到 889 行，破了 800 行硬规则） |
 > | D-2 FT 精确页数上界 | ✅ 完成 | `c2def3080` | **做法改了**：不用 `FPH_USED` 累加，改成逐词模拟写入器分页（见 Task D-2 的执行修正） |
 > | D-3 测量口径 | ✅ 完成 | `07ad8872` | 拆成两个提交（与 D-1 拆分同批推送）；C7 变三个子判据、新增 `ts_bench_io` |
-> | D-4 ~ D-7 | ⬜ 未开始 | — | — |
+> | D-4 tombstone 撤销 | ✅ 完成 | `1168c4284` | **歧义不存在**（见 Task D-4 的确认记录）；
+> | | | | 但确认过程撞出**运行时 ROLLBACK 不撤 FT** 的真缺陷，一并修了（D-4b） |
+> | D-5 ~ D-7 | ⬜ 未开始 | — | — |
 >
-> 全量门禁当时的数字随之变成 **97 个测试 97 通过**（D-1 加 1 个 `test_wal_header`、D-2 加 1 个 `test_ft_merge_pages`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
+> 全量门禁当时的数字随之变成 **98 个测试 98 通过**（D-1 加 `test_wal_header`、D-2 加 `test_ft_merge_pages`、D-4 加 `test_ft_tomb_txn`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
 
 ---
 
@@ -93,7 +95,8 @@ engine/db/
 **新增**
 - `engine/db/bench/ts_bench_io.c` —— 统一 IO 口径 benchmark（D-3）
 - `engine/db/test/unit/test_wal_header.c` —— WAL 文件头单元测试（D-1）
-- `engine/db/test/integration/test_ft_tomb_xid.c` —— tombstone 跨事务撤销集成测试（D-4）
+- `engine/db/test/integration/test_ft_tomb_txn.c` —— tombstone 事务接线测试（D-4）
+- `engine/db/src/db_ft_txn.c` —— 连接级 FT 事务接线（D-4b）
 - `engine/db/test/integration/test_ts_freelist.c` —— ts 空闲栈落盘集成测试（D-6）
 
 **修改**
@@ -550,93 +553,122 @@ engine/db/
 
 ---
 
-## Task D-4：FT tombstone 撤销精确到事务
+## Task D-4：FT tombstone 撤销 —— **原计划的歧义不存在，但撞出另一个真缺陷**
 
-> **现状**：`ft_tomb.h:80` 的契约是
-> `int ft_tomb_page_remove(Pager *pg, u32 page_id, u32 doc_id, u32 lsn);`
-> —— **按 doc_id 找**。若同一 doc_id 被不同事务重复删除，
-> 恢复期按值撤销**理论上可能撤销掉错误事务的那条记录**。
+> ⚠️ **（执行修正，2026-11-19）本 Task 的结论与原计划相反，且多修了一个原计划没有的东西**
+>
+> 原计划的判断是「同一 doc_id 被不同事务重复删除 ⇒ 恢复期按值撤销可能撤错事务」，
+> 解法是把 tombstone 页条目从 `u32 doc_id` 改成 `(doc_id, xid)` 双字段。
+>
+> 按 D-4.1 的要求先做确认，实测结论是**这个歧义不可能发生**，
+> 而确认过程里撞出一个原计划**只字未提**的真缺陷。
 
-**Files**
-- 修改：`engine/db/src/modalities/ft/ft_tomb.c`、`engine/db/src/modalities/ft/ft_tomb.h`
-- 新增：`engine/db/test/integration/test_ft_tomb_xid.c`
+### D-4.1 的确认结果（结论决定 Task 规模，所以这一步不能跳）
 
-**Interfaces**
-- 修改（`ft_tomb.h`）：
-  ```c
-  /* tombstone 页里的一个条目从「只有 doc_id」变成「(doc_id, xid)」 */
-  int ft_tomb_page_remove(Pager *pg, u32 page_id, u32 doc_id, u32 xid, u32 lsn);
-  ```
-- 修改（`ft_tomb.c`）：页内条目布局从 `u32 doc_id` 变成 `u32 doc_id + u32 xid`（8 字节）
+三个探针（跑完即删，工作区不留痕）：
 
-- [ ] **D-4.1 先把歧义具体化（写下来，别停在"理论上"）**
+**① 重复删除写不写第二条 WAL 记录？—— 不写。**
 
-  ⚠️ **先确认这个歧义真的会发生**，而不是照着清单直接改。查两件事：
+`ft_index.c:479` 的 `if (ft_tomb_is(ix, doc_id)) return OK;` 在调
+`ft_tomb_append` **之前**就返回了 ⇒ 内存检查先于写盘。实测：
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  # ① 重复删除同一 doc_id 的路径：写入前有没有"已存在就跳过"的检查？
-  Select-String -Path src/modalities/ft/ft_tomb.c -Pattern 'ft_tomb_is|ft_tomb_insert|已经删过' |
-      ForEach-Object { "L{0}: {1}" -f $_.LineNumber, $_.Line.Trim() }
-  ```
+```
+删除前 WAL 记录数 = 37
+第一次删除后 = 41（增量 4）
+第二次删除后 = 41（增量 0）   ← 重复删除一条记录都不写
+```
 
-  实测已知：`ft_tomb.c:143-144` 的 `ft_tomb_insert` 里有
-  `if (pos < ix->n_tombs && ix->tomb[pos] == doc_id) return 0;`
-  —— **内存态**已经做了「再删一次是合法的空操作」。
+⇒ 同一页里**永远不会出现两条相同的 doc_id** ⇒ `ft_tomb_page_find` 按值查必然
+唯一命中 ⇒ **原计划担心的「撤错事务」不可能发生**。
+⇒ 原计划 D-4.2（页格式加 `xid`）**不需要做**；`ft_segment.{c,h}` 也不用动。
 
-  ⇒ **关键问题**：这个检查在**写 WAL 之前**还是之后？
-  - 若在**写 WAL 之前** ⇒ 第二次删除**根本不会产生 WAL 记录** ⇒
-    **撤销时不会撤错** ⇒ 这个歧义**不存在**，本 Task 可以降级为「加一条断言锁住这个前提」。
-  - 若在**写 WAL 之后** ⇒ 真的有歧义 ⇒ 要按下面的步骤改。
+**② 事务内删除后 ROLLBACK，文档会不会恢复？—— 会话内不会，重开后才会。**
 
-  ⇒ **这一步的结论决定 Task 的规模**，不要跳过。
+```
+初始：检索 alpha 命中 1 篇
+txn 内删除后：命中 0 篇
+ROLLBACK 后（本会话）：命中 0 篇     ← 期望 1，实际 0
+checkpoint 后（本会话）：命中 0 篇
+关库重开：命中 1 篇                  ← 又对了
+```
 
-- [ ] **D-4.2 若歧义存在：tombstone 页格式加 xid**
+⇒ **真缺陷**：同一个会话里先查不到、关一下库又查得到。
 
-  页内条目从 `u32 doc_id`（4 字节）改成 `u32 doc_id + u32 xid`（8 字节）。
-  撤销改成按 `(doc_id, xid)` 匹配。
+### 根因
 
-  ⚠️ **磁盘格式变了** ⇒ 必须回答「旧库怎么活」：
-  - 选项 A：**旧页不认** ⇒ 开库报 `E_CORRUPT`（明确报错，不静默读错）；
-  - 选项 B：**加页格式版本号**，旧页按 v1 读（只按 doc_id 撤销 —— 旧数据本来就没有歧义，
-    因为旧格式下重复删除本来就不写第二条记录）。
+运行时 ROLLBACK（`db_stmt.c` 的 `txn_end_abort`）只动 txn 表（clog 标 ABORTED），
+从来没接到 FT 上。FT 的两份状态都没人撤：内存集合 `ix->tomb`、tombstone 页里那一条。
+崩溃恢复那一路是对的（WAL 钩子按 `REC_HOOK_UNDO` 调 `ft_tomb_page_remove`），
+但运行时这一路**零调用方**。重开之所以对，正是因为走的是恢复那一路。
 
-  ⇒ **取选项 B**。理由：旧格式的歧义不存在（见 D-4.1），
-  所以旧页可以安全地按 v1 读，不需要让用户重建库。
-  ⇒ 页格式版本号放哪：tombstone 页的**页类型**已经是专属的（`PT_FT_*`），
-  用**页内偏移 0~3**（原本存 `FTM_COUNT` 之类）改存版本号，
-  或在页的自定义区里加 —— 选一个**当前格式没用到的偏移**，
-  并在注释里写明「这个偏移从 v2 开始是版本号」。
+**Files**（实际改动的）
+- 新增：`engine/db/src/db_ft_txn.c` —— 连接级事务接线（163 行）
+- 新增：`engine/db/test/integration/test_ft_tomb_txn.c` —— 4 项验收（245 行）
+- 修改：`engine/db/src/db_ft.c` —— `db_ft_delete` 退化成转发薄壳（796 → 773 行）
+- 修改：`engine/db/src/db_stmt.c` —— `txn_end_commit` 清、`txn_end_abort` 撤
+- 修改：`engine/db/src/db_instance.c` —— `db_close` / `db_abandon` 也清
+- 修改：`engine/db/src/db_internal.h` —— `struct DB` 加 `ft_del` 字段 + 4 个声明
+- 修改：`engine/db/src/modalities/ft/ft_index.{c,h}` —— 新增 `ft_index_undelete`
+- 修改：`engine/db/src/modalities/ft/ft_tomb.c` + `ft_index_internal.h` —— 新增 `ft_tomb_remove_doc`
+- ~~`ft_segment.c` / `ft_segment.h`~~ —— **不再需要**（不改页格式）
 
-- [ ] **D-4.3 加崩溃恢复集成测试**
+**Interfaces**（实际新增的，不是原计划的 `(doc_id, xid)` 双字段）
+- `db_ft_txn_track(DB *, u32 doc_id)` —— 记「本事务删了这一篇」（内部判重）
+- `db_ft_txn_rollback(DB *)` —— 回滚时逐个撤（页 + 内存集合）
+- `db_ft_txn_clear(DB *)` —— 提交 / 关连接时清
+- `ft_index_undelete(FtIndex *, u32 doc_id)` —— 撤销一次删除（合法空操作幂等）
+- `ft_tomb_remove_doc(FtIndex *, u32 doc_id)` —— 页那一半（找页号 + 只撤那一条）
 
-  新建 `engine/db/test/integration/test_ft_tomb_xid.c`，至少覆盖：
+- [x] **D-4.1 先把歧义具体化** —— 已做，结论：**歧义不存在**（证据见上）
 
-  | 场景 | 断言 |
+- [x] **D-4.2 若歧义存在：页格式加 xid** —— ❌ **取消**（前提不成立）
+
+  ⚠️ 这一条的取消不是「先不做」，是「做了反而有害」：
+  改页格式要写迁移或明确报 `E_CORRUPT`，代价真实，收益为零。
+  前提被钉在 D-4.3 的第 1 项测试上 —— 哪天那个提前返回被挪走，测试立刻红。
+
+- [x] **D-4b 补上「运行时 ROLLBACK 撤 FT」**（原计划没有这一项，新增）
+
+  | 取舍 | 为什么 |
   |---|---|
-  | 事务 A 删除 doc 5 并提交 | 恢复后 tombstone 含 doc 5 |
-  | 事务 A 删除 doc 5，事务 B 删除 doc 5，**B 回滚** | 恢复后 tombstone **仍含** doc 5 |
-  | 事务 A 删除 doc 5，事务 B 删除 doc 5，**都提交** | 恢复后 tombstone 含 doc 5，且**只有一条** |
-  | 在两个 WAL 边界分别崩溃 | 恢复后 tombstone 数量与归属正确 |
+  | 记在**连接**上，不记在实例上 | 实例是多连接共享的，记在那里会让 A 的回滚撤掉 B 的删除 —— 比原缺陷更严重的数据丢失 |
+  | **先撤页，再撤内存集合** | 与 `ft_index_delete` 的「先落盘再进内存」相反，但同一个理由：页是权威存储。页撤成功才动内存集合，否则内存说「没删」、页里还留着 ⇒ 下次开库那篇又被删掉 |
+  | **不写新的 WAL 记录** | 那条 `WAL_FT_TOMB_APPEND` 本来就在日志里，它所属的事务马上被打成 ABORTED，崩溃恢复按 clog 判定未提交 → 自动 undo。运行时先撤一遍只是「提前做同样的事」。代价是运行时撤销改了页但没有日志记录；崩溃在「已改页未落盘」之间时重开按 WAL 重放再 undo，结果仍正确 |
+  | 记录失败不报错 | 报错会让调用方以为删除没生效，而实际页与日志都已经写了。只放弃回滚能力 |
 
-  ⚠️ 「崩溃」怎么模拟：查现有测试里有没有崩溃注入的机制
-  （`grep -rn "crash\|fault\|kill_at" test/`）。
-  若没有，就用「写完 WAL 但不提交 ⇒ 关库 ⇒ 重开」来模拟未提交状态。
+- [x] **D-4.3 加崩溃恢复集成测试** —— 已做，`test_ft_tomb_txn.c`（4 项）
 
-- [ ] **D-4.4 提交**
+  | 场景 | 断言（机械可判） |
+  |---|---|
+  | 连删两次同一 doc_id | `ft_index_ntombstones(ix) == 1`（**钉住 D-4.1 的前提**） |
+  | BEGIN → 删除 → ROLLBACK | 同一会话里 `hits == 1`（修前是 0，红） |
+  | BEGIN → 删除 → COMMIT | 同一会话里 `hits == 0`（防「过度撤销」） |
+  | 会话内 vs 重开后 | 两条路径给出同一答案（回滚=1、提交=0） |
 
-  ```powershell
-  cd C:\code\projects
-  git add engine/db/src/modalities/ft/ft_tomb.c
-  git add engine/db/src/modalities/ft/ft_tomb.h
-  git add engine/db/test/integration/test_ft_tomb_xid.c
-  git diff --cached --name-only
-  git commit -m "fix(ft): tombstone 撤销精确到事务 —— 同一 doc_id 重复删除不撤错记录"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  ⚠️ **变异验证**：把 `db_ft_txn_rollback` 调用换成 `int ft_rc = OK`
+  （= 回滚不撤 FT），测试第 2、4 项立刻红；改回绿。
+  这证明四条断言真的在测那件事，不是空转。
+
+- [x] **D-4.4 提交** —— `1168c4284`（10 个文件，+612/−28）
+
+  ⚠️ 踩了一个自己造的坑：`db_stmt.c` 在仓库里是 **CRLF**，我的脚本把它写成了
+  裸 LF，diff 一度显示 **901 行变更**。转回 CRLF 之后真实 diff 是 **13 增 4 删**。
+  教训：改文件前先看行尾，别整文件重写。
+
+### 如实记账的已知限制（本 Task 明确不修）
+
+**① 两个并发事务删同一篇文档**：A 未提交地删 5，B 删 5（此时 5 已在集合里 ⇒
+B 是个空操作、不记录），B 提交，A 回滚 ⇒ 5 被 A 撤掉 ⇒ B 那次删除的意图没了。
+这不是本次改动引入的：整个内核「删除是物理删除、不做写冲突检测」。
+WAL 那一路的结论与它一致（A 的记录被 undo 撤掉，B 根本没有记录），所以两条路径
+**不会互相矛盾** —— 但这确实不是「谁先谁赢」的语义。要真正的并发删除语义
+需要行存 + 版本，另立一项。
+
+**② 回滚撤不回已被合并物理丢弃的文档**：若删除之后发生过合并（合并把
+tombstone 的文档物理丢弃），撤销只能撤「标记」，撤不回内容。合并走系统事务
+（xid=0），与用户事务回滚不相干 ⇒ 这是长期语义，不是缺陷。
 
 ---
-
 ## Task D-5：geo KNN 去掉第二遍全树扫描
 
 > **现状**：`db_geo_query.c:140-152` 的注释自己承认「为什么要扫两遍树」：
