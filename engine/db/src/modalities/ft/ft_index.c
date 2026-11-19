@@ -646,6 +646,10 @@ u32 ft_index_nsegs(const FtIndex *ix)
 {
     return (ix == NULL) ? 0 : ix->n_segs;
 }
+FtPagePool *ft_index_seg_pool(FtIndex *ix)
+{
+    return (ix == NULL) ? NULL : ix->pool;
+}
 u32 ft_index_ndocs(const FtIndex *ix)
 {
     u32 n = 0;

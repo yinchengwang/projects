@@ -36,6 +36,7 @@
 #include "common/latch.h"
 #include "common/loghook.h"
 #include "common/types.h"
+#include "modalities/ft/ft_segment.h"
 #include "modalities/ft/ft_tomb.h"
 #include "storage/page.h"
 
@@ -452,6 +453,71 @@ int db_ft_open(DbInstance *inst)
      * 关库时（db_ft_close）会再写一次。
      */
     dft_root_sync(inst);
+
+    /*
+     * ==================== 开机页回收（v1.3 欠账 1） ====================
+     *
+     * 【为什么必须在这里做】
+     *
+     * 段级的空闲页池是**纯内存**的：合并提交时把老段的页还进池、新段再从池里取。
+     * 进程一退出，池就空了 —— 那些"已经没人引用的 FT 页"在文件里白占着位置，
+     * 下次开库时新段只能往文件尾追加，文件随合并次数单调增长。
+     *
+     * 【判据由谁给】
+     *
+     * 段层知道"一个段权威地占了哪些页"（段头页 + 连号字典区 + 倒排页链），
+     * 所以 ft_segment_reclaimable_pages 负责**找出**垃圾页；
+     * 把页装进池是索引层的事（ft_index_seg_pool）。
+     * 两层各做自己懂的，不互相掺。
+     *
+     * 【时机】
+     *
+     * 必须在 ft_index_recover **之后** —— 恢复会把存活的段装进索引，
+     * 在那之前调用会把"其实还在用的页"判成垃圾（那是最坏的一种错误：
+     * 垃圾页被发给新段，两份数据互相踩，且不报错）。
+     *
+     * 【容量】
+     *
+     * 池是升序页号数组，回收量上限取当前页数的 1/2 —— 一个库不可能
+     * 有一半以上页是垃圾（存活段至少占一半）。多出来的页这一轮不收，
+     * 下次开库再收；宁少收，不能因为分配失败把开库拖垮。
+     */
+    {
+        u32 npages = pager_npages(inst->pager);
+        u32 nsegs = ft_index_nsegs(ix);
+        FtPagePool *pool = ft_index_seg_pool(ix);
+
+        if (pool != NULL && npages > 0 && nsegs > 0) {
+            u32 cap = npages / 2u;
+            if (cap > 0) {
+                FtSegment **segs = (FtSegment **)calloc(nsegs, sizeof(FtSegment *));
+                u32 n = 0;
+                if (segs != NULL) {
+                    for (u32 i = 0; i < nsegs; i++) {
+                        const FtSegment *seg = NULL;
+                        if (ft_index_seg_at(ix, i, &seg) == OK && seg != NULL) {
+                            /* reclaimable_pages 只读，不需要改这段 */
+                            segs[n++] = (FtSegment *)seg;
+                        }
+                    }
+                }
+                if (n > 0) {
+                    u32 *garbage = (u32 *)calloc(cap, sizeof(u32));
+                    if (garbage != NULL) {
+                        u32 found = ft_segment_reclaimable_pages(
+                            inst->pager, segs, n, garbage, cap);
+                        for (u32 i = 0; i < found; i++) {
+                            (void)ft_pool_add(pool, garbage[i]);
+                        }
+                        free(garbage);
+                    }
+                    /* 分配失败就这轮不收 —— 池空着不影响正确性，只是浪费空间 */
+                }
+                free(segs);
+            }
+        }
+    }
+
     return OK;
 }
 

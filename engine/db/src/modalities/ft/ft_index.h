@@ -123,6 +123,21 @@ int ft_index_merge(FtIndex *ix, u32 xid, u32 *merged_out);
 
 /* 统计 */
 u32 ft_index_nsegs(const FtIndex *ix);
+
+/*
+ * 段级的空闲页池（开机回收用，v1.3 欠账 1）。
+ *
+ * 【给谁用】db_ft_open 在恢复之后调 ft_segment_reclaimable_pages 找出
+ * "没人引用的 FT 页"，然后逐个 ft_pool_add 进这个池 —— 否则那些页
+ * 只在内存态里"知道可以复用"，重启一次就全忘，文件只涨不缩。
+ *
+ * 【为什么暴露指针而不是提供"回收"函数】
+ * 回收的**判据**（哪些页没人引用）属于段层（它要遍历段头/字典区/倒排链），
+ * 而池的**装入**属于这一层。硬塞一个函数进来会把两层的知识缝在一起；
+ * 分开之后各自只做自己懂的。
+ */
+FtPagePool *ft_index_seg_pool(FtIndex *ix);
+
 u32 ft_index_ndocs(const FtIndex *ix);        /* 各段 doc_count 之和（含 tombstone 的） */
 u32 ft_index_ntombstones(const FtIndex *ix);
 u64 ft_index_page_reads(const FtIndex *ix);
