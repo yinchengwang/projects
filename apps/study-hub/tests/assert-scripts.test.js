@@ -132,6 +132,38 @@ CARDS.forEach(function (card) {
     }
   })
 
+  test(card.stem + " 的断言脚本回显 demo 输出（契约 §3.5 的两行定界）", function (t) {
+    if (!LEARNING_ROOT || !PYTHON) {
+      t.skip("缺少 learning 仓或 python，跳过")
+      return
+    }
+    const dir = makeSandbox(card.stem)
+    try {
+      const res = runAssert(dir, card.stem)
+      const out = decode(res.stdout)
+      assert.equal(res.status, 0, "断言脚本失败：" + out + decode(res.stderr))
+
+      // 单元页右栏靠这两行定界把 demo 输出切出来显示——没有它就只剩断言结论
+      const START = "─── demo 输出开始 ───"
+      const END = "─── demo 输出结束 ───"
+      const i = out.indexOf(START)
+      const j = out.indexOf(END)
+      assert.ok(i !== -1 && j !== -1 && j > i, "缺少 demo 回显定界：\n" + out)
+
+      // 定界之间必须真有 demo 的内容（不能是空的，否则回显等于没做）
+      const body = out.slice(i + START.length, j).trim()
+      assert.ok(body.length > 50, "回显区内容过短（" + body.length + " 字符），demo 输出没被回显")
+
+      // 回显的是 demo 自己的输出：它里面的第一个 CHECKS 结论串必须出现在回显区
+      assert.ok(
+        body.indexOf("[[OK]]") !== -1 || body.indexOf("═══") !== -1,
+        "回显区里看不到 demo 的输出痕迹：\n" + body.slice(0, 200)
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test(card.stem + " 的断言脚本能抓住被改坏的 demo（变异测试）", function (t) {
     if (!LEARNING_ROOT || !PYTHON) {
       t.skip("缺少 learning 仓或 python，跳过")
