@@ -103,6 +103,49 @@ u32 ft_dict_writer_start(const FtDictWriter *w);
 u32 ft_dict_writer_count(const FtDictWriter *w);
 u32 ft_dict_writer_last_lsn(const FtDictWriter *w);
 
+/* ---------------- 页数模拟器（W-D 的 D-2） ---------------- */
+
+/*
+ * 按**写入器的真实分页规则**模拟"这批输入要占几页"。
+ *
+ * 【为什么要有它 —— 老公式为什么不够】
+ *
+ * 合并出新段之前要先算"新段要占多少页"，好一次性预留一块连号的字典区。
+ * 老公式是「字节数 ÷ (每页容量 − 每页最多浪费的字节) + 1」，
+ * 那个减数（35 / 最长词条）是**猜出来的最坏余量**：
+ * 它假设每页都刚好浪费掉一整个最长词条的空间，而实际浪费通常小得多。
+ *
+ * 后果两头都有：算多了 → 池里凑不出那么长的连号段 → 每轮合并都向文件尾
+ * 追加 → 文件随合并次数线性增长（页回收等于白做）；算少了 → 写入时页块
+ * 耗尽 → E_NOSPACE。
+ *
+ * 【为什么"逐条模拟"是精确的】
+ *
+ * 写入器的打包规则是**确定的**，没有任何随机或数据依赖的余量：
+ *   倒排页：本页剩余 < 12 + 12 就换页；否则放入 min(剩余条数, 容量) 条，
+ *           每个词在本页还要 12 字节 run 头；词没写完就在新页从 FPH_DATA
+ *           处另起一个续接 run 头（**也要 12 字节**）。
+ *   字典页：used + (词条长 + 4) > FT_DICT_CAPACITY 就换页。
+ * 照这个规则走一遍，得到的页数与真正写出来的**逐个相等**。
+ *
+ * ⚠️ 这两条规则**必须与 ft_writer.c 的 ft_post_writer_put /
+ * ft_dict_writer_put 保持一致**。哪天写入器改了分页规则，这里要跟着改，
+ * 否则算出来的上界会与实际不符（上界小于实际 ⇒ 合并失败）。
+ * 一致性由 test_ft_merge_pages.c 的四条边界测试盯着。
+ */
+typedef struct {
+    u32 pages;   /* 已开的页数（0 = 一页都还没开，空输入就是 0） */
+    u32 used;    /* **当前页**数据区已用字节（不含页头） */
+} FtPageSim;
+
+void ft_pagesim_reset(FtPageSim *s);
+
+/* 追加 n 条 posting（同一个词）。n == 0 时不占页（空词不进段）。 */
+void ft_pagesim_add_postings(FtPageSim *s, u32 n);
+
+/* 追加一个词条（词长 term_len）。 */
+void ft_pagesim_add_dict_entry(FtPageSim *s, u32 term_len);
+
 /* ---------------- 段头页 ---------------- */
 
 /*

@@ -55,42 +55,46 @@
 /* ---------------- 页数上界：先数清楚（坑 M4-51） ---------------- */
 
 /*
- * 走一遍源段的字典，把新段要写的**字节数**数清楚，换算成页数。
+ * 走一遍源段的字典，算出新段要占的**页数**（W-D 的 D-2）。
  *
  * 【为什么要专门数一遍】
  *
  * 老的做法（ft_seg_bound_merge）：上界 = Σ 源段的页数 × 每页容量。
  * 它把"源段的总容量"当成了"新段的总字节" —— 只有在**两个段的词完全不重叠**
  * 时才准。词表重叠时（比如两段都是那 2000 个常用词），新段其实只比
- * 一个段大一点点，上界却翻了一倍。
- *
- * 上界翻倍的直接后果：空闲页池里根本没有那么长的连号段可借 →
- * 每次合并都向文件尾追加 → 文件**每轮都在长**（页回收等于白做）。
+ * 一个段大一点点，上界却翻了一倍。上界翻倍的直接后果：空闲页池里根本没有
+ * 那么长的连号段可借 → 每次合并都向文件尾追加 → 文件**每轮都在长**。
  *
  * 【这一趟读什么】
  *
  * 只读源段的**字典页**（不读 posting）：字典条目里有 df，
- * df 加上"词长"就够算出新段的字节数了。
+ * df 加上"词长"就够算出新段要写多少东西了。
  *
  * ⚠️ 数出来的 df 是**归并前**的（还没扣 tombstone 删掉的文档），
- * 所以算出来的字节数是上界（可能偏大，不会偏小）✓ 安全。
+ * 所以算出来的页数是上界（可能偏大，不会偏小）✓ 安全。
  *
- * 【页数公式】
+ * 【为什么"字节 ÷ (容量 − 最坏余量)"换成了逐词模拟】
  *
- * 和建段那条路（ft_build_page_bound）**同一个公式**：
- *   倒排页 = 倒排字节 ÷ (每页容量 − 每页最多浪费的字节) + 1
- *   字典页 = 字典字节 ÷ (每页容量 − 每页最多浪费的字节) + 1
+ * 老公式里的"最坏余量"（倒排 35、字典最长词条）是**猜**出来的：
+ * 它假设每页都刚好浪费掉那么多，而实际浪费通常小得多。
+ * 实测（10 万文档 / 92 次合并）：倒排上界 18895 页 vs 实际 18776 页
+ * （多要 119 页），字典上界 2926 页 vs 实际 2850 页（多要 76 页）。
+ * 多要的页意味着"池里要凑更长的一段连号页"，凑不出就还得往文件尾长。
+ *
+ * 现在改成 ft_pagesim：**照写入器的真实分页规则逐词走一遍**。
+ * 规则是确定的（见 ft_writer.h 的 FtPageSim），算出来就是精确值。
+ * 实测同样规模：倒排 18776 = 实际 18776、字典 2850 = 实际 2850，**差 0 页**。
  */
 static int ft_merge_count_pages(FtTermCursor *cursors, u32 n_segs,
                                 u32 *post_pages_out, u32 *dict_pages_out)
 {
-    u64 post_bytes = 0;
-    u64 dict_bytes = 0;
-    u32 post_cap = PAGE_SIZE - FPH_DATA;
-    u32 dict_cap = FT_DICT_CAPACITY;
-    u32 dict_max_need = ft_dict_entry_bytes(FT_MAX_TOKEN_LEN) + SLOT_SIZE;
+    FtPageSim post;
+    FtPageSim dict;
     char term[FT_MAX_TOKEN_LEN];
     u32 term_len = 0;
+
+    ft_pagesim_reset(&post);
+    ft_pagesim_reset(&dict);
 
     for (;;) {
         u32 merged_df = 0;
@@ -112,10 +116,10 @@ static int ft_merge_count_pages(FtTermCursor *cursors, u32 n_segs,
             merged_df += cursors[i].df;
         }
 
-        /* 倒排：一个 run 头 + df 条 posting */
-        post_bytes += (u64)FT_RUN_HDR_BYTES + (u64)merged_df * (u64)FT_POSTING_BYTES;
+        /* 倒排：照写入器的分页规则累加（含续接页的 run 头） */
+        ft_pagesim_add_postings(&post, merged_df);
         /* 字典：一个词条 + 一个 slot */
-        dict_bytes += (u64)ft_dict_entry_bytes(term_len) + (u64)SLOT_SIZE;
+        ft_pagesim_add_dict_entry(&dict, term_len);
 
         rc = ft_cursors_advance(cursors, n_segs, term, term_len);
         if (rc != OK) {
@@ -123,8 +127,8 @@ static int ft_merge_count_pages(FtTermCursor *cursors, u32 n_segs,
         }
     }
 
-    *post_pages_out = (u32)(post_bytes / (u64)(post_cap - 35u)) + 1u;
-    *dict_pages_out = (u32)(dict_bytes / (u64)(dict_cap - dict_max_need)) + 1u;
+    *post_pages_out = post.pages;
+    *dict_pages_out = dict.pages;
     return OK;
 }
 
