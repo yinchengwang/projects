@@ -21,9 +21,11 @@
 > | | | | 但确认过程撞出**运行时 ROLLBACK 不撤 FT** 的真缺陷，一并修了（D-4b） |
 > | D-5 geo KNN 二次扫描 | ✅ 完成 | `d66de13ef` | 页读 **739 → 11**（省掉 98.5%）；
 > | | | | 两个入口合成一份实现（一份剪枝、一份 tie-break） |
-> | D-6 ~ D-7 | ⬜ 未开始 | — | — |
+> | D-6.1 ts 时间窗真实路径 | ✅ 完成 | `d6fb60c2e` | SQL 查询分区级跳过；3 分区实测 6 页 → 4/0 页；保留 SPI 单谓词限制并写入验收 | 
+> | D-6.2 ~ D-6.3 | ⬜ 未开始 | — | 旧裸写页回收 + 空闲栈 WAL/持久化 | 
+> | D-7 | ⬜ 未开始 | — | group commit |
 >
-> 全量门禁当时的数字随之变成 **99 个测试 99 通过**（D-1 加 `test_wal_header`、D-2 加 `test_ft_merge_pages`、D-4 加 `test_ft_tomb_txn`、D-5 加 `test_geo_knn_points`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
+> 全量门禁当时的数字随之变成 **100 个测试 100 通过**（D-1 加 `test_wal_header`、D-2 加 `test_ft_merge_pages`、D-4 加 `test_ft_tomb_txn`、D-5 加 `test_geo_knn_points`、D-6.1 加 `test_ts_page_prune`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
 
 ---
 
@@ -763,6 +765,8 @@ tombstone 的文档物理丢弃），撤销只能撤「标记」，撤不回内�
 
 > 这三项是**同一个病根**的三条腿，所以合并成一个 Task。
 > 光有 freelist 不持久化，重启后还是丢；光有时间窗没接线，谓词根本进不来。
+>
+> **执行顺序修正**：D-6.1 已先单独完成（见下）；D-6.2 / D-6.3 仍按原顺序推进。
 
 **Files**
 - 修改：`engine/db/src/modalities/ts/ts_dir.c`、`ts_dir.h`、`ts_am.c`、`ts_am.h`
@@ -773,29 +777,33 @@ tombstone 的文档物理丢弃），撤销只能撤「标记」，撤不回内�
   `PT_TS_META` 页（那页已经记了格式版本、分区窗口秒数、目录链的头/尾、条目数）
 - 修改（`ts_am.h`）：新增扫描状态上的时间范围字段
 
-- [ ] **D-6.1 时间窗接进查询路径（先做这个 —— 它最独立）**
+- [x] **D-6.1 时间窗接进真实查询路径** —— 已完成，提交 `d6fb60c2e`
 
-  现状：`ts_am_set_time_range`（`ts_am.c:632`）**全仓零调用方**（1 处定义 + 1 处声明）。
-  而裁剪逻辑已经写好了：`ts_prune.c` 的 `ts_prune_window_hits` / `ts_prune_select` /
-  `ts_prune_allows_window`（`ts_prune.h:116` / `:134` / `:150`）。
+  **先量到的真问题（探针跑完即删）**：3 个分区（每天 1 个）、每天 300 条。
 
-  ⇒ 缺的是**一条线**：从「查询绑定」到「扫描状态」。
+  | SQL | 改前 | 改后 |
+  |---|---:|---:|
+  | 无 WHERE | 900 行 / 6 页 | 900 行 / 6 页 |
+  | `time >= 第 2 天`（2 个分区） | 600 行 / 6 页 | 600 行 / **4 页** |
+  | `time < 第 2 天`（1 个分区） | 300 行 / 6 页 | 300 行 / **4 页**（超集边界） |
+  | 完全范围之外 | 0 行 / 6 页 | 0 行 / **0 页** |
 
-  ⚠️ `ts_am.c:626-631` 的注释已经指明了方向：
-  「契约把范围挂在上下文上 ⇒ 范围是**实例级**的（所有连接共享）。
-  所以它只能当『默认范围』用 —— 真正的查询路径走 `push()`（范围在**扫描状态**里，不共享）。」
+  根因：原 `ts_am_mat_readings` 是 `ts_store_scan`（全表扫描）+ `ts_am_in_parts`（逐行过滤）；
+  `ts_prune_scan` 只在 bench 里直调，真实 SQL 路径从未接入。
 
-  ⇒ 所以要做的是：
-  1. 在 `TsAmCtx` / 扫描状态上加 `has_range` / `lo_ms` / `hi_ms`；
-  2. 在 `ts_am_scan_begin`（`ts_am.c:210`）把上下文默认范围拷进扫描状态；
-  3. 扫描时用 `ts_prune_allows_window` 判断分区是否要访问。
+  **实际改法**：
+  1. `ts_am_mat_readings` 改走 `ts_prune_scan`，命中分区才读页；
+  2. 新增 `ts_store_pager()` 取得存储自己的 Pager；
+  3. 新增 `ts_store_note_reads()` 回收裁剪路径页读，否则 `db_ts_page_reads` 看不见节省；
+  4. 删除 `TsAmMat` 已不需要的 `pstart/pend/nparts/cap_parts`；
+  5. 新增 `test/integration/test_ts_page_prune.c`，走真实 SQL 断言 6 项。
 
-  ⚠️ **「不设置窗口时保持原行为」是硬判据** ——
-  `has_range == false` 时必须读全部分区，一个都不能少（坑 M6-48：
-  少给是**静默漏数据**）。
+  **SPI 结构性限制（明确不越界）**：`PushFn` 一次只能接收一个 `Predicate`，而
+  `time >= a AND time < b` 是两个谓词，执行器只下推其中一个，另一边由执行器完整求值。
+  因此双边界只能保证行数精确、页读不高于全扫，不能假装保证只读一个分区；要彻底解决需改
+  `src/spi/pushdown.h` 的谓词合取契约，但该目录是 W-C 地盘，本 Task 不碰。
 
-  ⚠️ **对拍**：分区裁剪的结果必须与「全表扫描 + 手工过滤」**完全一致**。
-  这条测试要能抓到「裁剪多给了」（无害，慢）或「裁剪少给了」（**致命**）。
+  验证：clean build 零诊断；全量 **100 个测试 100 通过**；依赖方向正确；无文件超 800 行。
 
 - [ ] **D-6.2 旧裸写页真回收**
 
