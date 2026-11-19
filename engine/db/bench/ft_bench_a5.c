@@ -135,7 +135,11 @@ static int a5_run_one(u32 n_docs, int fixed_df, u32 query_idx, A5Row *row)
     }
 
     a5_remove_db();
-    if (pager_open(DB_PATH_A5, A5_BP_FRAMES, &pg) != OK) {
+    /*
+     * 帧池也走环境变量（W-D 的 D-3.1）：A5 量的「物理读盘」那一列
+     * 在小语料时接近 0，正是因为 4096 帧装得下整个小库。
+     */
+    if (pager_open(DB_PATH_A5, ft_bench_frames_from_env(A5_BP_FRAMES), &pg) != OK) {
         ft_bench_corpus_free(&corpus);
         return 2;
     }
@@ -332,7 +336,8 @@ int ft_bench_run_a5(void)
     printf("  ⚠️ 组二里 df 很小的时候，页读会被「页粒度」压平：几十个 posting 装不满一页，\n");
     printf("     所以头几行的页读增长远慢于 df；df 到几千以后，页读才严格随 df 线性增长。\n");
     printf("  ⚠️ 「物理读盘」那一列在小语料时接近 0：段刚建好还在帧池里（%u 帧 ≈ %u KB），\n",
-           A5_BP_FRAMES, A5_BP_FRAMES * 4u);
+           ft_bench_frames_from_env(A5_BP_FRAMES),
+           ft_bench_frames_from_env(A5_BP_FRAMES) * 4u);
     printf("     检索要的那几页直接命中，不用回盘。语料大到帧池装不下时，才必须回盘。\n\n");
 
     /* ---- 判据 ---- */

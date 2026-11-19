@@ -112,6 +112,7 @@ LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock.exe
 FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench.exe
 GEO_BENCH_EXE   := $(OBJ_DIR)/geo_bench.exe
 TS_BENCH_EXE    := $(OBJ_DIR)/ts_bench.exe
+TS_BENCH_IO_EXE := $(OBJ_DIR)/ts_bench_io.exe
 INS_BATCH_BENCH_EXE := $(OBJ_DIR)/insert_batch_bench.exe
 else
 VEC_BENCH_EXE   := $(OBJ_DIR)/vec_bench
@@ -123,6 +124,7 @@ LATCH_BENCH_BIGLOCK_EXE := $(OBJ_DIR)/latch_bench_biglock
 FT_BENCH_EXE    := $(OBJ_DIR)/ft_bench
 GEO_BENCH_EXE   := $(OBJ_DIR)/geo_bench
 TS_BENCH_EXE    := $(OBJ_DIR)/ts_bench
+TS_BENCH_IO_EXE := $(OBJ_DIR)/ts_bench_io
 INS_BATCH_BENCH_EXE := $(OBJ_DIR)/insert_batch_bench
 endif
 
@@ -178,6 +180,9 @@ GEO_BENCH_OBJS := $(OBJ_DIR)/bench/geo_bench.o
 
 # v1.5 步骤 6：时序模态的压缩比基准（A3 · 三种数据形态 × 三种列编码）。
 TS_BENCH_OBJS := $(OBJ_DIR)/bench/ts_bench.o
+# W-D 的 D-3.3：时序模态的**统一 IO 口径**基准（A8 证据）。
+# 与 ts_bench（压缩比）分开：那个量字节数，这个量页数。
+TS_BENCH_IO_OBJS := $(OBJ_DIR)/bench/ts_bench_io.o
 INS_BATCH_BENCH_OBJS := $(OBJ_DIR)/bench/insert_batch_bench.o
 
 # 基准要连主库的全部对象（但不能连 main.o —— 它自己带 main）
@@ -220,13 +225,18 @@ $(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
-bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE) $(GEO_BENCH_EXE) $(TS_BENCH_EXE) $(INS_BATCH_BENCH_EXE)
+bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE) $(GEO_BENCH_EXE) $(TS_BENCH_EXE) $(TS_BENCH_IO_EXE) $(INS_BATCH_BENCH_EXE)
 
 $(INS_BATCH_BENCH_EXE): $(INS_BATCH_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(INS_BATCH_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS)
 
 $(TS_BENCH_EXE): $(TS_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(TS_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
+
+# ts_bench_io 要 include db_internal.h（读 inst->pager / inst->ts），
+# 而它在 -Isrc 里 —— 与主库同款头路径，不需要额外的 -I。
+$(TS_BENCH_IO_EXE): $(TS_BENCH_IO_OBJS) $(LIB_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(TS_BENCH_IO_OBJS) $(LIB_OBJS) $(LDLIBS) -lm
 
 $(GEO_BENCH_EXE): $(GEO_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(GEO_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS) -lm

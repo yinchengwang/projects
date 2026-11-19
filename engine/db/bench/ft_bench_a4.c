@@ -71,7 +71,7 @@
 #define A4_QUERY      "w000000"
 #define A4_TOPK       10u
 #define A4_MAXOUT     16u
-#define A4_BP_FRAMES  4096u
+#define A4_BP_FRAMES  4096u    /* 默认帧池；可用 FT_BENCH_FRAMES 覆盖（见 ft_bench.h） */
 
 /* ---------------- 段的页数 ---------------- */
 /*
@@ -135,6 +135,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     int ok = 1;
     u32 vocab = A4_VOCAB;
     u32 words = A4_WORDS;
+    u32 bp_frames = A4_BP_FRAMES;
     const char *ev;
     double f_avg;
     double log_f_n;
@@ -170,8 +171,16 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     if (ev != NULL && atoi(ev) > 0) {
         words = (u32)atoi(ev);
     }
-    printf("配置：%u 篇文档，批大小 %u，词表 %u，每篇 %u 词\n\n",
-           n_docs, batch, vocab, words);
+
+    /*
+     * 帧池大小也走环境变量（W-D 的 D-3.1）。默认 4096 帧 = 16 MB，
+     * 而 10 万文档的 FT 数据只有约 3335 页 —— 装得下 ⇒ C7 是空判据。
+     * 细节（为什么可配、判据怎么改）见 ft_bench.h 的 ft_bench_frames_from_env。
+     */
+    bp_frames = ft_bench_frames_from_env(A4_BP_FRAMES);
+
+    printf("配置：%u 篇文档，批大小 %u，词表 %u，每篇 %u 词，帧池 %u 帧\n\n",
+           n_docs, batch, vocab, words, bp_frames);
 
     if (ft_bench_corpus_random(&corpus, n_docs, vocab, words, A4_SEED) != 0) {
         printf("  语料生成失败\n");
@@ -179,7 +188,7 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
     }
 
     ft_bench_remove_db(DB_PATH_A4);
-    if (pager_open(DB_PATH_A4, A4_BP_FRAMES, &pg) != OK) {
+    if (pager_open(DB_PATH_A4, bp_frames, &pg) != OK) {
         printf("  开库失败\n");
         ft_bench_corpus_free(&corpus);
         return 2;
@@ -743,43 +752,11 @@ int ft_bench_run_a4(u32 n_docs, u32 batch)
         }
     }
 
-    /*
-     * C7：真实磁盘 IO 是 **O(页数)**，不是 O(词数)。
-     *
-     * 物理读盘次数 ≤ 被读盘过的唯一页数 —— 即"每个真正读过的页，
-     * 最多真正读盘一次"（超过就说明帧池不够、同一页被逐出后又读回）。
-     */
-    if (pg_unique_total > 0) {
-        if (sum_pg_physical <= pg_unique_total) {
-            printf("  [PASS] C7 真实 IO 是 O(页数)：物理读盘 %llu 次 ≤ 唯一页数 %llu"
-                   "（每页最多读盘一次）；同期老段词数之和为 %llu 词次 —— "
-                   "两者差 %.1f 倍\n",
-                   (unsigned long long)sum_pg_physical,
-                   (unsigned long long)pg_unique_total,
-                   (unsigned long long)sum_rm_terms,
-                   (sum_rm_terms > 0)
-                       ? ((double)sum_rm_terms / (double)sum_pg_physical) : 0.0);
-        } else {
-            printf("  [FAIL] C7 真实 IO 是 O(页数)：物理读盘 %llu 次 > 唯一页数 %llu"
-                   "（同一页被逐出后又读回了 —— 帧池不够）\n",
-                   (unsigned long long)sum_pg_physical,
-                   (unsigned long long)pg_unique_total);
-            ok = 0;
-        }
-    } else {
-        /*
-         * ⚠️ C7 本次**测不出差别**，如实记录而不是当成通过：
-         * 全程一次物理读盘都没有发生（帧池 4096 帧装得下整个库，
-         * 合并时要的页全在内存里）⇒ "物理读盘 ≤ 唯一页数"这个判据
-         * 在当前规模下是**空判据**（两边都是 0）。
-         * 想让这个口径有区分力，必须把帧池调小到装不下库 —— 见 PLAN-v1.3.md
-         * 「仍然欠着的」第 5 条。
-         */
-        printf("  [SKIP] C7 真实 IO 是 O(页数)：本次全程物理读盘 %llu 次、"
-               "唯一页数 %llu —— 帧池装得下整个库，这个口径**测不出差别**"
-               "（空判据，不计入达标）\n",
-               (unsigned long long)sum_pg_physical,
-               (unsigned long long)pg_unique_total);
+    /* C7：真实 IO 是 O(页数) 而非 O(词数) —— 三条子判据的细节在 ft_bench.h
+     * （放公共头里：ft_bench_a4.c 要守住 800 行上限）。 */
+    if (ft_bench_check_c7(sum_pg_physical, sum_pg_logical, pg_unique_total,
+                          total_read, sum_rm_terms, bp_frames) != 0) {
+        ok = 0;
     }
 
     printf("\nRESULT a4 n_docs=%u batch=%u merges=%u f=%.2f total_io_pages=%llu "

@@ -56,6 +56,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "common/types.h"
@@ -96,6 +97,46 @@ static inline double ft_bench_median(double *v, u32 n)
 }
 
 /* ---------------- FT 索引的观察工具（A4 / A5 共用） ---------------- */
+
+/*
+ * 帧池大小从环境变量读（W-D 的 D-3.1）。
+ *
+ * 【为什么要可配 —— 这直接决定 C7 判据有没有区分力】
+ *
+ * A4 与 A5 原来把帧池写死 4096 帧（= 16 MB）。而 10 万文档的 FT 数据
+ * 只有约 3335 页 —— **整个库装得进帧池**。
+ * 于是「物理读盘」这个口径全程为 0，判据变成 `0 ≤ 0`：**空判据**。
+ *
+ * 把帧池调小到装不下库，判据才有真实数值。10 万文档 ≈ 3335 页，
+ * 取 512 帧就够（远小于数据页数）。
+ *
+ * 用法：`FT_BENCH_FRAMES=512 sh bench/ft_bench_run.sh a4 100000 1000`
+ *
+ * 【为什么放在公共头里】
+ * A4 与 A5 各写一份 getenv 逻辑 ⇒ 早晚有一处忘了改默认值，
+ * 于是「同一个口径两个基准给出不同结论」。
+ */
+static inline u32 ft_bench_frames_from_env(u32 dflt)
+{
+    const char *ev = getenv("FT_BENCH_FRAMES");
+    long v;
+
+    if (ev == NULL || *ev == '\0') {
+        return dflt;
+    }
+    v = strtol(ev, NULL, 10);
+    /*
+     * 下限 64：再小就连「一次合并要同时握住几个页」都装不下，
+     * 那是把基准做成 IO 风暴，量出来的不是复杂度而是抖动。
+     */
+    if (v < 64) {
+        return 64u;
+    }
+    if (v > 1 << 20) {
+        return 1u << 20;
+    }
+    return (u32)v;
+}
 
 /*
  * 一个段的页数 = 段头 1 页 + 字典页 + 倒排页。
@@ -382,6 +423,146 @@ static inline void ft_bench_print_merge_io(const FtBenchMergeIo *rows, u32 n)
         printf("     比值 < 1 说明还有一部分旧页当时仍留在帧池里，没回盘。\n");
     }
     printf("    而逻辑页读是 **O(词数)** —— 两个不是一回事。\n");
+}
+
+/*
+ * C7 判据：真实磁盘 IO 是 **O(页数)**，不是 O(词数)。（W-D 的 D-3.2）
+ *
+ * 放在公共头里：一它自成一体（三个子判据 + 一段解释），
+ * 二 ft_bench_a4.c 要守住 800 行上限，装不下这一整块。
+ *
+ * ==================== 旧判据为什么废了（坑 M4-56） ====================
+ *
+ * 旧判据是「物理读盘 ≤ 被读盘过的唯一页数」（每页最多读盘一次）。它有两个毛病：
+ *
+ *  ① **默认规模下是空判据**。帧池 4096 帧 = 16 MB，而 10 万文档的 FT 数据
+ *     只有约 3335 页 —— 整个库装得进帧池 ⇒ 物理读盘全程 0、唯一页数也是 0
+ *     ⇒ 判据变成 `0 ≤ 0`，什么都证明不了（只打一行 [SKIP]）。
+ *
+ *  ② **把帧池调小之后它必然红，而红得没有道理**。帧池装不下库时，
+ *     同一页被逐出后又读回是**正常现象**（缓存抖动的定义），不是 bug。
+ *     拿「每页最多读盘一次」去卡一个本来就装不下的帧池，是用错的尺子。
+ *
+ * ==================== 新判据（三条，各证明一件事） ====================
+ *
+ *  C7-a **不变式自检**：物理读盘 ≤ 逻辑页读。
+ *       每次物理读盘都对应一次取页，所以这条**恒应成立**（pager.h 已定义）。
+ *       出现反例 = 计数器坏了，与区块大小无关。
+ *
+ *  C7-b **重读系数有界**：物理读盘 ÷ 唯一页数 ≤ 1 + 唯一页数/帧池。
+ *       这个界是**可解释的**，不是拍脑袋的常数：
+ *       帧池装不下唯一页数时，平均每个页最多被「逐出 → 读回」唯一页数/帧池 次。
+ *       ⇒ 小帧池下判据仍能过，但不放纵（比值远超这个界说明取页模式坏了）。
+ *
+ *  C7-c **这才是「O(页数) 而非 O(词数)」的正证**：
+ *       物理读盘 ÷ Σ旧段页数 ≤ 3（真实 IO 与「老段页数」同数量级），
+ *       同时 Σ旧段词数 ÷ 物理读盘 ≥ 20（与词数差两个数量级 ⇒ IO 跟词数无关）。
+ *       优化前是「每个 term 一次取页」，那时这两个比值会反过来。
+ *
+ * ==================== 帧池装得下库时怎么办 ====================
+ *
+ * 不假装通过。此时唯一页数是 0，C7-b / C7-c 没有分母 —— **如实报 SKIP**，
+ * 并明确指出「把 FT_BENCH_FRAMES 调到小于数据页数才能测」。
+ * C7-a 仍然检查（它不需要分母）。
+ *
+ * 返回 0 = 有子判据不达标（调用方据此把 ok 清掉）。
+ */
+static inline int ft_bench_check_c7(u64 sum_pg_physical, u64 sum_pg_logical,
+                                    u64 pg_unique_total, u64 total_read,
+                                    u64 sum_rm_terms, u32 frames)
+{
+    int bad = 0;
+
+    if (pg_unique_total > 0 && sum_pg_physical > 0) {
+        /* C7-a：不变式自检 */
+        if (sum_pg_physical <= sum_pg_logical) {
+            printf("  [PASS] C7-a 不变式：物理读盘 %llu 次 ≤ 逻辑页读 %llu 次\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)sum_pg_logical);
+        } else {
+            printf("  [FAIL] C7-a 不变式：物理读盘 %llu 次 > 逻辑页读 %llu 次"
+                   "（每次读盘必对应一次取页，出现反例说明计数器坏了）\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)sum_pg_logical);
+            bad = 1;
+        }
+
+        /* C7-b：重读系数有界 */
+        {
+            double rerate = (double)sum_pg_physical / (double)pg_unique_total;
+            double bound = 1.0 + (double)pg_unique_total
+                                 / (double)(frames > 0 ? frames : 1u);
+
+            if (rerate <= bound) {
+                printf("  [PASS] C7-b 重读系数：物理读盘 ÷ 唯一页数 = %.2f ≤ 界 %.2f"
+                       "（界 = 1 + 唯一页数/帧池 = 1 + %llu/%u"
+                       " —— 帧池装不下时的抖动上限）\n",
+                       rerate, bound,
+                       (unsigned long long)pg_unique_total, frames);
+            } else {
+                printf("  [FAIL] C7-b 重读系数：物理读盘 ÷ 唯一页数 = %.2f > 界 %.2f"
+                       "（同一页被反复逐出读回，超出「帧池装不下」能解释的范围"
+                       " ⇒ 取页模式坏了）\n",
+                       rerate, bound);
+                bad = 1;
+            }
+        }
+
+        /* C7-c：真 IO 是 O(页数) 而不是 O(词数) */
+        {
+            double per_page = (total_read > 0)
+                              ? ((double)sum_pg_physical / (double)total_read) : 0.0;
+            double vs_terms = (sum_pg_physical > 0)
+                              ? ((double)sum_rm_terms / (double)sum_pg_physical) : 0.0;
+
+            if (per_page <= 3.0 && vs_terms >= 20.0) {
+                printf("  [PASS] C7-c 量级：物理读盘 ÷ 旧段页数 = %.2f（≤ 3，同数量级）；"
+                       "旧段词数 ÷ 物理读盘 = %.1f（≥ 20，差两个数量级）\n"
+                       "         ⇒ 真实 IO 跟**页数**走，不跟**词数**走"
+                       "（优化前是「每词一次取页」，这两个比值会反过来）\n",
+                       per_page, vs_terms);
+            } else {
+                printf("  [FAIL] C7-c 量级：物理读盘 ÷ 旧段页数 = %.2f（应 ≤ 3）；"
+                       "旧段词数 ÷ 物理读盘 = %.1f（应 ≥ 20）\n",
+                       per_page, vs_terms);
+                bad = 1;
+            }
+        }
+    } else if (pg_unique_total == 0) {
+        /*
+         * 帧池装得下整个库 ⇒ 一次物理读盘都没有 ⇒ C7-b / C7-c 没有分母。
+         * 不假装通过，说清怎么才能测出来。
+         */
+        printf("  [SKIP] C7-b / C7-c：全程物理读盘 %llu 次、唯一页数 %llu —— "
+               "帧池 %u 帧装得下整个库，这个口径**测不出差别**\n",
+               (unsigned long long)sum_pg_physical,
+               (unsigned long long)pg_unique_total, frames);
+        printf("         ⇒ 想让 C7 有区分力：FT_BENCH_FRAMES 调到小于数据页数"
+               "（10 万文档约 3335 页 ⇒ 取 512 足够）\n");
+
+        /* C7-a 不需要分母，照样查 */
+        if (sum_pg_physical <= sum_pg_logical) {
+            printf("  [PASS] C7-a 不变式：物理读盘 %llu 次 ≤ 逻辑页读 %llu 次\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)sum_pg_logical);
+        } else {
+            printf("  [FAIL] C7-a 不变式：物理读盘 %llu 次 > 逻辑页读 %llu 次\n",
+                   (unsigned long long)sum_pg_physical,
+                   (unsigned long long)sum_pg_logical);
+            bad = 1;
+        }
+    } else {
+        /*
+         * 唯一页数 > 0 但物理读盘 == 0 —— 理论上前者蕴含后者，
+         * 落到这里说明计数器不自洽。当失败处理，不糊过去。
+         */
+        printf("  [FAIL] C7 计数器不自洽：物理读盘 0 次但唯一页数 %llu —— "
+               "有页被读盘却没算进物理读盘\n",
+               (unsigned long long)pg_unique_total);
+        bad = 1;
+    }
+
+    return bad;
 }
 
 /* A4（合并代价）在 ft_bench_a4.c 里 */
