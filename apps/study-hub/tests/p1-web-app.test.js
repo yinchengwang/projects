@@ -100,27 +100,27 @@ test("applyHash：页没注册就不动，注册了就切过去", function () {
   assert.ok(A.pages)
 })
 
-test("标签清单：P1 只上已交付的三个页", function () {
+test("标签清单：P2 起含单元库（session / library / diagnose / settings）", function () {
   const keys = app.TABS.map(function (tab) {
     return tab.key
   })
-  assert.deepStrictEqual(keys, ["session", "diagnose", "settings"])
+  assert.deepStrictEqual(keys, ["session", "library", "diagnose", "settings"])
 })
 
-test("标签栏里没有 P2/P4 才交付的页", function () {
+test("标签栏里还没有 P4 才交付的页", function () {
   const keys = app.TABS.map(function (tab) {
     return tab.key
   })
-  assert.strictEqual(keys.indexOf("library"), -1, "单元库是 P2 交付的")
   assert.strictEqual(keys.indexOf("supply"), -1, "供给是 P4 交付的")
 })
 
-test("过渡期：四个旧页仍注册在 pages 里（只是从标签栏摘掉）", function () {
+test("过渡期：today / review / rounds 三个旧页仍注册在 pages 里（只是从标签栏摘掉）", function () {
   const PAGES = global.window.StudyHub.pages
   assert.ok(PAGES.today, "旧页 today 仍注册")
-  assert.ok(PAGES.answer)
   assert.ok(PAGES.review)
   assert.ok(PAGES.rounds)
+  // answer.js 在 P2 退役（契约 §9.1）：文件仍在仓库里，但不再注册
+  assert.strictEqual(PAGES.answer, undefined, "answer 页已在 P2 退役")
 })
 
 test("诊断页靠别名照样注册得上", function () {

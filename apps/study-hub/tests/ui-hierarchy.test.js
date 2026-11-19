@@ -26,11 +26,9 @@ require("../web/app.js")
 // 页面脚本把自己注册进 window.AlgoPlan.pages——统一从那里取 render，
 // 不依赖各页面脚本自己导出了什么
 const todayPage = require("../web/pages/today.js")
-require("../web/pages/answer.js")
 require("../web/pages/review.js")
 require("../web/pages/rounds.js")
 const PAGES = global.window.AlgoPlan.pages
-
 /** 铺一个假的 fetch：按路径前缀返回预设响应 */
 function stubFetch(routes) {
   global.fetch = async function (url) {
@@ -229,16 +227,6 @@ test("轮次页：页头 + 当前轮次进主卡 + 状态是中文药丸", async
   )
 })
 
-test("作答页：页头在题目之上", async function () {
-  stubFetch(COMMON_ROUTES)
-  const A = global.window.AlgoPlan
-  A.state.problemId = "lc-00001"
-  const view = mountView()
-  await PAGES.answer.render(view)
-
-  assert.strictEqual(findAllByClass(view, "page-head").length, 1, "作答页有且只有一个页头")
-})
-
 test("保持暗色单主题：没有浅色/双主题的开关", function () {
   const fs = require("node:fs")
   const path = require("node:path")
@@ -283,14 +271,13 @@ test("公共构件：页头 / 主卡 / 数字块 / 空态 都造得出层次类"
   assert.ok(collectText(hole).indexOf("没有内容") !== -1)
 })
 
-test("页头只有一个：五页各自渲染都不许出现两个页头", async function () {
+test("页头只有一个：各自渲染都不许出现两个页头", async function () {
   stubFetch(COMMON_ROUTES)
   const A = global.window.AlgoPlan
   A.state.problemId = "lc-00001"
 
   const views = [
     { name: "今日", render: PAGES.today.render },
-    { name: "作答", render: PAGES.answer.render },
     { name: "复习", render: PAGES.review.render },
     { name: "轮次", render: PAGES.rounds.render },
   ]

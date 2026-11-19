@@ -61,11 +61,20 @@ test("四个页面脚本都注册进 window.AlgoPlan.pages", function () {
   })
 })
 
-test("index.html 引用了四个页面脚本", function () {
+test("index.html 引的是当期页面脚本，answer.js 已退役", function () {
   const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8")
-  PAGES.forEach(function (name) {
+  // 当期在册的页面脚本：session（P1 首页）、unit 与 library（P2 新增）、settings（P1 设置页）
+  const NEW_PAGES = ["session", "unit", "library", "settings"]
+  NEW_PAGES.forEach(function (name) {
     assert.ok(html.indexOf("/pages/" + name + ".js") !== -1, "index.html 里没有 " + name + ".js")
   })
+  // 还没退役的旧页：P3 才把它们从 index.html 里摘掉
+  const OLD_PAGES = ["today", "review", "rounds"]
+  OLD_PAGES.forEach(function (name) {
+    assert.ok(html.indexOf("/pages/" + name + ".js") !== -1, "index.html 里没有 " + name + ".js")
+  })
+  // answer.js 在 P2 退役：文件保留在仓库里作为历史，但 index.html 不再引
+  assert.strictEqual(html.indexOf("/pages/answer.js"), -1, "index.html 不许再引 answer.js")
 })
 
 test("复习页的四个直觉文案映射到 SM-2 的 quality", function () {

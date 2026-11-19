@@ -92,28 +92,33 @@ const state = Object.assign(
   }
 )
 
-/** 切页 */
+/** 切页：改 hash，由 hashchange 驱动重绘 */
 function go(key) {
+  const hash = "#/" + String(key || "")
+  const loc = typeof location !== "undefined" ? location : null
+  if (loc) {
+    if (loc.hash === hash) {
+      // hash 没变就不会触发 hashchange，这里自己重绘一次
+      activeTab = key
+      renderTabs(activeTab)
+      render()
+      return
+    }
+    loc.hash = hash
+    return
+  }
   activeTab = key
   renderTabs(activeTab)
   render()
 }
 
+
 /**
- * 最小 hash 解析器（契约 §9.2）。
- *
- *   ""                        → { page: "session", params: {}, query: {} }
- *   "#/"                      → { page: "session", ... }
- *   "#/settings"              → { page: "settings", ... }
- *   "#/unit/algo%3Alc-00007" → { page: "unit", params: { id: "algo:lc-00007" }, ... }
- *   "#/library?track=database"→ { page: "library", query: { track: "database" }, ... }
- *
- * P1 只用到 page；params / query 是给 P2 的单元页与单元库留的。
- * @param {string} [hash] 不传就取 location.hash
+ * 解析地址栏 hash。未知页面回落 session；unit 保留解码后的 id 参数。
+ * @param {string} [hash]
  * @returns {{page: string, params: object, query: object}}
  */
 function parseHash(hash) {
-  // 不传就看 location.hash（浏览器里用）；Node 桩里没有 location，就按空串处理
   const raw =
     hash === undefined || hash === null
       ? typeof location !== "undefined" && location && typeof location.hash === "string"
@@ -124,51 +129,72 @@ function parseHash(hash) {
   const qIndex = text.indexOf("?")
   const pathPart = qIndex === -1 ? text : text.slice(0, qIndex)
   const queryPart = qIndex === -1 ? "" : text.slice(qIndex + 1)
-
   const query = {}
   new URLSearchParams(queryPart).forEach(function (value, key) {
     query[key] = value
   })
-
   const segments = pathPart.split("/").filter(function (part) {
     return part !== ""
   })
-  const page = segments.length > 0 ? segments[0] : "session"
-  const params = {}
-  if (segments.length > 1) params.id = decodeURIComponent(segments[1])
-  if (segments.length > 2) {
-    params.rest = segments.slice(2).map(function (part) {
-      return decodeURIComponent(part)
-    })
+  const knownPages = ["session", "library", "diagnose", "supply", "settings"]
+  const page = segments.length === 0 ? "session" : segments[0]
+  if (page === "unit") {
+    const params = {}
+    if (segments.length > 1) params.id = decodeURIComponent(segments.slice(1).join("/"))
+    return { page: "unit", params: params, query: query }
   }
-  return { page: page, params: params, query: query }
+  return {
+    page: knownPages.indexOf(page) !== -1 ? page : "session",
+    params: {},
+    query: query,
+  }
 }
+
 
 /**
  * 按 hash 定当前页。页没注册就不动（返回 false）。
- * @param {string} [hash] 不传就取 location.hash
- * @returns {boolean} 有没有定成功
+ * @param {string} [hash]
+ * @returns {boolean}
  */
 function applyHash(hash) {
   const raw =
     hash === undefined || hash === null
-      ? typeof location !== "undefined"
+      ? typeof location !== "undefined" && location && typeof location.hash === "string"
         ? location.hash
         : ""
       : String(hash)
-  const parsed = parseHash(raw)
-  if (!window.StudyHub.pages[parsed.page]) return false
-  activeTab = parsed.page
+  const text = raw.charAt(0) === "#" ? raw.slice(1) : raw
+  const head =
+    text
+      .split("?")[0]
+      .split("/")
+      .filter(function (part) {
+        return part !== ""
+      })[0] || "session"
+  if (!window.StudyHub.pages[head]) return false
+  activeTab = head
   return true
 }
 
+/**
+ * 读当前路由：地址栏 hash 解析出来的结果。
+ * @returns {{page: string, params: object, query: object}}
+ */
+function readRoute() {
+  const hash = (typeof location !== "undefined" && location && location.hash) || ""
+  return parseHash(hash)
+}
+
+
 /** 页面注册表 + 公共工具 */
-window.StudyHub = Object.assign(window.StudyHub || {}, {
+const APP = window.StudyHub || window.AlgoPlan || {}
+window.StudyHub = Object.assign(APP, {
   el: el,
   getJson: getJson,
   postJson: postJson,
   patchJson: patchJson,
   putJson: putJson,
+  parseHash: parseHash,
   state: state,
   pages:
     (window.StudyHub && window.StudyHub.pages) || (window.AlgoPlan && window.AlgoPlan.pages) || {},
@@ -194,6 +220,7 @@ window.AlgoPlan = window.StudyHub
  */
 const TABS = [
   { key: "session", label: "本次学习" },
+  { key: "library", label: "单元库" },
   { key: "diagnose", label: "诊断" },
   { key: "settings", label: "设置" },
 ]
@@ -225,25 +252,28 @@ function renderTabs(active) {
   })
 }
 
-/**
- * 渲染当前页。
- *
- * 页面先画到临时容器里，等画完再整体换上去：
- * 切页时上一次请求可能还没回来，晚到的旧页面不能往当前视图里插内容。
- */
 async function render() {
   const seq = ++renderSeq
   const view = document.getElementById("view")
   if (!view) return
-  const page = window.StudyHub.pages[activeTab]
+  const route = readRoute()
+  const tabKeys = TABS.map(function (t) {
+    return t.key
+  })
+  if (tabKeys.indexOf(route.page) !== -1) {
+    activeTab = route.page
+    renderTabs(activeTab)
+  }
+  const page = APP.pages[route.page]
   if (!page) {
     view.textContent = ""
-    view.appendChild(el("div", { class: "panel", text: "页面没注册：" + activeTab }))
+    view.appendChild(el("div", { class: "panel", text: "页面没注册：" + route.page }))
     return
   }
   const holder = document.createElement("div")
   try {
-    await page.render(holder)
+    // 第二个参数是路由参数：#/unit/:id 传 { id }，其余页传 {}（多传的参数被忽略）
+    await page.render(holder, route.params)
     if (seq !== renderSeq) return
     view.textContent = ""
     view.appendChild(holder)
@@ -268,10 +298,11 @@ if (typeof document !== "undefined") {
   })
 }
 
-// hash 变了就切页（浏览器里才有 location / addEventListener；Node 桩里没有）
+// 地址栏 hash 变了就重绘：#/unit/db:mvcc 与 #/library?track=database 都走这条路
+// （浏览器里才有 location / addEventListener；Node 桩里没有）
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("hashchange", function () {
-    if (!applyHash()) return
+    applyHash()
     renderTabs(activeTab)
     render()
   })
@@ -283,6 +314,9 @@ if (typeof module !== "undefined" && module.exports) {
   // 老测试（题库行、样例用例、代码草稿）拿到的就是同一份实现
   const todayPage = require("./pages/today.js")
   const answerPage = require("./pages/answer.js")
+  // P2 起 answer.js 不再注册（文件保留在仓库里作为历史，契约 §9.1）。
+  // 旧测试要的 renderBank / renderPractice 等仍从 __test 拿得到。
+  if (APP.pages) delete APP.pages.answer
 
   /** 旧视图：today / bank / practice（M1、M3 的老测试仍在用这三个视图） */
   let legacyView = "today"
@@ -328,6 +362,8 @@ if (typeof module !== "undefined" && module.exports) {
     PANEL_TEXT_LIMIT: answerPage.PANEL_TEXT_LIMIT,
     // P1：最小 hash 解析器、标签清单
     parseHash: parseHash,
+    putJson: putJson,
+    readRoute: readRoute,
     applyHash: applyHash,
     TABS: TABS,
     // 以下只给测试用：让 DOM 冒烟测试能驱动真实的渲染路径
