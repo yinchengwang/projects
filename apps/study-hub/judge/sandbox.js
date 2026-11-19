@@ -55,11 +55,19 @@ const PYTHON_CANDIDATES = [
 /** 探测结果缓存，避免每次判题都 spawn 一遍探测 */
 const detectionCache = { compiler: undefined, python: undefined, numpy: undefined }
 
+/** python 探测的缓存键："" = 按候选顺序自动探测；其它 = 用户指定的解释器原文 */
+let pythonCacheKey = null
+
+/** numpy 探测的缓存键：换了解释器就必须重探（不同解释器装没装 numpy 是两回事） */
+let numpyCacheKey = ""
+
 /** 清空探测缓存（测试用） */
 function resetDetectionCache() {
   detectionCache.compiler = undefined
   detectionCache.python = undefined
   detectionCache.numpy = undefined
+  pythonCacheKey = null
+  numpyCacheKey = ""
 }
 
 /**
@@ -109,20 +117,15 @@ function parseCandidate(text) {
  * @returns {{cmd: string, args: string[], version: string}|null}
  */
 function detectPython(override) {
-  // 没指定解释器时，缓存里已经探到就直接用，不重复 spawn
-  if (!override && detectionCache.python) return detectionCache.python
-
-  // 指定了解释器时，若缓存里探到的正是它，也直接复用——
-  // 否则每次判题都会重新 spawn 一遍 python --version，白白多几百毫秒。
-  if (override && detectionCache.python) {
-    const cached = detectionCache.python
-    const cachedText = cached.cmd + (cached.args.length ? " " + cached.args.join(" ") : "")
-    if (cachedText === String(override).trim()) return cached
+  // 缓存必须带上「用的是什么 override」：不传 override 的调用（比如 loader / 自检）
+  // 与传 py -3 的调用（判题）是两个不同的请求，只按「探过没有」缓存会让后到的那个
+  // 拿到前一个的结果——本机 python 3.11 没 numpy、py -3 有，串味会直接判错降级。
+  const wanted = override ? String(override).trim() : ""
+  if (detectionCache.python !== undefined && pythonCacheKey === wanted) {
+    return detectionCache.python
   }
 
-  const candidates = override
-    ? [parseCandidate(override)].concat(PYTHON_CANDIDATES)
-    : PYTHON_CANDIDATES
+  const candidates = wanted ? [parseCandidate(wanted)].concat(PYTHON_CANDIDATES) : PYTHON_CANDIDATES
 
   for (const candidate of candidates) {
     const run = spawnSync(candidate.cmd, candidate.args.concat(["--version"]), {
@@ -139,11 +142,13 @@ function detectPython(override) {
         version: stdout.trim().split("\n")[0].trim(),
       }
       detectionCache.python = found
+      pythonCacheKey = wanted
       return found
     }
   }
 
   detectionCache.python = null
+  pythonCacheKey = wanted
   return null
 }
 
@@ -160,12 +165,17 @@ function detectPython(override) {
  * @returns {{available: boolean, version: string}}
  */
 function detectNumpy(override) {
-  if (detectionCache.numpy !== undefined) return detectionCache.numpy
   const python = detectPython(override || null)
   if (!python) {
     detectionCache.numpy = { available: false, version: "" }
+    numpyCacheKey = ""
     return detectionCache.numpy
   }
+  // 缓存必须带上「是哪个解释器」：本机 python（3.11）没有 numpy、py -3（3.12）有，
+  // 只按「探过没有」缓存会把两次结果串味（先探空的那个，之后配好 numpy 也一直报缺失）。
+  const key = python.cmd + (python.args.length ? " " + python.args.join(" ") : "")
+  if (detectionCache.numpy !== undefined && numpyCacheKey === key) return detectionCache.numpy
+
   const run = spawnSync(
     python.cmd,
     python.args.concat(["-c", "import numpy; print(numpy.__version__)"]),
@@ -184,6 +194,7 @@ function detectNumpy(override) {
   } else {
     detectionCache.numpy = { available: false, version: "" }
   }
+  numpyCacheKey = key
   return detectionCache.numpy
 }
 

@@ -15,6 +15,7 @@
 const { readJsonBody, HttpError } = require("./router.js")
 const { judgeUnit } = require("../judge/runner.js")
 const { detectCompiler, detectPython, detectNumpy } = require("../judge/sandbox.js")
+const PYTHON_SETTING_KEY = "judge.python.cmd"
 
 /** 只支持这两种语言（与 judge/runner.js 的 LANGUAGES 一致） */
 const SUPPORTED_LANGUAGES = ["cpp", "python"]
@@ -70,6 +71,22 @@ function buildUnitRunRoutes(ctx) {
   const llm = ctx.llm
   const learningRoot = ctx.learning && ctx.learning.root ? ctx.learning.root : null
 
+  /**
+   * 当前该用哪个 Python 解释器。
+   *
+   * 每次请求都重读 settings：设置页（或上一轮探测）改完就立即生效，不用重启服务。
+   * 注入的 ctx.pythonOverride 优先（测试与显式指定用）。
+   * @returns {string|null}
+   */
+  function pythonOverrideNow() {
+    if (ctx.pythonOverride !== undefined && ctx.pythonOverride !== null) return ctx.pythonOverride
+    if (store && typeof store.getSetting === "function") {
+      const raw = store.getSetting(PYTHON_SETTING_KEY)
+      if (raw !== undefined && raw !== null && String(raw).trim() !== "") return String(raw).trim()
+    }
+    return ctx.envPython || null
+  }
+
   function notFound(res, id) {
     ctx.sendJson(res, 404, { error: "单元不存在", id: String(id) })
   }
@@ -112,6 +129,7 @@ function buildUnitRunRoutes(ctx) {
         code: code,
         language: language,
         learningRoot: learningRoot,
+        pythonOverride: pythonOverrideNow(),
       })
 
       ctx.sendJson(res, 200, {
@@ -192,9 +210,10 @@ function buildUnitRunRoutes(ctx) {
     method: "GET",
     pattern: "/api/env",
     handler: async function (req, res) {
-      const python = detectPython(null)
+      const override = pythonOverrideNow()
+      const python = detectPython(override)
       const compiler = detectCompiler()
-      const numpy = detectNumpy(null)
+      const numpy = detectNumpy(override)
       const notes = []
       if (!python) {
         notes.push("本机没有找到 Python 解释器，数据库轨与 AI 轨的 demo 跑不了")

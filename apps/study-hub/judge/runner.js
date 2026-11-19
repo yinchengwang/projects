@@ -258,7 +258,7 @@ async function judgeCardScript(ctx) {
       "断言脚本不存在：" + scriptRel, "", "", "")
   }
 
-  const toolchain = p.toolchain || resolveToolchain({})
+  const toolchain = p.toolchain || resolveToolchain({ pythonOverride: p.pythonOverride || null })
   const python = toolchain.python
   if (!python) {
     return makeUnitResult("compile_error", 0, asserts.length, started, null,
@@ -365,7 +365,7 @@ async function judgeUserCode(ctx) {
       "这个单元没有测试用例，无法判定是否通过；请先在题库里补齐用例", "", "", "")
   }
 
-  const toolchain = p.toolchain || resolveToolchain({})
+  const toolchain = p.toolchain || resolveToolchain({ pythonOverride: p.pythonOverride || null })
   const sandbox = p.sandbox || createSandbox()
   const owned = !p.sandbox
   const caseTimeoutMs = p.timeoutMs ? clampTimeoutMs(p.timeoutMs) : DEFAULT_CASE_TIMEOUT_MS
@@ -496,7 +496,8 @@ async function judgeUserCode(ctx) {
  * 判一个学习单元。kind: problem 判用户提交的代码，kind: card 判单元自带的断言脚本，
  * 两者走同一套「跑 → 收集 → 逐条校验 → verdict」的核心。
  * @param {{unit: object, code?: string, language?: string, timeoutMs?: number,
- *          toolchain?: object, sandbox?: object, learningRoot?: string|null}} params
+ *          toolchain?: object, sandbox?: object, learningRoot?: string|null,
+ *          pythonOverride?: string|null}} params
  * @returns {Promise<object>}
  */
 async function judgeUnit(params) {
@@ -551,7 +552,7 @@ async function judge(params) {
     )
   }
 
-  const toolchain = p.toolchain || resolveToolchain({})
+  const toolchain = p.toolchain || resolveToolchain({ pythonOverride: p.pythonOverride || null })
   const sandbox = createSandbox()
 
   try {

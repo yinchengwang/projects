@@ -86,16 +86,21 @@ function parseCardDirectory(dirAbs, opts) {
     const scriptAbs = path.join(options.unitsDir, track, stem + ".assert.py")
     if (!fs.existsSync(scriptAbs)) {
       warnings.push("断言脚本还没写：" + scriptRel + "（P2 判题时报 compile_error）")
+    }
+  }
+
   // 缺 numpy 的卡读得懂、跑不动——把原因写进 warnings，UI 上要显示出来，
   // 不许让用户对着一个 ModuleNotFoundError 发懵。
+  // 注意：这条**不在上面那个 if 里**——脚本在不在与 numpy 在不在是两回事，
+  // 脚本写好了但本机没 numpy 的卡照样要给出警告。
+  // 探测哪个解释器由 options.pythonOverride 决定（与判题用同一个），
+  // 否则「判题用 py -3 能跑、列表却报缺 numpy」会自相矛盾。
   const numpyAvailable =
-    opts && opts.env && typeof opts.env.numpy === "boolean"
-      ? opts.env.numpy
-      : detectNumpy(null).available
+    options.env && typeof options.env.numpy === "boolean"
+      ? options.env.numpy
+      : detectNumpy(options.pythonOverride || null).available
   if (cardNeedsNumpy(stem) && !numpyAvailable) {
     warnings.push("这张卡需要 numpy，本机没装，暂时跑不了")
-  }
-    }
   }
 
   const unit = createUnit({

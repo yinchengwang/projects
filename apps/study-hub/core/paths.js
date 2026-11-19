@@ -44,6 +44,27 @@ function resolveLearningRoot(env, override) {
 }
 
 /**
+ * 判题用的 Python 解释器（选填）。
+ *
+ * 默认空着，由 judge/sandbox.js 按 python3 → python → py -3 自动探测（G17）。
+ * 但本机装了多个解释器、而 numpy 只装在其中一个时，自动探测可能选到没有 numpy 的那个，
+ * 于是 AI 卡与 clustering 卡全都降级成「暂时跑不了」。这时用 STUDY_HUB_PYTHON 指定：
+ *   STUDY_HUB_PYTHON="py -3"
+ * 与 STUDY_HUB_LEARNING_ROOT 同一个命名约定（G26 / G40 的改名口径）。
+ * @param {object} env 进程环境变量对象
+ * @param {string} [override] 显式指定（优先于环境变量，测试用）
+ * @returns {string} 空串 = 没指定，走自动探测
+ */
+function resolvePythonOverride(env, override) {
+  const raw =
+    override !== undefined && override !== null
+      ? override
+      : (env || process.env).STUDY_HUB_PYTHON
+  if (raw === undefined || raw === null) return ""
+  return String(raw).trim()
+}
+
+/**
  * 题库目录：learning 仓下的 bank/（loader A 的源之一）。
  * @param {string|null} learningRoot
  * @returns {string|null}
@@ -100,6 +121,7 @@ function localBankDir(env, override) {
 
 module.exports = {
   resolveLearningRoot: resolveLearningRoot,
+  resolvePythonOverride: resolvePythonOverride,
   bankDir: bankDir,
   unitsDir: unitsDir,
   grokkingDir: grokkingDir,

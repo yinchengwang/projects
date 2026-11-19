@@ -157,9 +157,10 @@ function loadFromBank(bankRoot, warnings) {
  * @param {string|null} grokkingDir learning/scaffold/grokking 的绝对路径
  * @param {string|null} unitsDir learning/units 的绝对路径
  * @param {string[]} warnings
+ * @param {string|null} [pythonOverride] 探测 numpy 用哪个解释器（与判题一致）
  * @returns {object[]}
  */
-function loadFromCards(grokkingDir, unitsDir, warnings) {
+function loadFromCards(grokkingDir, unitsDir, warnings, pythonOverride) {
   const units = []
   if (!grokkingDir) return units
   const cards = []
@@ -177,6 +178,8 @@ function loadFromCards(grokkingDir, unitsDir, warnings) {
     const res = loaderB.parseCardDirectory(dir, {
       track: card.track,
       unitsDir: unitsDir,
+      // numpy 探测跟着判题用同一个解释器，免得「判题能跑、列表说缺 numpy」
+      pythonOverride: pythonOverride || null,
     })
     ;(res.warnings || []).forEach(function (w) {
       warnings.push(w)
@@ -189,7 +192,7 @@ function loadFromCards(grokkingDir, unitsDir, warnings) {
 /**
  * 加载全部单元。
  *
- * @param {object} opts { learningRoot, localBank, unitsDir, grokkingDir }
+ * @param {object} opts { learningRoot, localBank, unitsDir, grokkingDir, pythonOverride }
  * @returns {{units: object[], warnings: string[], byId: object}}
  */
 function loadUnits(opts) {
@@ -201,7 +204,7 @@ function loadUnits(opts) {
     .concat(loadFromUnitsDir(options.unitsDir, warnings))
     .concat(loadFromBank(options.learningRoot ? path.join(options.learningRoot, "bank") : null, warnings))
     .concat(loadFromBank(options.localBank, warnings))
-    .concat(loadFromCards(options.grokkingDir, options.unitsDir, warnings))
+    .concat(loadFromCards(options.grokkingDir, options.unitsDir, warnings, options.pythonOverride))
 
   const byId = {}
   const units = []

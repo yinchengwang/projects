@@ -309,7 +309,7 @@ function createApp(opts) {
   const options = opts || {}
 
   // 延迟 require：core/ 与 db/api 在后续 Task 才落地，createServer 不依赖它们
-  const { resolveLearningRoot, localBankDir } = require("../core/paths.js")
+  const { resolveLearningRoot, localBankDir, resolvePythonOverride } = require("../core/paths.js")
   const { FileProvider } = require("../core/bank/provider.js")
   const { openDb, createStore } = require("./db.js")
   // M6：LLM 客户端、服务层与配额上限。与 M1–M5 完全解耦，缺了也能起得来。
@@ -342,6 +342,8 @@ function createApp(opts) {
     localBank: options.localBank !== null ? localBankDir(env, options.localBank) : null,
     unitsDir: learning.ok ? unitsDir(learning.root) : null,
     grokkingDir: learning.ok ? grokkingDir(learning.root) : null,
+    // numpy 探测与判题用同一个解释器（settings 里没有就走 STUDY_HUB_PYTHON）
+    pythonOverride: store.getSetting("judge.python.cmd") || resolvePythonOverride(env) || null,
   }
   const unitSnapshot = loadUnits(unitOpts)
   refreshUnitIndex(store, unitOpts, unitSnapshot)
@@ -440,6 +442,8 @@ function createApp(opts) {
       llm: llm,
       learning: learning,
       sendJson: sendJson,
+      // 判题解释器：settings 里没有就用环境变量 STUDY_HUB_PYTHON（空串 = 自动探测）
+      envPython: resolvePythonOverride(env),
     })
   )
 

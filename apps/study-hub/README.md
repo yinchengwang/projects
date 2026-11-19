@@ -54,6 +54,7 @@ STUDY_HUB_LEARNING_ROOT=/path/to/learning node server/main.js
 |---|---|---|
 | `STUDY_HUB_LEARNING_ROOT` | learning 仓根目录。**不硬编码相对路径** | 无（未设＝纯本地模式） |
 | `STUDY_HUB_LOCAL_BANK` | 工程仓内置题库根（Codeforces 题在这） | `apps/study-hub/bank` |
+| `STUDY_HUB_PYTHON` | 判题用的 Python 解释器，形如 `python` 或 `py -3`。本机装了多个解释器、numpy 只装在其中一个时用它指定 | 无（自动按 python3 → python → py -3 探测） |
 | `PORT` | 服务端口 | `5173` |
 | `ARK_API_KEY` | 火山方舟密钥（**只从环境变量读**） | 无 |
 | `ARK_BASE_URL` | 方舟地址 | `https://ark.cn-beijing.volces.com/api/v3` |
