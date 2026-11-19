@@ -791,3 +791,17 @@ td button {
 @media (max-width: 900px) {
   .unit-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---- P2：单元库页 ---- */
+.unit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.unit-row:last-child { border-bottom: none; }
+.unit-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.unit-row-title { font-weight: 600; font-size: 14px; }
+.unit-row-tags { display: inline-flex; gap: 6px; flex-wrap: wrap; }
