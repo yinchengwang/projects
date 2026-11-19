@@ -8,6 +8,7 @@
  *   3. 每一张卡都能被 loader B 读成能直接用的单元。
  *
  * AI 卡依赖 numpy；本机没装 numpy 时**明确 skip 并写明原因**，不静默跳过。
+ * 测试通过 STUDY_HUB_PYTHON 指定解释器时，loader 与 demo 实跑必须使用同一个解释器。
  */
 
 const test = require("node:test")
@@ -46,6 +47,19 @@ function resolveLearningRoot() {
 
 function grokkingDir(learningRoot) {
   return path.join(learningRoot, "scaffold", "grokking")
+}
+
+/**
+ * 测试用哪个 Python 解释器。
+ *
+ * 与产品代码同一条通路：STUDY_HUB_PYTHON 指定了就用它（numpy 只装在 py -3 的机器上
+ * 必须这样指定），没指定就走自动探测。loader 与 demo 实跑必须用同一个，
+ * 否则会出现「loader 说缺 numpy、demo 其实跑得动」这种自相矛盾的结论。
+ * @returns {string|null}
+ */
+function pythonOverride() {
+  const raw = process.env.STUDY_HUB_PYTHON
+  return raw && String(raw).trim() !== "" ? String(raw).trim() : null
 }
 
 function skipNoLearning(t, what) {
@@ -115,7 +129,7 @@ test("loader B 把 16 张数据库卡都读成能用的单元", function (t) {
     return
   }
   const dir = grokkingDir(learningRoot)
-  const numpy = detectNumpy(null)
+  const numpy = detectNumpy(pythonOverride())
   DB_CARDS.forEach(function (stem) {
     const out = loaderB.parseCardDirectory(path.join(dir, stem), {
       learningRoot: learningRoot,
@@ -144,7 +158,7 @@ test("loader B 把 13 张 AI 卡都读成能用的单元", function (t) {
     return
   }
   const dir = grokkingDir(learningRoot)
-  const numpy = detectNumpy(null)
+  const numpy = detectNumpy(pythonOverride())
   AI_CARDS.forEach(function (stem) {
     const out = loaderB.parseCardDirectory(path.join(dir, stem), {
       learningRoot: learningRoot,
@@ -179,8 +193,53 @@ test("缺 numpy 时 AI 卡的 warnings 里写明原因", function (t) {
   assert.ok(out.warnings.join("；").indexOf("numpy") !== -1, "warnings 里要写明缺 numpy")
 })
 
+test("numpy 警告与「断言脚本在不在」无关（脚本写好了也照样要报缺 numpy）", function () {
+  // 实际缺陷：numpy 警告原来嵌在 `if (options.unitsDir) { if (!fs.existsSync(script)) { ... } }`
+  // 里面，于是断言脚本一写好就再也不报 numpy 缺失。这里用一个临时卡目录复现两种情形。
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "p2-numpy-warn-"))
+  try {
+    const cardDir = path.join(root, "scaffold", "grokking", "cnn")
+    fs.mkdirSync(cardDir, { recursive: true })
+    fs.writeFileSync(path.join(cardDir, "README.md"), "# 卷积神经网络\n\n讲解正文。\n", "utf8")
+    fs.writeFileSync(path.join(cardDir, "main.py"), "print('ok')\n", "utf8")
+
+    const unitsDir = path.join(root, "units")
+    fs.mkdirSync(path.join(unitsDir, "ai"), { recursive: true })
+
+    // 情形 1：脚本不存在
+    let out = loaderB.parseCardDirectory(cardDir, {
+      track: "ai",
+      unitsDir: unitsDir,
+      env: { numpy: false },
+    })
+    assert.ok(
+      out.warnings.join("；").indexOf("numpy") !== -1,
+      "脚本不存在时也要报缺 numpy：" + JSON.stringify(out.warnings)
+    )
+
+    // 情形 2：脚本存在（这才是真实生产形态——P2 起 4 张 DB 卡都有脚本了）
+    fs.writeFileSync(path.join(unitsDir, "ai", "cnn.assert.py"), "exit(0)\n", "utf8")
+    out = loaderB.parseCardDirectory(cardDir, {
+      track: "ai",
+      unitsDir: unitsDir,
+      env: { numpy: false },
+    })
+    assert.ok(
+      out.warnings.join("；").indexOf("numpy") !== -1,
+      "脚本已经写好了，缺 numpy 的警告反而消失了：" + JSON.stringify(out.warnings)
+    )
+    assert.strictEqual(
+      out.warnings.filter(function (w) { return w.indexOf("断言脚本还没写") !== -1 }).length,
+      0,
+      "脚本在的时候不该报「脚本还没写」"
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("detectNumpy：结果可用且能清缓存", function () {
-  const numpy = detectNumpy(null)
+  const numpy = detectNumpy(pythonOverride())
   assert.strictEqual(typeof numpy.available, "boolean")
   assert.strictEqual(typeof numpy.version, "string")
   if (numpy.available) {
@@ -188,18 +247,31 @@ test("detectNumpy：结果可用且能清缓存", function () {
   }
 })
 
+/**
+ * 已知跑不通的 AI 卡 demo（learning 仓 **scaffold/** 的内容 bug，不是 P2 的代码 bug）。
+ *
+ * 契约 G32 冻结「scaffold/** 一个字节都不许改」，P2 无权修；这里如实记录，
+ * 让「13 张卡里有 3 张跑不动」变成可查的事实而不是模糊印象。
+ * 谁哪天修好了，下面那条用例会提醒把这行删掉。
+ */
+const KNOWN_BROKEN_DEMOS = {
+  dimensionality_reduction: "main.py:192 的 f-string 没闭合：print(f\"  LDA 寻找类间分离方向（监督））",
+  nlp: "main.py 里用了 TextCNN.num_filters，类上没有这个属性",
+  rnn: "main.py 里 np.random.randn(1, 8) 只返回 1 个值，却按 2 个解包",
+}
+
 test("AI 卡的 demo 实跑：没有 numpy 时明确 skip 并写明原因", function (t) {
   const learningRoot = resolveLearningRoot()
   if (!learningRoot) {
     skipNoLearning(t, "AI 卡实跑验收")
     return
   }
-  const py = detectPython(null)
+  const py = detectPython(pythonOverride())
   if (!py) {
     t.skip("本机没有可用的 Python 解释器（试过 python3 / python / py -3），跳过 AI 卡实跑验收")
     return
   }
-  const numpy = detectNumpy(null)
+  const numpy = detectNumpy(pythonOverride())
   if (!numpy.available) {
     t.skip("本机没有装 numpy：13 张 AI 卡与 clustering 卡依赖 numpy，按契约 §14.1 明确跳过，不静默跳过")
     return
@@ -218,3 +290,68 @@ test("AI 卡的 demo 实跑：没有 numpy 时明确 skip 并写明原因", func
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test("13 张 AI 卡里除已知坏掉的 3 张，其余 demo 都能实跑", function (t) {
+  const learningRoot = resolveLearningRoot()
+  if (!learningRoot) {
+    skipNoLearning(t, "AI 卡全量实跑验收")
+    return
+  }
+  const py = detectPython(pythonOverride())
+  if (!py) {
+    t.skip("本机没有可用的 Python 解释器，跳过 AI 卡全量实跑验收")
+    return
+  }
+  const numpy = detectNumpy(pythonOverride())
+  if (!numpy.available) {
+    t.skip("本机没有装 numpy：13 张 AI 卡与 clustering 卡依赖 numpy，按契约 §14.1 明确跳过")
+    return
+  }
+
+  const ok = []
+  const broken = []
+  for (const stem of AI_CARDS) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2-ai-all-"))
+    try {
+      fs.cpSync(path.join(grokkingDir(learningRoot), stem), path.join(tmp, stem), {
+        recursive: true,
+      })
+      const r = spawnSync(py.cmd, py.args.concat([path.join(tmp, stem, "main.py")]), {
+        encoding: "utf8",
+        env: Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8" }),
+        timeout: 180000,
+      })
+      if (r.status === 0) ok.push(stem)
+      else broken.push(stem)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  }
+
+  // 跑得通的那 10 张：一张都不许新坏
+  const expectedOk = AI_CARDS.filter(function (s) {
+    return KNOWN_BROKEN_DEMOS[s] === undefined
+  })
+  assert.deepStrictEqual(
+    ok.slice().sort(),
+    expectedOk.slice().sort(),
+    "能跑的 AI 卡清单变了。新坏的：" +
+      broken.filter(function (s) { return KNOWN_BROKEN_DEMOS[s] === undefined }).join("、") +
+      "；已被修好的：" +
+      expectedOk.filter(function (s) { return broken.indexOf(s) !== -1 }).join("、")
+  )
+
+  // 已知坏的 3 张：仍然坏着（谁修好了就把 KNOWN_BROKEN_DEMOS 里对应行删掉）
+  const stillBroken = Object.keys(KNOWN_BROKEN_DEMOS).filter(function (s) {
+    return broken.indexOf(s) !== -1
+  })
+  assert.deepStrictEqual(
+    stillBroken.sort(),
+    Object.keys(KNOWN_BROKEN_DEMOS).sort(),
+    "已知会坏的 demo 清单不匹配了。修好了的（请从 KNOWN_BROKEN_DEMOS 删掉）：" +
+      Object.keys(KNOWN_BROKEN_DEMOS)
+        .filter(function (s) { return broken.indexOf(s) === -1 })
+        .join("、")
+  )
+})
+
