@@ -24,61 +24,8 @@
 #include "common/crc.h"
 #include "common/latch.h"
 #include "common/lockstat.h"
+#include "wal/wal_hdr.h"
 
-/*
- * ==================== 文件头的读写（v1.3 欠账 6 / W-D 的 D-1） ====================
- *
- * 三件事：
- *   ① wal_file_hdr_peek  —— 只读文件开头 32 字节，**不改文件位置以外的东西**
- *   ② wal_file_hdr_write —— 在文件**最前面**写一个头（空文件才调）
- *   ③ wal_file_hdr_check —— 把一个读出来的头逐字段校验
- *
- * 【为什么校验要单独一个函数】
- *
- * 三个调用点（wal_open 的新库分支、老库分支、wal_reset 之后）共用同一套判据。
- * 判据散在三处 ⇒ 早晚有一处漏字段，而漏掉的那个字段恰好就是静默损坏的来源。
- */
-
-/* 写一个合法的文件头到 FILE 的最前面（调用方保证此刻文件是空的） */
-static int wal_file_hdr_write(FILE *f)
-{
-    u8 h[WAL_FILE_HDR_SIZE];
-
-    memset(h, 0, sizeof(h));
-    put_u32(h + 0,  WAL_MAGIC);
-    put_u32(h + 4,  WAL_FORMAT_VERSION);
-    put_u32(h + 8,  PAGE_SIZE);
-    put_u32(h + 12, WAL_ENDIAN_MARKER);
-    put_u32(h + 16, WAL_FILE_HDR_SIZE);
-    /* 20..27 是 reserved，必须为 0（memset 已经是 0）*/
-
-    if (FSEEK(f, 0, SEEK_SET) != 0)
-        return E_IO;
-    if (fwrite(h, 1, sizeof(h), f) != sizeof(h))
-        return E_IO;
-    return OK;
-}
-
-/*
- * 校验一个读出来的头。返回 OK 或 E_CORRUPT。
- *
- * ⚠️ 每个字段都必须查，不能只查 magic：见 wal.h 里「为什么 page_size 与
- * endian_marker 也要校验」那段 —— 这两项搞错不会报错，只会读出垃圾。
- */
-static int wal_file_hdr_check(const u8 *h)
-{
-    if (get_u32(h + 0) != WAL_MAGIC)
-        return E_CORRUPT;
-    if (get_u32(h + 4) != WAL_FORMAT_VERSION)
-        return E_CORRUPT;
-    if (get_u32(h + 8) != PAGE_SIZE)
-        return E_CORRUPT;
-    if (get_u32(h + 12) != WAL_ENDIAN_MARKER)
-        return E_CORRUPT;
-    if (get_u32(h + 16) != WAL_FILE_HDR_SIZE)
-        return E_CORRUPT;
-    return OK;
-}
 
 /*
  * 每个事务的 undo 链尾。
@@ -287,59 +234,15 @@ int wal_open(const char *path, Wal **out)
 
     /* ---------- 文件头校验 / 补写（v1.3 欠账 6 / W-D 的 D-1） ---------- */
     {
-        u8 h[WAL_FILE_HDR_SIZE];
         u64 sz = 0;
+        int rc = wal_hdr_load(f, &sz);
 
-        if (FSEEK(f, 0, SEEK_END) == 0) {
-            long long p = FTELL(f);
-            if (p > 0)
-                sz = (u64)p;
+        if (rc != OK) {
+            fclose(f);
+            free(w->path);
+            free(w);
+            return rc;
         }
-
-        if (sz == 0) {
-            /*
-             * 空文件 = 全新日志（或者被 wal_reset / 上一个会话清空过）。
-             * 这不是错误，要**写一个头** —— 否则下次开库会把它当成
-             * 「截断的头」而报错（自相矛盾）。
-             */
-            int rc = wal_file_hdr_write(f);
-            if (rc != OK) {
-                fclose(f);
-                free(w->path);
-                free(w);
-                return rc;
-            }
-            sz = WAL_FILE_HDR_SIZE;
-        } else {
-            /*
-             * 非空文件：必须**至少**装得下一个头。
-             *
-             * ⚠️ 与「空文件」是两个不同的分支，不能合并：
-             *   0 字节        ⇒ 全新库，写头
-             *   1..31 字节    ⇒ 写到一半断电，**半个头** ⇒ 报错
-             */
-            if (sz < WAL_FILE_HDR_SIZE) {
-                fclose(f);
-                free(w->path);
-                free(w);
-                return E_CORRUPT;
-            }
-            if (FSEEK(f, 0, SEEK_SET) != 0 ||
-                fread(h, 1, sizeof(h), f) != sizeof(h)) {
-                fclose(f);
-                free(w->path);
-                free(w);
-                return E_IO;
-            }
-            int rc = wal_file_hdr_check(h);
-            if (rc != OK) {
-                fclose(f);
-                free(w->path);
-                free(w);
-                return rc;
-            }
-        }
-
         /*
          * 字节数只算**记录区**（不含文件头）。
          *
@@ -350,6 +253,7 @@ int wal_open(const char *path, Wal **out)
         atomic_store(&w->bytes, (sz > WAL_FILE_HDR_SIZE)
                                 ? (sz - WAL_FILE_HDR_SIZE) : 0u);
     }
+
     w->scratch = malloc(WAL_HDR + WAL_MAX_PAYLOAD + 4);
     if (!w->scratch) {
         fclose(f);
@@ -413,7 +317,7 @@ int wal_reset(Wal *w)
      * ⚠️ "wb" 会把**文件头一起截掉**，所以必须立刻补写一个。
      * 漏了这一步 = 下次开库读到「截断的头」⇒ 自己把自己锁死。
      */
-    if (wal_file_hdr_write(w->f) != OK) {
+    if (wal_hdr_write(w->f) != OK) {
         wal_unlock(w);
         return E_IO;
     }
