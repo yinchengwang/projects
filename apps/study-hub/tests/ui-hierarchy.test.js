@@ -28,6 +28,8 @@ require("../web/app.js")
 const todayPage = require("../web/pages/today.js")
 require("../web/pages/review.js")
 require("../web/pages/rounds.js")
+const unitPage = require("../web/pages/unit.js")
+const libraryPage = require("../web/pages/library.js")
 const PAGES = global.window.AlgoPlan.pages
 /** 铺一个假的 fetch：按路径前缀返回预设响应 */
 function stubFetch(routes) {
@@ -58,6 +60,28 @@ function findAllByClass(node, className) {
 /** 在树里找出第一个 class 精确匹配的节点 */
 function findByClass(node, className) {
   return findAllByClass(node, className)[0] || null
+}
+
+/**
+ * 在树里找出所有 class 里含有这个词的节点。
+ *
+ * findAllByClass 是**精确匹配 className**；
+ * 单元页的左右两栏是 "unit-col unit-col-read" / "unit-col unit-col-do"，
+ * 拿 "unit-col" 去精确匹配一个都找不到——所以补一个按词匹配的。
+ * @param {object} node
+ * @param {string} token
+ * @returns {Array<object>}
+ */
+function findAllByClassToken(node, token) {
+  const out = []
+  function walk(n) {
+    if (!n) return
+    const cls = String(n.className || "").split(/\s+/)
+    if (cls.indexOf(token) !== -1) out.push(n)
+    ;(n.children || []).forEach(walk)
+  }
+  walk(node)
+  return out
 }
 
 /** 把树里所有文本拼起来 */
@@ -288,4 +312,140 @@ test("页头只有一个：各自渲染都不许出现两个页头", async funct
     const heads = findAllByClass(view, "page-head")
     assert.strictEqual(heads.length, 1, item.name + "页出现了 " + heads.length + " 个页头")
   }
+})
+
+/* ---------------- P2：单元页与单元库页 ---------------- */
+
+/** 一张数据库卡：左栏讲解，右栏跑 demo + 看断言结果 */
+const P2_CARD = {
+  id: "db:mvcc",
+  track: "database",
+  kind: "card",
+  title: "MVCC 与多版本并发控制",
+  status: "verified",
+  difficulty: "进阶",
+  topics: ["事务"],
+  subtracks: ["mvcc"],
+  entry: {
+    demo: "scaffold/grokking/mvcc/main.py",
+    graded: "script",
+    script: "units/database/mvcc.assert.py",
+    language: "python",
+  },
+  asserts: [],
+  statement_html:
+    "<h2>MVCC</h2><p>多版本并发控制靠<strong>快照</strong>读。</p><ul><li>读不阻塞写</li></ul>",
+}
+
+/** 一道算法题：左栏题面，右栏代码编辑区 + 判题结果 */
+const P2_PROBLEM = {
+  id: "algo:lc-00007",
+  track: "algorithm",
+  kind: "problem",
+  title: "两数之和",
+  status: "todo",
+  difficulty: "简单",
+  topics: ["哈希表"],
+  subtracks: [],
+  entry: { graded: "user", language: "cpp" },
+  asserts: [],
+  statement_html: "<h2>题面</h2><p>给定整数数组与目标值，返回两个数的下标。</p>",
+}
+
+/** 判题结果：与 POST /api/units/:id/judge 的响应同形 */
+const P2_RESULT = {
+  verdict: "pass",
+  message: "全部断言通过（2 条）",
+  stdout: "─── demo 输出开始 ───\nhello\n─── demo 输出结束 ───",
+  stderr: "",
+  passed: 2,
+  total: 2,
+  failed: null,
+  durationMs: 42,
+}
+
+test("单元页（知识卡）：左栏是讲解，右栏是「运行断言」与判题结果区", function () {
+  const root = unitPage.renderUnit(
+    unitPage.buildUnitView(P2_CARD, P2_CARD.statement_html),
+    P2_CARD,
+    P2_CARD.statement_html
+  )
+
+  assert.strictEqual(findAllByClass(root, "page-head").length, 1, "单元页有且只有一个页头")
+  assert.ok(findByClass(root, "panel hero"), "右栏「动手做」要在主卡里")
+
+  const cols = findAllByClassToken(root, "unit-col")
+  assert.strictEqual(cols.length, 2, "左栏读、右栏做，一共两栏")
+  const readCol = findAllByClassToken(root, "unit-col-read")[0]
+  const doCol = findAllByClassToken(root, "unit-col-do")[0]
+  assert.ok(readCol, "要有左栏（读）")
+  assert.ok(doCol, "要有右栏（做）")
+
+  // 左栏：讲解正文渲染成真节点（不是 innerHTML）
+  const readText = collectText(readCol)
+  assert.ok(readText.indexOf("多版本并发控制") !== -1, "左栏要有讲解正文：" + readText)
+  assert.ok(readText.indexOf("快照") !== -1, "讲解里的 strong 也要渲染出来")
+
+  // 右栏：跑 demo 的按钮 + 判题结果区
+  assert.ok(stub.findById(doCol, "unit-run"), "右栏要有「运行断言」按钮")
+  assert.ok(stub.findById(doCol, "unit-rerun"), "右栏要有「重新运行」按钮")
+  assert.ok(stub.findById(doCol, "unit-result"), "右栏要有判题结果区")
+  assert.strictEqual(stub.findById(doCol, "unit-code"), null, "知识卡右栏不该有代码编辑区")
+})
+
+test("单元页（算法题）：左栏是题面，右栏是代码编辑区 + 判题结果区", function () {
+  const root = unitPage.renderUnit(
+    unitPage.buildUnitView(P2_PROBLEM, P2_PROBLEM.statement_html),
+    P2_PROBLEM,
+    P2_PROBLEM.statement_html
+  )
+
+  assert.strictEqual(findAllByClass(root, "page-head").length, 1)
+  const readCol = findAllByClassToken(root, "unit-col-read")[0]
+  const doCol = findAllByClassToken(root, "unit-col-do")[0]
+
+  const readText = collectText(readCol)
+  assert.ok(readText.indexOf("给定整数数组") !== -1, "左栏要有题面：" + readText)
+
+  const editor = stub.findById(doCol, "unit-code")
+  assert.ok(editor, "右栏要有代码编辑区")
+  assert.strictEqual(editor.tagName, "textarea", "代码编辑区是 textarea")
+  assert.ok(stub.findById(doCol, "unit-judge"), "右栏要有「提交判题」按钮")
+  assert.ok(stub.findById(doCol, "unit-result"), "右栏要有判题结果区")
+  assert.strictEqual(stub.findById(doCol, "unit-run"), null, "算法题右栏不该有「运行断言」按钮")
+})
+
+test("单元页：判题结果按五类 verdict 上色，中文文案", function () {
+  const root = unitPage.renderUnit(
+    unitPage.buildUnitView(P2_CARD, P2_CARD.statement_html),
+    P2_CARD,
+    P2_CARD.statement_html
+  )
+  const box = stub.findById(root, "unit-result")
+  assert.ok(box, "结果区要有 unit-result 的 id")
+  unitPage.paintResult(box, P2_RESULT)
+  const text = collectText(box)
+  assert.ok(text.indexOf("通过") !== -1, "结果区要有中文结论：" + text)
+  assert.ok(text.indexOf("2/2") !== -1, "结果区要显示通过条数：" + text)
+  assert.ok(text.indexOf("demo 输出") !== -1, "结果区要显示 demo 输出：" + text)
+})
+
+test("单元页：demo 输出被拆成展示区", function () {
+  const parts = unitPage.splitDemoOutput(P2_RESULT.stdout)
+  assert.strictEqual(parts.hasMarkers, true)
+  assert.strictEqual(parts.demoOutput, "hello")
+})
+
+test("单元库页：页头、主卡、数字块、静默卡齐全", function () {
+  const payload = { total: 1, items: [P2_CARD] }
+  const filter = { track: "", q: "" }
+  const root = libraryPage.renderLibrary(
+    libraryPage.buildLibraryView(payload, filter),
+    payload,
+    filter
+  )
+  assert.strictEqual(findAllByClass(root, "page-head").length, 1)
+  assert.strictEqual(findAllByClass(root, "panel hero").length, 1)
+  assert.ok(findByClass(root, "stat-grid"))
+  assert.ok(findByClass(root, "panel quiet"))
 })
