@@ -494,6 +494,55 @@ int ft_index_delete(FtIndex *ix, u32 xid, u32 doc_id)
     }
     return OK;
 }
+
+/*
+ * 撤销一次删除（W-D 的 D-4b）：内存集合 + tombstone 页各撤一条。
+ * 契约见 ft_index.h。
+ *
+ * 【顺序：先撤页，再撤内存集合】
+ *
+ * 与 ft_index_delete 相反 —— 那里是"先落盘再进内存"，因为页是权威存储、
+ * 页写失败就不该让内存集合领先。
+ * 撤销同样是"页是权威"：页撤成功了才动内存集合，否则内存说"没删"、
+ * 页里还留着 ⇒ 下次开库那篇又被删掉（两次查询两个答案）。
+ *
+ * 页撤失败就原样返回错误：那时两份状态仍然一致（都说"已删"）——
+ * 宁可这次回滚没生效，也不能让它们对不上。
+ */
+int ft_index_undelete(FtIndex *ix, u32 doc_id)
+{
+    u32 pos;
+
+    if (ix == NULL) {
+        return E_INVAL;
+    }
+    if (!ft_tomb_is(ix, doc_id)) {
+        return OK;                  /* 没删过：合法空操作 */
+    }
+
+    /*
+     * 页那一半交给 ft_tomb 层（它知道页格式，本文件不该重复那些偏移）。
+     * lsn 传 0：运行时撤销没有自己的日志记录（见 db_ft_txn.c 的说明）。
+     */
+    {
+        int rc = ft_tomb_remove_doc(ix, doc_id);
+
+        if (rc != OK) {
+            return rc;              /* 页撤不掉 ⇒ 内存集合不许动 */
+        }
+    }
+
+    /* 内存集合（升序数组）：按值找到再把它后面的往前挪一格 */
+    pos = ft_tomb_lb(ix->tomb, ix->n_tombs, doc_id);
+    if (pos < ix->n_tombs && ix->tomb[pos] == doc_id) {
+        if (pos + 1u < ix->n_tombs) {
+            memmove(&ix->tomb[pos], &ix->tomb[pos + 1u],
+                    sizeof(u32) * (size_t)(ix->n_tombs - pos - 1u));
+        }
+        ix->n_tombs--;
+    }
+    return OK;
+}
 /* ---------------- 公开 API：合并 ---------------- */
 
 /*

@@ -99,6 +99,7 @@ static int txn_end_commit(DB *db)
     db->db.cur_xid = 0;
     db->in_txn = false;
     db->txn_failed = false;
+    db_ft_txn_clear(db);          /* 提交后不能把 FT 删除带到下一个事务 */
     return OK;
 }
 
@@ -111,10 +112,18 @@ static int txn_end_abort(DB *db)
 
     txn_abort(&db->inst->txns, db->xid);
 
-    db->db.cur_xid = 0;
-    db->in_txn = false;
-    db->txn_failed = false;
-    return OK;
+    /*
+     * 运行时回滚也要撤 FT：WAL undo 只负责崩溃恢复，
+     * 当前会话的内存集合与 tombstone 页不能等到重开才恢复一致。
+     */
+    {
+        int ft_rc = db_ft_txn_rollback(db);
+
+        db->db.cur_xid = 0;
+        db->in_txn = false;
+        db->txn_failed = false;
+        return (ft_rc != OK) ? ft_rc : OK;
+    }
 }
 
 /*

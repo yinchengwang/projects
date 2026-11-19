@@ -679,30 +679,7 @@ db_err db_ft_search(DB *db, const char *query, uint32_t top_k,
  */
 db_err db_ft_delete(DB *db, uint32_t doc_id)
 {
-    DbInstance *inst;
-    u32 xid;
-    int rc;
-
-    if (!db) {
-        return DB_E_INVAL;
-    }
-    inst = db->inst;
-    if (!inst || !inst->ft_ready) {
-        dft_err(db, "全文索引还不存在");
-        return DB_E_NOTFOUND;
-    }
-
-    xid = db->in_txn ? db->xid : 0u;
-
-    latch_lock();
-    rc = ft_index_delete(inst->ft, xid, doc_id);
-    latch_unlock();
-
-    if (rc != OK) {
-        dft_err(db, "删除文档失败");
-        return map_rc(rc);
-    }
-    return DB_OK;
+    return db_ft_delete_wired(db, doc_id);
 }
 
 /*

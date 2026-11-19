@@ -111,6 +111,24 @@ int ft_index_recover(FtIndex *ix, const u32 *redo_ids, u32 n_redo,
 int ft_index_delete(FtIndex *ix, u32 xid, u32 doc_id);
 
 /*
+ * 撤销一次删除（W-D 的 D-4b）：把 doc_id 从**内存集合**与**tombstone 页**里都拿掉。
+ *
+ * 【谁调】运行时 ROLLBACK（db 层的 db_ft_txn_rollback）。崩溃恢复那一路不走这里 ——
+ * 它按 WAL 的 undo 直接调 ft_tomb_page_remove 改页，再按页重建集合。
+ *
+ * 【与坑 M4-24 的关系】只撤**这一条**，同页上别的已提交删除毫发无损 ——
+ * 这正是 ft_tomb_page_remove 按值找、把后面条目往前挪的那套做法。
+ *
+ * 没删过的 doc_id 是**合法空操作**（返回 OK）。
+ *
+ * ⚠️ 已知限制：若这次删除之后**已经发生过合并**（合并会把 tombstone 的文档
+ * 物理丢弃），那篇文档就再也回不来了 —— 撤销只能撤"标记"，撤不回
+ * "被物理丢掉的内容"。合并走系统事务（xid=0），与用户事务的回滚不相干，
+ * 所以这个限制在本内核里是长期语义，不是缺陷。
+ */
+int ft_index_undelete(FtIndex *ix, u32 doc_id);
+
+/*
  * 触发一次 Tiered 合并。
  *
  * 段数 ≤ FT_MERGE_THRESHOLD 时**什么都不做**，直接返回 OK。

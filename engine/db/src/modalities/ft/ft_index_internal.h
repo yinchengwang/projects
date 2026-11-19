@@ -180,6 +180,20 @@ int  ft_tomb_insert(FtIndex *ix, u32 doc_id);   /* 1=插入 0=已存在 -1=内�
 int ft_tomb_append(FtIndex *ix, u32 xid, u32 doc_id);
 
 /*
+ * 把 doc_id 从**落盘的** tombstone 页里撤掉一条（W-D 的 D-4b）。
+ *
+ * 【与 ft_tomb_page_remove 的分工】
+ * ft_tomb_page_remove 要 page_id（恢复期由 WAL 记录给出）；
+ * 运行时撤销只知道 doc_id（见 ft_index_undelete），页号得自己找 ——
+ * 而"条目存在哪一页"是 tombstone 页格式的私有知识，所以这一步放在
+ * ft_tomb.c 里，而不是让 ft_index.c 去碰 FTM_* 偏移。
+ *
+ * 页里没有这一条不是错误（内存集合与页本来就可能不一致，
+ * 目标是"让两边都变成没删"）。
+ */
+int ft_tomb_remove_doc(FtIndex *ix, u32 doc_id);
+
+/*
  * 恢复时的集合装配：
  *
  *   最终集合 = 页里的内容 ∪ (WAL 重放看到的 − WAL 回滚撤销的)

@@ -546,6 +546,52 @@ int ft_tomb_page_remove(Pager *pg, u32 page_id, u32 doc_id, u32 lsn)
     return pager_unpin(pg, page_id, true);
 }
 
+/*
+ * 把 doc_id 从落盘的 tombstone 页里撤掉一条（W-D 的 D-4b）。
+ * 契约见 ft_index_internal.h。
+ *
+ * 扫一遍内存里的页号列表找它在哪一页 —— 页数很少（一页装 1018 条），
+ * 建索引不值得。找到之后交给 ft_tomb_page_remove（它只撤那一条）。
+ */
+int ft_tomb_remove_doc(FtIndex *ix, u32 doc_id)
+{
+    u32 i;
+
+    if (ix == NULL) {
+        return E_INVAL;
+    }
+
+    for (i = 0; i < ix->n_tomb_pages; i++) {
+        PageFrame *fr = NULL;
+        u32 count;
+        u32 k;
+        bool found = false;
+
+        if (pager_get(ix->pg, ix->tomb_pages[i], &fr) != OK) {
+            continue;               /* 页不在文件里：跳过 */
+        }
+        count = get_u32(fr->data + FTM_COUNT);
+        if (count > FT_TOMB_CAP) {
+            count = FT_TOMB_CAP;    /* 页坏了也不能越界读 */
+        }
+        for (k = 0; k < count; k++) {
+            if (get_u32(fr->data + FTM_DATA + k * 4u) == doc_id) {
+                found = true;
+                break;
+            }
+        }
+        pager_unpin(ix->pg, ix->tomb_pages[i], false);
+
+        if (found) {
+            /* lsn = 0：运行时撤销没有自己的日志记录（见 db_ft_txn.c） */
+            return ft_tomb_page_remove(ix->pg, ix->tomb_pages[i], doc_id, 0);
+        }
+    }
+
+    /* 页里没有这一条：不是错误（目标是"两边都变成没删"） */
+    return OK;
+}
+
 /* ---------------- 恢复：装配集合 ---------------- */
 
 /*

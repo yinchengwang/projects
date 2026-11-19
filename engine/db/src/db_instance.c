@@ -23,6 +23,20 @@
 
 #include "common/latch.h"
 
+#include "modalities/ft/ft_index.h"
+
+static void close_connection_txn(DB *db)
+{
+    if (db == NULL)
+        return;
+    /* 连接被直接关闭时，未提交的 FT 删除也不能遗留在内存集合里。 */
+    if (db->in_txn) {
+        (void)db_ft_txn_rollback(db);
+    } else {
+        db_ft_txn_clear(db);
+    }
+}
+
 /* 真正关闭实例：刷页、写 CHECKPOINT、关 WAL */
 static void instance_close(DbInstance *inst)
 {
@@ -137,6 +151,9 @@ db_err db_close(DB *db)
 
     DbInstance *inst = db->inst;
 
+    /* 关闭连接前先处理连接私有的 FT 事务状态。 */
+    close_connection_txn(db);
+
     /*
      * 整个关闭过程持锁：引用计数 + 实例销毁。
      *
@@ -176,6 +193,9 @@ void db_abandon(DB *db)
         return;
 
     DbInstance *inst = db->inst;
+
+    /* 断电式放弃也要释放连接私有的 FT 事务记录；不刷页、不写新 WAL。 */
+    db_ft_txn_clear(db);
 
     /* 同 db_close：引用计数 + 实例销毁都在临界区里 */
     latch_lock();

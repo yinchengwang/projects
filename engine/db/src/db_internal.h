@@ -284,6 +284,38 @@ int db_ft_open(DbInstance *inst);
 void db_ft_close(DbInstance *inst);
 
 /*
+ * ---------------- FT 删除与事务的接线（W-D 的 D-4b，db_ft_txn.c 实现） ----------------
+ *
+ * 【为什么单独一组接口】
+ *
+ * 运行时 ROLLBACK（db_stmt.c 的 txn_end_abort）只动 txn 表，原先没人去撤
+ * FT 的删除 ⇒ BEGIN → 删除 → ROLLBACK 之后**同一个会话里查不到**那篇文档
+ * （关库重开又对了，因为重开是按 tombstone 页重建集合的）。
+ *
+ * 所以要在连接（DB）上记一笔"本事务删过哪些"，回滚时逐个撤。
+ * 记在连接上而不是实例上：实例是多个连接共享的，记在那里会让 A 的回滚
+ * 撤掉 B 的删除。
+ */
+
+/* 记录"本事务删了这一篇"（只在显式事务里调；内部判重） */
+int  db_ft_txn_track(DB *db, u32 doc_id);
+
+/* 回滚：把记下来的每一篇都撤回去（页 + 内存集合），然后清空记录 */
+int  db_ft_txn_rollback(DB *db);
+
+/* 清空记录（提交时调；关连接时也要调，否则下一个事务会拿旧记录回滚） */
+void db_ft_txn_clear(DB *db);
+
+/*
+ * 带事务接线版的 db_ft_delete（实现在 db_ft_txn.c）。
+ *
+ * 【为什么是"另一个函数"而不是改 db_ft_delete】
+ * db_ft.c 已经 796 行，硬规则 4 的上限是 800 —— 往里加行就破线。
+ * db_ft.c 里的 db_ft_delete 退化成"薄壳"，只做转发（见那里的说明）。
+ */
+db_err db_ft_delete_wired(DB *db, uint32_t doc_id);
+
+/*
  * ---------------- 时序模态（v1.5，db_ts.c 实现） ----------------
  */
 
@@ -433,6 +465,17 @@ struct DB {
      *   cur_xid 在事务开始时就非 0 了，判断不出这个。）
      */
     bool iso_locked;
+
+    /*
+     * 本事务在 FT 上删过的文档号（W-D 的 D-4b）。
+     *
+     * 【为什么挂在连接上】实例（DbInstance）是多连接共享的，
+     * 记在那里会让 A 的回滚撤掉 B 的删除。
+     *
+     * 【生命周期】提交清、回滚撤完再清、关连接也清。
+     * 复用 FtReplaySet：它本来就是"一串 doc_id"的容器。
+     */
+    FtReplaySet ft_del;
 };
 
 struct Result {
