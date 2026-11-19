@@ -9,6 +9,18 @@
 > D-0 要提交的那 4 个文件（`db_ft.c` / `ft_index.c` / `ft_index.h` / `test_ft_reclaim_boot.c`）
 > **现在就在工作区里**，不提交就会被 W-A/W-B/W-C 的任何一次 `git add` 卷进去（设计 §9 规则六）。
 
+> **执行进度（2026-11-19）**
+>
+> | Task | 状态 | 提交 | 说明 |
+> |---|---|---|---|
+> | D-0 ft 开机页回收 | ✅ 完成 | `ace3a31d7` | 4 个文件单独一个提交；全量门禁 95/95；新集成测试 3 项验收通过 |
+> | D-1 WAL 文件头 | ✅ 完成 | `5d1ae2d4a` + `ea26666d8` | 拆成两个提交：先做文件头，再把读写拆出 `wal_hdr.{h,c}`（原实现把 `wal.c` 推到 889 行，破了 800 行硬规则） |
+> | D-2 FT 精确页数上界 | ✅ 完成 | `c2def3080` | **做法改了**：不用 `FPH_USED` 累加，改成逐词模拟写入器分页（见 Task D-2 的执行修正） |
+> | D-3 测量口径 | ✅ 完成 | `07ad8872` | 拆成两个提交（与 D-1 拆分同批推送）；C7 变三个子判据、新增 `ts_bench_io` |
+> | D-4 ~ D-7 | ⬜ 未开始 | — | — |
+>
+> 全量门禁当时的数字随之变成 **97 个测试 97 通过**（D-1 加 1 个 `test_wal_header`、D-2 加 1 个 `test_ft_merge_pages`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
+
 ---
 
 ## Goal
@@ -191,6 +203,26 @@ engine/db/
 
 ## Task D-1：WAL 文件头与版本前向兼容（**优先级最高**）
 
+> ⚠️ **（执行修正，2026-11-19）** 本 Task 落地时拆成了**两个提交**，原因见下：
+>
+> 1. `5d1ae2d4a` —— 文件头 + 五项校验（`magic` / `format_version` / `page_size` /
+>    `endian_marker` / `hdr_size`）+ `test_wal_header.c` 7 项验收。
+> 2. `ea26666d8` —— 把文件头三个函数拆出 `src/wal/wal_hdr.{h,c}`。
+>
+> **为什么必须拆**：第一版把三个函数直接塞进 `wal.c`，把它从 760 行推到 **889 行**，
+> 破了 `README.md:158` 的硬规则 4（单文件不超过 800 行）。这是执行者自己造成的越界，
+> 所以单独一个提交修它。拆完 `wal.c` 793 行 + `wal_hdr.c` 129 行。
+>
+> **为什么“打开时的三个分支”放进 `wal_hdr_load` 而不是留在 `wal_open`**：
+> `0 字节`（全新库，写头）/ `1..31 字节`（半个头，报错）/ `>= 32 字节`（逐字段校验）
+> 这三条最容易被人“顺手合并”，而合并掉的恰好是中间那条 —— 于是“半个头”会被
+> 当成“全新库”补写，把一个截断的日志**洗成**一个干净的。
+
+> ⚠️ **（执行修正，2026-11-19）第 2 处**：正文里“预期 95 通过”现在应是 **96 通过**
+> （95 + `test_wal_header` 一个文件）。另外 `test_wal.c` 的 t5 手工改第 3 条记录的
+> crc 时偏移写死从 0 开始，加头之后那个偏移改到了第 4 条 ⇒ 截断点后移 ⇒ `n` 从 2 变 3。
+> 已改成 `WAL_FILE_HDR_SIZE + 原偏移`。**这是测试被正确地拦住了，不是测试坏了。**
+
 > **为什么第一**：这是唯一一个「不做就可能**静默损坏数据**」的欠账。
 > `wal.c:202 wal_open` 今天直接 `fopen(path, "r+b")` ——
 > 一个格式不兼容的 WAL 被打开后，恢复逻辑会**按自己的格式去解析它**，
@@ -334,96 +366,87 @@ engine/db/
 
 ## Task D-2：FT 合并的精确页数上界
 
-> **现状**：`ft_merge.c:126-127` 的公式是
-> 「倒排字节 ÷ (每页容量 − 每页最多浪费的字节) + 1」，字典同理 ——
-> **宁多勿少**的保守上界 ⇒ 前几轮合并浪费页、文件比理论值大。
+> ⚠️ **（执行修正，2026-11-19）本 Task 的做法整个换了 —— 原计划不可用**
+>
+> 原计划是「用源段倒排页的 `FPH_USED`（`ft_internal.h:185`，u16）累加出真实已用字节，
+> 再按 `ceil(字节 ÷ 页容量)` 算上界」。落地前实测发现这个思路**两头都不成立**：
+>
+> | 方向 | 为什么会错 |
+> |---|---|
+> | 高估 | 源的字节 ≠ 输出的字节。合并时同一个词在几个段里的 posting 会**归并成一条 run**，
+> | | 而每个源段各自带一个 12 字节 run 头 —— 累加源段 `FPH_USED` 会把本该省掉的 run 头也算进去 |
+> | 低估 | 「总字节 ÷ 页容量取整」本身就会低估：posting run 不能跨页任意拼接，
+> | | 页尾不足「12 字节 run 头 + 12 字节 posting」时那一页就用不下去了。
+> | | 源码里那个 `容量 - 35` 正是为这种最坏浪费留的余量 —— 它不是乱写的 |
+>
+> ⇒ 换成**第三种做法**：照写入器的真实分页规则**逐词模拟**。
+> 这个做法既不需要读源段页（也就绕开了原计划 D-2.2 里“统计读不能污染逻辑页读”那个坑），
+> 又能得到**精确值**而不是“再猜一个余量”。
 
-**Files**
-- 修改：`engine/db/src/modalities/ft/ft_merge.c`、`engine/db/src/modalities/ft/ft_segment.c`
-- 可能修改：`engine/db/src/modalities/ft/ft_segment.h`
+**Files**（实际改动的）
+- 修改：`engine/db/src/modalities/ft/ft_merge.c` —— `ft_merge_count_pages` 改用模拟器
+- 修改：`engine/db/src/modalities/ft/ft_writer.h` —— 新增 `FtPageSim` 与三个函数声明
+- 新增：`engine/db/src/modalities/ft/ft_pagesim.c` —— 模拟器实现（95 行，纯算术、不碰 pager）
+- 新增：`engine/db/test/unit/test_ft_merge_pages.c` —— 5 项边界测试
+- ~~`ft_segment.c` / `ft_segment.h`~~ —— **不再需要**（不读源段页了）
 
-**Interfaces**
-- 新增（`ft_segment.h`）：`u32 ft_segment_used_bytes(const FtSegment *seg, u32 *out_post_bytes);`
-  —— 报告一个段里倒排页**实际已用**的字节数之和。
+**Interfaces**（实际新增的，不是原计划的 `ft_segment_used_bytes`）
+- `ft_pagesim_reset(FtPageSim *s)` —— 清零（空输入 ⇒ 0 页，不多占一页）
+- `ft_pagesim_add_postings(FtPageSim *s, u32 n)` —— 照着 `ft_post_writer_put` 的规则累加
+- `ft_pagesim_add_dict_entry(FtPageSim *s, u32 term_len)` —— 照着 `ft_dict_writer_put` 的规则累加
 
-- [ ] **D-2.1 先量出今天的浪费有多大（基线）**
+- [x] **D-2.1 先量出今天的浪费有多大（基线）** —— 已做，数字记在提交 `c2def3080` 里
 
-  在 `ft_merge.c` 的 `ft_merge_count_pages` 里临时加一行打印：
-  旧上界 `post_pages` / `dict_pages` 与「实际写入的页数」的差。
+  临时探针（已在提交前回滚，工作区不留痕）跑 A4（10 万文档 / 批 1000 / 92 次合并）：
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  mingw32-make all 2>&1 | Select-String -Pattern 'error'
-  & "C:\Program Files\Git\usr\bin\sh.exe" bench/ft_bench_run.sh a4 100000 2>&1 |
-      Select-String -Pattern 'post_pages|dict_pages|浪费'
-  ```
+  | 口径 | 旧上界累计 | 实际累计 | 多要 | 每轮平均 |
+  |---|---|---|---|---|
+  | 倒排页 | 18895 | 18776 | **+119** | +1.3 页 |
+  | 字典页 | 2926 | 2850 | **+76** | +0.8 页 |
 
-  ⇒ 把这个差值**记进 commit message**（验收判据之一：记录旧上界与新上界的差值）。
+  单轮更直观（第 92 次合并）：倒排上界 521 / 实际 518，字典上界 32 / 实际 31。
 
-- [ ] **D-2.2 暴露段内真实页使用量（`ft_segment.c`）**
+  ⚠️ 多要页的后果不是“浪费点内存”那么轻：**字典区必须连号**，上界决定要往空闲页池里
+  借多长的一段。多要 1 页就可能让池里最长那段不够长 ⇒ 退回“文件尾预留” ⇒ 文件每轮都在长。
 
-  倒排页的已用字节数在页头 `FPH_USED`（`ft_internal.h:185`，u16）里，
-  字典页的 slot 使用情况在字典页自己的格式里。
-  ⇒ 实现 `ft_segment_used_bytes`：遍历段的页链，读每个倒排页的 `FPH_USED`，
-  累加得到真实已用字节数。
+- [x] **D-2.2 暴露段内真实页使用量** —— ❌ **取消**（见上面的执行修正，思路不成立）
 
-  ⚠️ **统计读不能污染「逻辑页读」指标** ——
-  这个函数会读页，而 `pager` 的逻辑读计数会被 bench 用作判据。
-  ⇒ **要么用一条不计入逻辑页读的读路径，要么把这次读的计数单独返回**，
-  不混进 `page_reads`。这一点是验收判据之一，别漏。
-  ⇒ **要么用一条不计入逻辑页读的读路径，要么把这次读的计数单独返回**，
-- [ ] **D-2.3 改用真实使用量算上界（`ft_merge.c`）**
+- [x] **D-2.3 改用逐词模拟算上界** —— 已做
 
-  把 `ft_merge_count_pages` 的公式从「按字节上界估」改成「按真实已用字节算」：
-  倒排页数 = ceil(真实已用字节 ÷ (PAGE_SIZE − FPH_DATA))，
-  字典页数 = ceil(真实已用字节 ÷ FT_DICT_CAPACITY)。
+  `ft_merge_count_pages` 里两个 `FtPageSim`（倒排 / 字典）各累加一遍，
+  其余一行不动：这一趟仍然只读源段**字典页**（不读 posting），df 仍是**归并前**的
+  （还没扣 tombstone），所以算出来的仍然是**上界**（可能偏大，不会偏小）✓ 安全。
 
-  ⚠️ **新上界不能小于真实需要** —— 这是硬约束。
-  最稳的做法：**新上界 = max(真实算出来的, 旧公式算出来的)**？
-  ❌ 不行，那等于没改。
-  ✅ 正确做法：**先按真实值算，再验证「写入时实际用了几页 ≤ 上界」**，
-  不满足就**报错**（`E_NOSPACE`）而不是悄悄多占页。
-  ⇒ 写入路径已有这个检查：`ft_merge.c:499` 的
-  `if (ft_post_writer_count(pw) > post_pages)` —— 那是**事后**检查。
-  ⇒ 改成：上界按真实值算，若事后检查发现超了 ⇒ 说明「真实值」的算法有 bug ⇒ 报错。
+  ⚠️ 模拟规则**必须与 `ft_writer.c` 的两处 put 逐字对应** —— 改了一边不改另一边，
+  算出来的上界就会与实际不符（小于实际 ⇒ 合并时 `E_NOSPACE`）。
+  这条一致性由 D-2.4 的边界测试盯着。
 
-- [ ] **D-2.4 加边界测试**
+  事后检查原样保留：`ft_merge.c:499` 的 `if (ft_post_writer_count(pw) > post_pages)` ——
+  它现在是「模拟器算错了就立刻报错」的守卫，而不是“事后补救”。
 
-  在 FT 的单元测试里加 4 个用例：
+- [x] **D-2.4 加边界测试** —— 已做，`test/unit/test_ft_merge_pages.c`（5 项，纯算术、不开库）
 
-  | 用例 | 断言 |
+  | 用例 | 断言（机械可判） |
   |---|---|
-  | 空段 | 上界 = 0（或 1），不崩 |
-  | 满页 | 上界 = 实际页数，不多不少 |
-  | 单条大词 | 上界 ≥ 实际，且不多占页 |
-  | 跨页 posting | 上界 = 实际跨的页数 |
+  | 空段 | `pages == 0`（不是“0 或 1” —— 空段真的不占页） |
+  | 满页 | 倒排 `POST_PER_PG` 条 = 1 页；各多 1 条就变 2 页，且新页 `used == 24` |
+  | 单条大词 | df = `POST_PER_PG * 3 + 7` ⇒ `pages == 4`（精确值，不是“≥”） |
+  | 跨页 posting | 同词续接的第 2 页 `used == 12 + 12`（**续接 run 头照样占 12 字节**） |
+  | 单调性 | df 递增时 `pages` 不减 |
 
-  ⚠️ 「新上界 ≥ 真实需要」这条**必须机械可判** ——
-  断言写成 `ASSERT_TRUE(new_bound >= actual_pages)`，
-  不要写成「差不多」。
+  ⚠️ **变异验证抓出一个测试漏洞**：把 `ft_pagesim_add_postings` 里换页后的 `continue`
+  改成 `break`（=「换页之后不再继续写」，一个很容易犯的错），第一版测试**仍然 PASS**
+  —— 因为只断言了 `pages == 2`，而那个错法的页数也是 2。补上 `used == 24` 之后才真正抓住。
+  ⇒ **这条经验写进了测试文件里**：`pages` 对不等于内容对。
 
-- [ ] **D-2.5 跑 FT 全量测试 + 全量门禁，提交**
+- [x] **D-2.5 跑 FT 全量测试 + 全量门禁，提交** —— 已做
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh 2>&1 | Select-String -Pattern 'ft'
-  & "C:\Program Files\Git\usr\bin\sh.exe" test/run.sh
-  ```
+  实测：`test/run.sh` **97 个测试 97 通过**；`tools/check_deps.sh` ✓ 依赖方向正确；
+  clean build 零诊断；无文件超 800 行。
 
-  预期：95 + 4 通过 / 0 失败。
-
-  ```powershell
-  cd C:\code\projects
-  git add engine/db/src/modalities/ft/ft_merge.c
-  git add engine/db/src/modalities/ft/ft_segment.c
-  git add engine/db/src/modalities/ft/ft_segment.h
-  git diff --cached --name-only
-  git commit -m "perf(ft): 合并页数上界改用真实页使用量（不再按字节上界保守估算）"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  新上界 vs 实际（同规模）：倒排 **18776 = 18776**、字典 **2850 = 2850**，**差 0 页**。
 
 ---
-
 ## Task D-3：测量口径有区分力（C7 不再空判据 + ts 统一 IO benchmark）
 
 > 这两项都**只改 `bench/`**，不碰内核行为，是整个计划里风险最低的。
