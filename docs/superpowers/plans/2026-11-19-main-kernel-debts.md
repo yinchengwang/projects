@@ -19,9 +19,11 @@
 > | D-3 测量口径 | ✅ 完成 | `07ad8872` | 拆成两个提交（与 D-1 拆分同批推送）；C7 变三个子判据、新增 `ts_bench_io` |
 > | D-4 tombstone 撤销 | ✅ 完成 | `1168c4284` | **歧义不存在**（见 Task D-4 的确认记录）；
 > | | | | 但确认过程撞出**运行时 ROLLBACK 不撤 FT** 的真缺陷，一并修了（D-4b） |
-> | D-5 ~ D-7 | ⬜ 未开始 | — | — |
+> | D-5 geo KNN 二次扫描 | ✅ 完成 | `d66de13ef` | 页读 **739 → 11**（省掉 98.5%）；
+> | | | | 两个入口合成一份实现（一份剪枝、一份 tie-break） |
+> | D-6 ~ D-7 | ⬜ 未开始 | — | — |
 >
-> 全量门禁当时的数字随之变成 **98 个测试 98 通过**（D-1 加 `test_wal_header`、D-2 加 `test_ft_merge_pages`、D-4 加 `test_ft_tomb_txn`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
+> 全量门禁当时的数字随之变成 **99 个测试 99 通过**（D-1 加 `test_wal_header`、D-2 加 `test_ft_merge_pages`、D-4 加 `test_ft_tomb_txn`、D-5 加 `test_geo_knn_points`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
 
 ---
 
@@ -97,6 +99,7 @@ engine/db/
 - `engine/db/test/unit/test_wal_header.c` —— WAL 文件头单元测试（D-1）
 - `engine/db/test/integration/test_ft_tomb_txn.c` —— tombstone 事务接线测试（D-4）
 - `engine/db/src/db_ft_txn.c` —— 连接级 FT 事务接线（D-4b）
+- `engine/db/test/unit/test_geo_knn_points.c` —— 带坐标/距离的 KNN 验收（D-5）
 - `engine/db/test/integration/test_ts_freelist.c` —— ts 空闲栈落盘集成测试（D-6）
 
 **修改**
@@ -671,91 +674,91 @@ tombstone 的文档物理丢弃），撤销只能撤「标记」，撤不回内�
 ---
 ## Task D-5：geo KNN 去掉第二遍全树扫描
 
-> **现状**：`db_geo_query.c:140-152` 的注释自己承认「为什么要扫两遍树」：
-> ① `rtree_knn` 给出最近的若干 row_id（**不带距离**，坑 M5-13）；
-> ② 为了填 `db_geo_hit` 的距离字段，要**再扫一遍树**把坐标捞回来。
+> 执行结果：**页读 739 → 11**（10 万点 / k=10），结果与改前逐位一致。
+> 做法与计划基本一致，但有一处**比计划更彻底**：两个入口合成了一份实现。
 
-**Files**
-- 修改：`engine/db/src/modalities/geo/rtree_knn.c`、`engine/db/src/modalities/geo/rtree_knn.h`、
-  `engine/db/src/db_geo_query.c`
+### D-5.1 的基线（实测，探针跑完即删）
 
-**Interfaces**
-- 修改（`rtree_knn.h`）：
-  ```c
-  /* 候选项带坐标与距离 —— 消掉调用方的第二遍全树扫描 */
-  typedef struct {
-      u32   row_id;
-      float dist;      /* 到查询点的真实距离（平方，geo_dist2 的口径） */
-      float x, y;      /* 点的坐标 */
-  } KnHit;
+| 口径 | 逻辑页读 |
+|---|---|
+| `rtree_knn` 单独（k=10） | **11** |
+| `db_geo_knn` 改前 | **739** |
 
-  int rtree_knn_hits(Pager *pg, u32 root_page, float qx, float qy, u32 k,
-                     KnHit *out, u32 max_out, u32 *n_out, u64 *page_reads_out);
-  ```
-- 保留：`rtree_knn(...)` —— 不删，让旧调用点继续能用；
-  新函数是**加**不是**改**。
+⇒ 728 次全是那第二遍摊平。也就是说 KNN 本身很省，
+真正贵的是调用方为了拿坐标把整棵树又扫了一遍。
 
-- [ ] **D-5.1 先量出第二遍扫描的代价（基线）**
+### 根因比计划写的更冤
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  mingw32-make all 2>&1 | Select-String -Pattern 'error'
-  & "C:\Program Files\Git\usr\bin\sh.exe" bench/geo_bench.c 2>&1 |
-      Select-String -Pattern 'knn|reads'
-  ```
+计划记的是「`rtree_knn` 只返回 row_id，不带距离（坑 M5-13）」。
+实情是：`rtree_knn.c` 在两处叶子条目上**都已经算出了真实距离**
+（`geo_dist2(qx, qy, m.minx, m.miny)`），**只是拿去排序之后丢掉了**；
+坐标也已经在 `rtk_ent_get` 解出来（叶子 MBR 是退化矩形，minx/miny 就是那个点），
+同样丢掉。
 
-  ⇒ 记下今天的 `page_reads` 与 `elapsed`，作为改后的对比基线。
+⇒ 所以补的不是「多读点什么」，而是「**别把手里已有的东西扔了**」。
+这也解释了为什么这个优化的收益是 98.5% 而不是「省一点」：
+丢掉的恰好是 O(树) 那一遍本来要重新算的东西。
 
-- [ ] **D-5.2 `rtree_knn` 内部带上坐标与距离**
+**Files**（实际改动的）
+- 修改：`engine/db/src/modalities/geo/rtree_knn.c` —— 合成一份 `rtk_knn_impl` + 两个薄入口
+- 修改：`engine/db/src/modalities/geo/rtree_knn.h` —— 新增 `KnPoint` 与 `rtree_knn_points`
+- 修改：`engine/db/src/db_geo_query.c` —— `db_geo_knn` 去掉 `db_geo_flatten`
+- 新增：`engine/db/test/unit/test_geo_knn_points.c` —— 4 项验收（383 行）
 
-  现在的实现（`rtree_knn.c:309-310`、`:367-368`）在叶子条目上算
-  `geo_dist2(qx, qy, m.minx, m.miny)` 并取 `id & RT_ROWID_MAX` ——
-  **坐标就在手边**（叶子条目的 MBR 是点的退化矩形，取中心就是那个点，见 `:308` 的注释）。
+**Interfaces**（与计划一致的）
+- `KnPoint { u32 row_id; float dist; float x; float y; }`
+  —— `dist` 是**平方距离**（`geo_dist2` 口径，与 `db_geo_hit.dist` / `geo_brute_knn` 一致）
+- `rtree_knn_points(...)` —— 带坐标与距离的精确 KNN
+- `rtree_knn(...)` **签名一动不动**（`test_geo_knn.c` 有十几处断言依赖它）
 
-  ⇒ 只需把 `KnHit` 结构带进结果集，**不增加任何一次页读**。
+- [x] **D-5.1 先量出第二遍扫描的代价（基线）** —— 已做（数字见上表）
 
-- [ ] **D-5.3 `db_geo_knn` 去掉 `db_geo_flatten`**
+- [x] **D-5.2 `rtree_knn` 内部带上坐标与距离** —— 已做，**不增加任何一次页读**
 
-  `db_geo_query.c:174-176` 现在先 `db_geo_flatten(inst, &tab)` 摊平全树，
-  然后 `:193` 用 `kk = k + tab.dead_n + 16` 向树要多余候选。
+  ⚠️ **比计划多做了一步，也更安全**：计划说「把 `KnHit` 带进结果集」，
+  实际做法是把原 `rtree_knn` 的整个函数体（180 行）搬进 `static rtk_knn_impl`，
+  让 `rtree_knn` 与 `rtree_knn_points` **都走它**。
 
-  ⚠️ **`tab.dead_n` 是死条目数**，只有摊平全树才知道 ——
-  这正是第二遍扫描存在的**唯一原因**。
-  ⇒ 改法：让 `rtree_knn_hits` 内部**过滤死条目**（现在已经在过滤，见 `:306`、`:365` 的
-  `if (id & RT_ENT_DEAD) continue;`），
-  于是**不需要**预先知道死条目数 ⇒ **可以直接要 k 个候选**。
+  为什么必须合成一份：两套剪枝条件迟早会不一致，然后其中一套**悄悄漏点** ——
+  这类错误不报错，只是答案少几个。`geo_brute_knn` 存在的全部理由就是这个。
 
-  ⚠️ 但要小心：现在的实现是「要 k+dead+16 个，滤完再截到 k」，
-  改成「直接要 k 个」后，**死条目占位**的问题由内部过滤解决 ——
-  验收必须证明结果与 brute-force **逐位一致**（不是「差不多」）。
-  改成「直接要 k 个」后，**死条目占位**的问题由内部过滤解决 ——
-- [ ] **D-5.4 验收**
+- [x] **D-5.3 `db_geo_knn` 去掉 `db_geo_flatten`** —— 已做
 
-  | 判据 | 怎么测 |
+  原来是：摊平全树拿坐标 + 死条目数 → 要 `k + dead_n + 16` 个候选 →
+  滤死条目 → 补距离 → 再排。
+  现在是：直接要 k 个 → 拿到现成的 `row_id/dist` → 再排一次（同一个比较器 `dg_hit_cmp`）。
+
+  **顺带解决了「死条目占位」**：旧实现不知道谁是死的，所以要知道死条目数
+  就得先摊平全树 —— 那正是第二遍扫描的**动机**。新实现在叶子条目上就过滤
+  （`id & RT_ENT_DEAD`），于是 `k + dead_n + 16` 这个补丁连同 `db_geo_flatten`
+  的调用一起消失了。
+
+- [x] **D-5.4 验收** —— 已做，`test/unit/test_geo_knn_points.c`（4 项）
+
+  | 判据 | 怎么测（机械可判） |
   |---|---|
-  | KNN 结果与 brute-force 一致 | `geo_brute_knn` 已经存在（`geo_brute.c:78`）—— 对拍 |
-  | tie-break 一致 | 距离并列时按 row_id 升序（`rtree_knn.h` 的契约已定死） |
-  | 物理/逻辑页读减少 | 与 D-5.1 的基线对比，**页读应显著下降** |
-  | 10 万点 benchmark 有明显差异 | `bench/geo_bench.c` |
+  | 与旧实现一致 | 20 次查询（k=1/10/100）：新函数与旧 `rtree_knn` 的 row_id 序列**逐位相等** |
+  | 距离 / 坐标正确 | 10 次 × k=50：与 `geo_brute_knn` 逐位相等（断言 `==`，不是「接近」） |
+  | **死条目**（D-5.3 的核心） | 3 个点被标死：k=3 必须返回活的 3/4/5（没过滤会拿到 0/1/2）；k=100 只返回 17 条；max_out=5 精确报 `E_NOSPACE` |
+  | 一页都不许多读 | 10 次查询 `r_new <= r_old` |
 
-  ⚠️ **对拍必须覆盖「有死条目」的场景** ——
-  现在 `db_geo_knn` 的整个「多要候选」逻辑就是为了处理死条目。
-  只在「没有死条目」的情况下对拍 ⇒ 证明不了任何东西。
+  「死条目」那一条是 D-5.3 的核心 —— 计划里专门警告过：「只在没有死条目的情况下
+  对拍，证明不了任何东西」。
 
-- [ ] **D-5.5 提交**
+- [x] **D-5.5 提交** —— `d66de13ef`（4 个文件，+593/−114）
 
-  ```powershell
-  cd C:\code\projects
-  git add engine/db/src/modalities/geo/rtree_knn.c
-  git add engine/db/src/modalities/geo/rtree_knn.h
-  git add engine/db/src/db_geo_query.c
-  git diff --cached --name-only
-  git commit -m "perf(geo): KNN 候选直接带坐标与距离 —— 消掉第二遍全树扫描"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  实测（同一规模复测）：`db_geo_knn k=10` **11** 次页读（改前 739），
+  省 728 次 = **98.5%**；查询结果与改前**逐位一致**（前 3 条 row_id/dist 相同）。
+  `bench/geo_bench` 仍 PASS。
+
+### 如实记账
+
+`rtree_knn` 的旧签名**没有改**（虽然它现在只是薄壳）：`test_geo_knn.c` 有十几处
+断言依赖它，改签名要动别人的测试；而且它确实还有用（不需要距离的调用方用它
+少分配一点内存）。`rtree_knn.h` 里给它的注释补了一句「它丢掉自己算出来的距离与
+坐标，需要距离就用 `rtree_knn_points`」—— 免得下一个人又踩 M5-13。
 
 ---
-
 ## Task D-6：ts 页生命周期闭环（旧页回收 + 空闲栈落盘 + 时间窗接线）
 
 > 这三项是**同一个病根**的三条腿，所以合并成一个 Task。
