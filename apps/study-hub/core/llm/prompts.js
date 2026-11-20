@@ -373,10 +373,516 @@ function parseResponse(text, kind) {
   return { ok: false, kind: kind, reason: "未知的提示词种类：" + String(kind) }
 }
 
+/* ---------------- P4：按轨的模板表（契约 §7.2） ---------------- */
+
+/** 供给场景（离线批处理用）：生成题面+用例+解法 / 生成断言脚本 / 生成讲解正文 / 深挖概念 */
+const SUPPLY_SCENARIOS = ["generate-unit", "generate-assert", "write-explain", "deepen"]
+
+/**
+ * 按轨的模板表 —— **纯数据**。
+ *
+ * 纪律（契约 §7.2）：**轨道模板是数据，不是代码**。
+ * 这里**没有** `if (track === "db")` 这样的硬分支：组装时按 unit.track 取模板 + 拼单元上下文。
+ * 新增一条轨只要往这张表里加一条，不用改任何逻辑。
+ *
+ * 每个模板条目三个字段：
+ *   response —— 期望的响应形状："json"（解析成 JSON 对象）或 "text"（纯文本）
+ *   system   —— 系统提示
+ *   user     —— 用户提示
+ * {{占位符}} 由 renderTemplate 填。
+ */
+const TRACK_TEMPLATES = {
+  algorithm: {
+    label: "算法",
+    defaultQuestion: "这道题的解法在什么规模下会超时？换一种解法能好在哪？",
+    scenarios: {
+      "generate-unit": {
+        response: "json",
+        system: [
+          "你是一位算法出题老师，要出一道能独立完成、能自动判题的算法题。",
+          "输出必须是且只是一个 JSON 对象，字段为 title、statement、difficulty、topics、cases、solution、solutionLang。",
+          "不要加解释性前后缀，不要用代码块围栏。",
+        ].join("\n"),
+        user: [
+          "请出一道新的算法练习题，落到轨道「{{trackLabel}}」。",
+          "",
+          "已有的题面（可能是空的）：",
+          "{{statement}}",
+          "",
+          "要求：",
+          "1. 题面必须自包含：说清输入、输出、约束，不能依赖上下文。",
+          "2. 判题契约：用户程序从 stdin 读入、从 stdout 输出，程序自带 main 函数。",
+          "3. 至少给 3 个测试用例，其中至少 1 个是边界情况。",
+          "4. 给一份 Python 参考解法，是带 main 函数的完整程序。",
+          "5. 题目要有明确答案，不能出无解或多解的题。",
+          "",
+          "只输出一个 JSON 对象，不要任何多余文字，也不要用代码块围栏：",
+          '{"title":"题目名","statement":"完整题面","difficulty":"easy|medium|hard","topics":["知识点"],"cases":[{"input":"...","expect":"..."}],"solution":"完整 python 程序","solutionLang":"python"}',
+        ].join("\n"),
+      },
+      "write-explain": {
+        response: "text",
+        system: [
+          "你是一位算法辅导老师，要给正在做题的人讲清「为什么这么想」。",
+          "输出用简体中文，分点讲清，不要复述题面。",
+        ].join("\n"),
+        user: [
+          "请给下面这道题写一份讲解正文。",
+          "",
+          "题目：{{title}}",
+          "难度：{{difficulty}}",
+          "知识点：{{topics}}",
+          "",
+          "题面：",
+          "{{statement}}",
+          "",
+          "要求：",
+          "1. 讲清三件事：这题的难点在哪、为什么想到这个思路、复杂度是多少。",
+          "2. 用简体中文 Markdown，分小节写，不要复述题面。",
+          "3. 篇幅 600~1200 字。",
+          "4. 直接输出正文，不要加开场白。",
+        ].join("\n"),
+      },
+      deepen: {
+        response: "text",
+        system: [
+          "你是一位资深算法工程师，要就一个具体问题把一道题往下挖一层。",
+          "输出用简体中文 Markdown，直接给正文。",
+        ].join("\n"),
+        user: [
+          "请围绕下面这个问题，把「{{title}}」这道题深挖一层。",
+          "",
+          "问题：{{question}}",
+          "",
+          "题面：",
+          "{{statement}}",
+          "",
+          "要求：",
+          "1. 回答问题：为什么这样设计、换个设计会怎样、边界与失效场景。",
+          "2. 给出复杂度与常数因子的实际影响。",
+          "3. 600 字以内。",
+        ].join("\n"),
+      },
+    },
+  },
+  database: {
+    label: "数据库",
+    defaultQuestion: "这个机制在什么情况下会失效？工程上要付出什么代价？",
+    scenarios: {
+      "generate-assert": {
+        response: "json",
+        system: [
+          "你是一位数据库方向的测试工程师，要给一张教学 demo 写断言脚本。",
+          "纪律：只依据被测代码的真实行为写断言，不许编造输出，不许写恒真的断言。",
+          "输出必须是且只是一个 JSON 对象，字段为 assert_script、topics。",
+          "不要加解释性前后缀，不要用代码块围栏。",
+        ].join("\n"),
+        user: [
+          "请给下面这张数据库卡片写一份断言脚本。",
+          "",
+          "卡片：{{title}}",
+          "知识点：{{topics}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始说明（README）：",
+          "{{readme}}",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "断言脚本的契约（照统一模板写，不许自创形状）：",
+          "1. 用 `subprocess` 跑 demo，**不要** `import main`——demo 会在自己旁边写 .db 文件，用 subprocess 跑才不会污染仓库。",
+          "2. **脚本自己把 demo 复制进临时目录再跑**，然后在临时目录里执行副本，跑完删掉临时目录。",
+          "   这几个 demo **不能重复跑**（第二次会因为表已存在直接报错），就地执行必然失败，所以必须复制：",
+          "   ```python",
+          "   sandbox = tempfile.mkdtemp(prefix=\"study-hub-assert-\")",
+          "   try:",
+          "       target = os.path.join(sandbox, os.path.basename(DEMO))",
+          "       shutil.copy2(DEMO, target)",
+          "       proc = subprocess.run([sys.executable, target], capture_output=True, timeout=180)",
+          "   finally:",
+          "       shutil.rmtree(sandbox, ignore_errors=True)",
+          "   ```",
+          "3. **不许写死 `text=True`**。demo 的 stdout 按**本机 locale** 编码（Windows 中文环境是 GBK，Linux 是 UTF-8），",
+          "   所以只写 `capture_output=True` 抓字节，再自己按 utf-8 → gbk → latin-1 依次试解码：",
+          "   ```python",
+          "   def decode(raw):",
+          "       for enc in (\"utf-8\", \"gbk\"):",
+          "           try:",
+          "               return raw.decode(enc)",
+          "           except UnicodeDecodeError:",
+          "               continue",
+          "       return raw.decode(\"utf-8\", errors=\"replace\")",
+          "   ```",
+          "4. demo 路径取环境变量 `STUDY_HUB_DEMO`，缺省是「与本脚本同目录的 main.py」，这一行照抄：",
+          "   DEMO = os.environ.get(\"STUDY_HUB_DEMO\") or os.path.join(os.path.dirname(os.path.abspath(__file__)), \"main.py\")",
+          "5. 跑完 demo 后，检查它的 stdout 里有没有出现关键结论（形如 \"[[OK]] ...\" 的标记或具体字符串）。",
+          "6. 断言失败时打印中文原因并 exit 1；全部通过时 exit 0。",
+          "7. 至少 3 条断言，并且至少有一条在实现被改坏时会失败（不许写恒真断言）。",
+          "8. 脚本必须自包含：不许读写 demo 目录以外的文件。",
+          "",
+          "只输出一个 JSON 对象，不要任何多余文字，也不要用代码块围栏：",
+          '{"assert_script":"完整 python 脚本","topics":["知识点"]}',
+        ].join("\n"),
+      },
+      "write-explain": {
+        response: "text",
+        system: [
+          "你是一位数据库方向的技术写作者，要给一张教学卡写一份能自学的讲解正文。",
+          "输出用简体中文 Markdown，直接给正文。",
+        ].join("\n"),
+        user: [
+          "请给下面这张数据库卡片写一份讲解正文。",
+          "",
+          "卡片：{{title}}",
+          "知识点：{{topics}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始说明（README）：",
+          "{{readme}}",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "要求：",
+          "1. 分小节讲：这个概念解决什么问题、demo 里怎么实现、关键数据结构与不变量、常见坑。",
+          "2. 必须与 demo 的真实行为一致，不许写 demo 里没有的东西。",
+          "3. 篇幅 600~1200 字。",
+          "4. 直接输出正文，不要加开场白。",
+        ].join("\n"),
+      },
+      deepen: {
+        response: "text",
+        system: [
+          "你是一位资深数据库工程师，要就一个具体问题把一个概念往下挖一层。",
+          "输出用简体中文 Markdown，直接给正文。",
+        ].join("\n"),
+        user: [
+          "请围绕下面这个问题，把「{{title}}」这张卡深挖一层。",
+          "",
+          "问题：{{question}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "要求：",
+          "1. 回答问题：为什么这样设计、换个设计会怎样、边界与失效场景、与相邻概念的联动。",
+          "2. 必须与 demo 的真实行为一致。",
+          "3. 600 字以内。",
+        ].join("\n"),
+      },
+    },
+  },
+  ai: {
+    label: "AI",
+    defaultQuestion: "这个方法在什么数据分布下会失效？超参数该怎么定？",
+    scenarios: {
+      "generate-assert": {
+        response: "json",
+        system: [
+          "你是一位机器学习方向的测试工程师，要给一张手写实现的教学 demo 写断言脚本。",
+          "纪律：只依据被测代码的真实行为写断言，不许编造输出，不许写恒真的断言。",
+          "输出必须是且只是一个 JSON 对象，字段为 assert_script、topics。",
+          "不要加解释性前后缀，不要用代码块围栏。",
+        ].join("\n"),
+        user: [
+          "请给下面这张 AI 卡片写一份断言脚本。",
+          "",
+          "卡片：{{title}}",
+          "知识点：{{topics}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始说明（README）：",
+          "{{readme}}",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "断言脚本的契约（照统一模板写，不许自创形状）：",
+          "1. 用 `subprocess` 跑 demo，**不要** `import main`——demo 会在自己旁边写文件，用 subprocess 跑才不会污染仓库。",
+          "2. **脚本自己把 demo 复制进临时目录再跑**，然后在临时目录里执行副本，跑完删掉临时目录。",
+          "   这几个 demo **不能重复跑**（第二次会因为表已存在直接报错），就地执行必然失败，所以必须复制：",
+          "   ```python",
+          "   sandbox = tempfile.mkdtemp(prefix=\"study-hub-assert-\")",
+          "   try:",
+          "       target = os.path.join(sandbox, os.path.basename(DEMO))",
+          "       shutil.copy2(DEMO, target)",
+          "       proc = subprocess.run([sys.executable, target], capture_output=True, timeout=180)",
+          "   finally:",
+          "       shutil.rmtree(sandbox, ignore_errors=True)",
+          "   ```",
+          "3. **不许写死 `text=True`**。demo 的 stdout 按**本机 locale** 编码（Windows 中文环境是 GBK，Linux 是 UTF-8），",
+          "   所以只写 `capture_output=True` 抓字节，再自己按 utf-8 → gbk → latin-1 依次试解码：",
+          "   ```python",
+          "   def decode(raw):",
+          "       for enc in (\"utf-8\", \"gbk\"):",
+          "           try:",
+          "               return raw.decode(enc)",
+          "           except UnicodeDecodeError:",
+          "               continue",
+          "       return raw.decode(\"utf-8\", errors=\"replace\")",
+          "   ```",
+          "4. demo 路径取环境变量 `STUDY_HUB_DEMO`，缺省是「与本脚本同目录的 main.py」，这一行照抄：",
+          "   DEMO = os.environ.get(\"STUDY_HUB_DEMO\") or os.path.join(os.path.dirname(os.path.abspath(__file__)), \"main.py\")",
+          "5. 这张卡的 demo 依赖 numpy。脚本自己 import numpy 失败时，用 try/except 捕获，打印一句中文「环境缺失：没有装 numpy，这张卡先跳过」并 exit 1，不许静默跳过。",
+          "6. 跑完 demo 后，断言真实可验证的性质：维度对不对、损失有没有下降、预测落在合理区间、参数有没有真的更新等。",
+          "7. 数值断言一律用容差比较（例如 abs(a - b) < 1e-6），不许写严格相等。",
+          "8. 断言失败时打印中文原因并 exit 1；全部通过时 exit 0。",
+          "9. 至少 3 条断言，并且至少有一条在实现被改坏时会失败（不许写恒真断言）。",
+          "",
+          "只输出一个 JSON 对象，不要任何多余文字，也不要用代码块围栏：",
+          '{"assert_script":"完整 python 脚本","topics":["知识点"]}',
+        ].join("\n"),
+      },
+      "write-explain": {
+        response: "text",
+        system: [
+          "你是一位机器学习方向的技术写作者，要给一张教学卡写一份能自学的讲解正文。",
+          "输出用简体中文 Markdown，直接给正文。",
+        ].join("\n"),
+        user: [
+          "请给下面这张 AI 卡片写一份讲解正文。",
+          "",
+          "卡片：{{title}}",
+          "知识点：{{topics}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始说明（README）：",
+          "{{readme}}",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "要求：",
+          "1. 分小节讲：这个算法解决什么问题、demo 里怎么实现、每一步的张量形状与含义、常见坑。",
+          "2. 必须与 demo 的真实行为一致，不许写 demo 里没有的东西。",
+          "3. 篇幅 600~1200 字。",
+          "4. 直接输出正文，不要加开场白。",
+        ].join("\n"),
+      },
+      deepen: {
+        response: "text",
+        system: [
+          "你是一位资深机器学习工程师，要就一个具体问题把一个概念往下挖一层。",
+          "输出用简体中文 Markdown，直接给正文。",
+        ].join("\n"),
+        user: [
+          "请围绕下面这个问题，把「{{title}}」这张卡深挖一层。",
+          "",
+          "问题：{{question}}",
+          "",
+          "被测 demo 源码（main.py）：",
+          "```python",
+          "{{demo}}",
+          "```",
+          "",
+          "原始笔记（NOTES）：",
+          "{{notes}}",
+          "",
+          "要求：",
+          "1. 回答问题：这个方法的假设是什么、在什么数据分布下会失效、超参数怎么定。",
+          "2. 必须与 demo 的真实行为一致。",
+          "3. 600 字以内。",
+        ].join("\n"),
+      },
+    },
+  },
+}
+
+/**
+ * 填模板：把 {{key}} 换成 context 里的值；context 里没有的换成空串。
+ * @param {string} tpl
+ * @param {object} context
+ * @returns {string}
+ */
+function renderTemplate(tpl, context) {
+  const ctx = context || {}
+  return String(tpl === null || tpl === undefined ? "" : tpl).replace(
+    /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g,
+    function (whole, key) {
+      const value = ctx[key]
+      if (value === undefined || value === null) return ""
+      return String(value)
+    }
+  )
+}
+
+/**
+ * 这个轨有没有这个场景的模板。
+ * @param {string} track
+ * @param {string} scenario
+ * @returns {boolean}
+ */
+function hasSupplyTemplate(track, scenario) {
+  const table = TRACK_TEMPLATES[track]
+  if (!table) return false
+  return Boolean(table.scenarios[scenario])
+}
+
+/**
+ * 组装供给场景的提示词。
+ * @param {string} scenario generate-unit | generate-assert | write-explain | deepen
+ * @param {string} track algorithm | database | ai
+ * @param {object} context 单元上下文（title / difficulty / topics / statement / demo / readme / notes / question）
+ * @returns {{system: string, user: string, response: "json"|"text"}}
+ */
+function buildSupplyPrompt(scenario, track, context) {
+  const table = TRACK_TEMPLATES[track]
+  if (!table) {
+    throw new Error("没有这条轨的模板：" + String(track || "（空）"))
+  }
+  const tpl = table.scenarios[scenario]
+  if (!tpl) {
+    throw new Error(
+      "轨道「" + table.label + "」没有场景「" + String(scenario) + "」的模板"
+    )
+  }
+  const ctx = Object.assign({}, context || {}, {
+    track: String(track),
+    trackLabel: table.label,
+  })
+  if (!ctx.question) ctx.question = table.defaultQuestion
+  return {
+    system: renderTemplate(tpl.system, ctx),
+    user: renderTemplate(tpl.user, ctx),
+    response: tpl.response,
+  }
+}
+
+/**
+ * 解析供给场景的模型回复。
+ * @param {string} text
+ * @param {string} scenario
+ * @returns {object} 成功时带 ok:true；失败时带 ok:false 与中文 reason
+ */
+function parseSupplyResponse(text, scenario) {
+  const raw = String(text === null || text === undefined ? "" : text).trim()
+  if (raw === "") {
+    return { ok: false, kind: scenario, reason: "模型没有返回内容" }
+  }
+
+  if (scenario === "generate-unit") {
+    const obj = extractJson(raw)
+    if (!obj) {
+      return { ok: false, kind: scenario, reason: "模型返回的不是合法 JSON，无法生成单元", raw: raw }
+    }
+    const title = String(obj.title || "").trim()
+    if (title === "") return { ok: false, kind: scenario, reason: "生成结果缺标题" }
+    const statement = String(obj.statement || "").trim()
+    if (statement === "") return { ok: false, kind: scenario, reason: "生成结果缺题面" }
+    const cases = normalizeCaseList(obj.cases)
+    if (cases.length === 0) return { ok: false, kind: scenario, reason: "生成结果缺测试用例" }
+    const solution = String(obj.solution || "").trim()
+    if (solution === "") return { ok: false, kind: scenario, reason: "生成结果缺参考解法" }
+    return {
+      ok: true,
+      kind: scenario,
+      unit: {
+        title: title,
+        statement: statement,
+        cases: cases,
+        solution: solution,
+        solutionLang: String(obj.solutionLang || "python").trim() || "python",
+        difficulty:
+          DIFFICULTIES.indexOf(String(obj.difficulty)) !== -1
+            ? String(obj.difficulty)
+            : "medium",
+        topics: topicText(obj.topics) === "未标注" ? [] : normalizeTopics(obj.topics),
+      },
+    }
+  }
+
+  if (scenario === "generate-assert") {
+    const obj = extractJson(raw)
+    if (!obj) {
+      return { ok: false, kind: scenario, reason: "模型返回的不是合法 JSON，无法生成断言脚本", raw: raw }
+    }
+    const script = String(obj.assert_script || obj.script || "").trim()
+    if (script === "") {
+      return { ok: false, kind: scenario, reason: "生成结果缺断言脚本" }
+    }
+    if (script.indexOf("STUDY_HUB_DEMO") === -1) {
+      return {
+        ok: false,
+        kind: scenario,
+        reason: "断言脚本必须用环境变量 STUDY_HUB_DEMO 找 demo（统一模板要求，缺省值是与脚本同目录的 main.py）",
+      }
+    }
+    if (script.indexOf("subprocess") === -1) {
+      return {
+        ok: false,
+        kind: scenario,
+        reason: "断言脚本必须用 subprocess 跑 demo（不许 import main，demo 会在自己旁边写文件）",
+      }
+    }
+    if (script.indexOf("exit") === -1) {
+      return {
+        ok: false,
+        kind: scenario,
+        reason: "断言脚本必须用退出码表示成败（exit 0 通过，非零退出码表示失败）",
+      }
+    }
+    if (script.indexOf("tempfile") === -1 || script.indexOf("mkdtemp") === -1) {
+      return {
+        ok: false,
+        kind: scenario,
+        reason:
+          "断言脚本必须自己把 demo 复制进临时目录再跑（tempfile.mkdtemp）——这几个 demo 不能重复跑，第二次会因为表已存在直接报错",
+      }
+    }
+    if (/text\s*=\s*True/.test(script)) {
+      return {
+        ok: false,
+        kind: scenario,
+        reason:
+          "断言脚本不许写死 text=True——demo 的 stdout 按本机 locale 编码（Windows 中文环境是 GBK），要抓字节后按 utf-8 → gbk → latin-1 依次试解码",
+      }
+    }
+    return {
+      ok: true,
+      kind: scenario,
+      script: script,
+      topics: topicText(obj.topics) === "未标注" ? [] : normalizeTopics(obj.topics),
+    }
+  }
+
+  if (scenario === "write-explain" || scenario === "deepen") {
+    return { ok: true, kind: scenario, text: raw }
+  }
+
+  return { ok: false, kind: scenario, reason: "未知的供给场景：" + String(scenario) }
+}
 module.exports = {
   buildPrompt: buildPrompt,
   parseResponse: parseResponse,
   EXPLAIN_LEVELS: EXPLAIN_LEVELS,
   HINT_LEVELS: HINT_LEVELS,
   KINDS: KINDS,
+  SUPPLY_SCENARIOS: SUPPLY_SCENARIOS,
+  TRACK_TEMPLATES: TRACK_TEMPLATES,
+  renderTemplate: renderTemplate,
+  hasSupplyTemplate: hasSupplyTemplate,
+  buildSupplyPrompt: buildSupplyPrompt,
+  parseSupplyResponse: parseSupplyResponse,
 }
