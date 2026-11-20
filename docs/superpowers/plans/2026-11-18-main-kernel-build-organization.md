@@ -118,130 +118,94 @@ engine/db/
 
 ---
 
-### Task B0：主核进 CI（先有红灯，才谈得上门禁）
+### Task B0：主核进 CI（**已完成**，提交 `3bca8a751` + `d1f0e52e2` + `e8b98685c`）
 
-**Files**
-- 修改：`.github/workflows/ci.yml`
+**Files（实际）**
+- 修改：`.github/workflows/ci.yml`（+96 行，两个 job）
+- 修改：`engine/db/Makefile`（`-lm`）、`engine/db/test/run.sh`（`-D_POSIX_C_SOURCE`）
+- 修改：10 个源/测试文件（两个真缺陷 + 三处平台差异，见下）
 
-**Interfaces**
+**Interfaces（实际）**
 - 新增两个 CI job：`build-kernel-linux`、`build-kernel-windows`。
-- 两者都跑：`make all` → `sh tools/check_deps.sh` → `sh test/run.sh`。
+- 两者都跑：`make all` → `sh tools/check_deps.sh` → `JOBS=4 sh test/run.sh`。
+
+> ⚠️ **Windows 上命令是 `mingw32-make` 而不是 `make`**：
+> MSYS2 的 MINGW64 里 `make` 是 MSYS 版，会去用 `/usr/bin/sh`；
+> 而主核 Makefile 的 SHELL 探法是 `where sh` / 硬编码 Git 的 sh.exe。
 
 **为什么第一个做**：后面每个 Task 的验收都要靠 CI 抓"本地绿、CI 红"的情况。
 
-- [ ] **B0.1 先确认 Linux 上主核能不能编（本地预演）**
+- [x] **B0.1 先确认 Linux 上主核能不能编（本地预演）**
 
-  CI 的 Linux job 是第一次在 Linux 上编主核。**大概率会红** —— 那正是这个 job 的价值。
+  本地没有 Docker，但有 WSL Ubuntu（gcc 15.2）。于是把 144 个源文件全部
+  编译、105 个测试全部跑一遍。**这是主核第一次在 Linux 上跑。**
 
-  能本地预演的办法（如果有 WSL / Docker）：
+  结果（修好之后）：库 0 失败、测试 **105 通过**。修之前撞出的东西见 B0.5。
 
-  ```bash
-  docker run --rm -v "$(pwd)":/k -w /k/engine/db gcc:13 sh -c "make all && sh tools/check_deps.sh && sh test/run.sh"
-  ```
-
-  没有 Docker/WSL 就**直接推上去让 CI 跑**（B0.4），红了就按 B0.5 修。
-
-- [ ] **B0.2 在 `.github/workflows/ci.yml` 里加 Linux job**
+- [x] **B0.2 在 `.github/workflows/ci.yml` 里加 Linux job**
 
   ```yaml
-  # ========================================================================
-  # 主核（engine/db/）：自带 Makefile，不在 CMake 图内
-  #
-  # 主核有 95 个测试文件（64 unit + 31 integration），此前**零 CI 覆盖** ——
-  # 改动可能在本地绿、在别的平台红。这里补上。
-  # ========================================================================
   build-kernel-linux:
-    name: 主核构建（Linux）
-    runs-on: ubuntu-latest
+    name: 主核（Linux/GCC）
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - name: 编译主核
-        working-directory: engine/db
-        run: make all
-      - name: 依赖方向门禁
-        working-directory: engine/db
-        run: sh tools/check_deps.sh
-      - name: 运行主核测试
-        working-directory: engine/db
-        run: sh test/run.sh
+    - uses: actions/checkout@v4
+      with:
+        submodules: false
+        persist-credentials: false
+    - run: sudo apt-get update && sudo apt-get install -y build-essential
+    - working-directory: engine/db
+      run: make all
+    - working-directory: engine/db
+      run: sh tools/check_deps.sh
+    - working-directory: engine/db
+      run: JOBS=4 sh test/run.sh
   ```
 
-- [ ] **B0.3 加 Windows job**
+  > **不需要拉 uthash 子模块** —— 那是 `engine/src/db/` 冻结轨的依赖，主核不用。
 
-  ⚠️ **不要另起炉灶**：现有 `build-engineering-windows` 已经用了
-  `msys2/setup-msys2@v2` + `MINGW64`。**照抄那个 job 的 steps 头**，
-  只把 `working-directory` 与 `run` 换掉。
+- [x] **B0.3 加 Windows job**
 
-  ```yaml
-  build-kernel-windows:
-    name: 主核构建（Windows）
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            mingw-w64-x86_64-gcc
-            make
-      - name: 编译主核
-        working-directory: engine/db
-        run: mingw32-make all
-      - name: 依赖方向门禁
-        working-directory: engine/db
-        run: sh tools/check_deps.sh
-      - name: 运行主核测试
-        working-directory: engine/db
-        run: sh test/run.sh
-  ```
+  照抄 `build-engineering-windows` 的 `msys2/setup-msys2@v2` 头（同一个
+  `MINGW64` 环境），只装 `gcc + make`，命令换成 `mingw32-make`。
 
-- [ ] **B0.4 推上去看 CI**
+- [x] **B0.4 推上去看 CI**
 
-  ```powershell
-  cd C:\code\projects
-  git add .github/workflows/ci.yml
-  git commit -m "ci: 主核 engine/db 进 CI（Linux + Windows 两个 job）"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  已提交并推送（`3bca8a751`）。GitHub Actions 的实际结果只能在它跑完之后看 ——
+  本地能做到的是**把三条命令都在本机跑一遍**（Windows + Linux 都跑了，全绿）。
 
-- [ ] **B0.5 CI 红了怎么办（Linux 平台差异清单）**
+- [x] **B0.5 CI 红了怎么办 —— 实际撞到的 5 类问题**
 
-  按这个顺序查，**不要瞎改**：
+  计划当初列了一张"Linux 平台差异清单"（GetCurrentThreadId / clock_gettime /
+  mkdir / 路径分隔符 / clock() 分辨率）。**实际一个都不是那些**。真实撞到的是：
 
-  | 症状 | 原因 | 处置 |
+  | 症状 | 性质 | 处置 |
   |---|---|---|
-  | `implicit declaration of function 'GetCurrentThreadId'` | Windows 专有 API 少了 `#ifdef _WIN32` 保护 | 补 `#ifdef _WIN32` / `#else` 分支 |
-  | `clock_gettime` 链接失败 | Linux 需要 `-lrt`（老 glibc） | `LDLIBS` 加 `-lrt` |
-  | `mkdir: cannot create directory` | 用了 Windows 的 `mkdir` 语义 | 改 `mkdir -p` |
-  | 路径分隔符 `\` | 代码里手写了反斜杠 | 改成 `/`（Windows 的 C 运行时也吃 `/`） |
-  | 测试跑起来时间不对 | `clock()` 在 Linux 上分辨率不同 | 放宽测试里的时间比值断言（并在注释里写清原因） |
+  | `blob.c` 栈溢出（`*** stack smashing detected ***`，4 个测试同时炸） | **真缺陷** | 索引块按页内槽数写（1019）而不是按覆盖帧数（1024） |
+  | `test_page.c` 栈溢出 | **真缺陷**（测试 bug） | `u8 rec[100]` → `[128]`（要装 120 字节记录） |
+  | `-Werror=format-truncation`（parser.c 两处） | GCC 15 新诊断 | `copy_name()` 显式长度运算，截断行为不变 |
+  | `-Werror=unused-result`（ftruncate） | glibc 标了 `warn_unused_result` | 接返回值再丢（`(void)` 强转不算使用） |
+  | `undefined reference to 'log'` / `pthread_barrier_*` | 构建面缺失 | Makefile 加 `-lm`；run.sh 加 `-D_POSIX_C_SOURCE=200809L` |
+  | `system()` 找不到 `./build/xxx`（POSIX 分支写了 `.exe`） | 测试脚本 bug | 去掉 `.exe` 后缀 |
+  | `stack-use-after-scope`（`&(WalCount){0}`，10 处） | **真缺陷**（生命周期） | 改具名局部变量 |
 
-  ⚠️ **改主核代码只为兼容 Linux 时，要单独一个提交**，commit message 里写明
-  「fix(kernel): 修 Linux 平台差异」。**不要**把这个修复混进后面的裁剪任务里。
+  ⚠️ **两个"真缺陷"在 Windows 上一直藏着**：MinGW 的栈布局宽松、`_FORTIFY` 不查、
+  栈保护也没抓到。这正是 B0 的价值 —— 它不是"补一条流水线"，
+  而是**第一次让主核在另一个平台上被检查**。
 
-- [ ] **B0.6 CI 绿了再提交 B0.5 的修复（若有）**
+  ⚠️ **还有一条差点漏掉的**：`test_catalog_lock.c` 的 `.exe` 后缀让 system() 失败，
+  而 `rc != 0` 那条断言**照样通过**（假绿），只有标记文件那条才红。
+  **两条断言合起来才看得出问题 —— 少一条就变成"看起来在跑，其实没跑"。**
 
-  ```powershell
-# ⚠️ （可执行性修正）不要用 `git add engine/db/` —— 工作区里有 4 个与本计划无关的改动：
-#   M engine/db/src/db_ft.c
-#   M engine/db/src/modalities/ft/ft_index.c
-#   M engine/db/src/modalities/ft/ft_index.h
-#   ?? engine/db/test/integration/test_ft_reclaim_boot.c
-# 它们是「ft 回收引导」这条独立线，不该混进「修 Linux 平台差异」这个提交。
-# ⇒ 逐文件列（按 B0.5 实际改过的文件）：
-git add engine/db/src/<B0.5 实际改过的文件，逐个列>
+- [x] **B0.6 CI 绿了再提交 B0.5 的修复（若有）**
 
-# 提交前确认没卷进 ft（输出必须为空）：
-git diff --cached --name-only | Select-String -Pattern 'db_ft|ft_index|ft_reclaim'
-  git commit -m "fix(kernel): 修 Linux 平台差异（CI 首次跑主核暴露）"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  修复单独提交（`d1f0e52e2` 代码 + `e8b98685c` 构建面），
+  与 CI 配置（`3bca8a751`）分开 —— 这样"CI 首次跑"对应的才是真实状态。
 
+  > 一个本地交叉验证踩到的坑：`build/` 是两端**共享**的产物目录。
+  > 在 Linux 上编完再回 Windows 编，MinGW 的 ld 会读到 Linux 的 `.o`，
+  > 报一堆 `undefined reference to '__snprintf_chk'` / `relocation truncated`。
+  > 清掉 `build/` 重编即恢复。CI 每个 job 都是干净检出，不会遇到；本地会。
 ---
 
 ### Task B1：`tools/mm_profiles.mk` —— profile 的唯一真相源
