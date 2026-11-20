@@ -406,6 +406,26 @@ function createStore(db) {
         .all(String(problemId))
     },
 
+    /**
+     * 按单元 id 查流水（契约 §4.1：P2 起新增的别名）。
+     *
+     * 老行只有 `problem_id`（无前缀），P1 做过一次性回填
+     * （`UPDATE attempts SET unit_id = 'algo:' || problem_id WHERE unit_id IS NULL AND problem_id NOT LIKE '%:%'`），
+     * 所以正常库两边都查得到；为防漏网，这里把无前缀的同名题号也带上。
+     * @param {string} unitId 形如 algo:lc-00007 / db:mvcc
+     * @returns {object[]}
+     */
+    listAttemptsByUnit: function (unitId) {
+      const id = String(unitId)
+      const legacy = id.indexOf(":") === -1 ? id : id.slice(id.indexOf(":") + 1)
+      return db
+        .prepare(
+          "SELECT * FROM attempts WHERE unit_id = ? OR (unit_id IS NULL AND problem_id = ?) " +
+            "ORDER BY ts DESC, id DESC"
+        )
+        .all(id, legacy)
+    },
+
     countAttempts: function () {
       const row = db.prepare("SELECT COUNT(*) AS n FROM attempts").get()
       return Number(row.n)

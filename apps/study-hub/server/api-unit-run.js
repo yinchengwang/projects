@@ -15,6 +15,7 @@
 const { readJsonBody, HttpError } = require("./router.js")
 const { judgeUnit } = require("../judge/runner.js")
 const { detectCompiler, detectPython, detectNumpy } = require("../judge/sandbox.js")
+const { recordUnitAttempt } = require("./attempt-log.js")
 const PYTHON_SETTING_KEY = "judge.python.cmd"
 
 /** 只支持这两种语言（与 judge/runner.js 的 LANGUAGES 一致） */
@@ -131,6 +132,12 @@ function buildUnitRunRoutes(ctx) {
         learningRoot: learningRoot,
         pythonOverride: pythonOverrideNow(),
       })
+
+      // 记流水：P3 的诊断（掌握度 / 知识点统计 / 每日曲线）全靠 attempts 表，
+      // 不记的话「在单元页判过十次」在诊断里等于没练过。
+      if (store && typeof store.insertAttempt === "function") {
+        recordUnitAttempt(store, { unit: unit, result: result, code: code, language: language })
+      }
 
       ctx.sendJson(res, 200, {
         verdict: result.verdict,

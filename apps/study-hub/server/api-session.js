@@ -18,6 +18,8 @@ const { spawnSync } = require("node:child_process")
 
 const { readJsonBody } = require("./router.js")
 const { detectPython } = require("../judge/sandbox.js")
+const { judgeUnit } = require("../judge/runner.js")
+const { recordUnitAttempt } = require("./attempt-log.js")
 const { buildPlan } = require("../core/scheduler/plan.js")
 const { gradeWithCount, bumpUnitsSince } = require("../core/review/sm2.js")
 const { resolveUnitId } = require("../core/scheduler/pool.js")
@@ -31,6 +33,9 @@ const KEY_SESSION_MIN = "session.min_count"
 const KEY_SESSION_MAX = "session.max_count"
 const KEY_COUNT_K = "review.count_trigger_k"
 const KEY_PYTHON = "judge.python.cmd"
+
+/** 会话提交带代码时，哪些语言判得了（与 judge/runner.js 的 LANGUAGES 一致） */
+const SUPPORTED_LANGUAGES = ["cpp", "python"]
 
 const DEFAULT_SESSION_COUNT = 3
 const DEFAULT_SESSION_MIN = 1
@@ -296,6 +301,22 @@ function cardProblemId(unitId) {
 }
 
 /**
+ * 从单元索引里按 id 取完整 Unit（判题要 entry 与 asserts）。
+ * byId 既可能是普通对象（契约 §3.4：{ [id]: Unit }），也可能是 Map——两种都认。
+ * @param {object} ctx
+ * @param {string} id
+ * @returns {object|null}
+ */
+function pickUnitForJudge(ctx, id) {
+  const src = ctx.units || {}
+  const byId = src.byId || src
+  if (!byId) return null
+  if (typeof byId.get === "function") return byId.get(id) || null
+  if (Object.prototype.hasOwnProperty.call(byId, id)) return byId[id]
+  return null
+}
+
+/**
  * 设置页要的那一份数据。
  * @param {object} ctx
  * @param {object} env
@@ -339,6 +360,19 @@ function buildRoutes(ctx) {
   const envProbe = ctx.envProbe || createEnvProbe(ctx)
   const nowIso = function () {
     return new Date().toISOString()
+  }
+
+  /**
+   * 当前该用哪个 Python 解释器（与 /api/units/:id/judge 同一口径）。
+   * @returns {string|null}
+   */
+  function pythonOverrideNow() {
+    if (ctx.pythonOverride !== undefined && ctx.pythonOverride !== null) return ctx.pythonOverride
+    if (ctx.store && typeof ctx.store.getSetting === "function") {
+      const raw = ctx.store.getSetting(KEY_PYTHON)
+      if (raw !== undefined && raw !== null && String(raw).trim() !== "") return String(raw).trim()
+    }
+    return ctx.envPython || null
   }
 
   /* ---------- POST /api/session/start ---------- */
@@ -567,6 +601,45 @@ function buildRoutes(ctx) {
         return
       }
 
+      // P2：带了代码就真判（契约 §8.2.1 的「P2 接入判题后」口径）。
+      // 不带代码仍然是 P1 的「只排不判」——verdict 恒 null、judged 恒 false，
+      // 也不会写 attempts（那张表的 verdict 是 NOT NULL，没有判过就没有值可写）。
+      let judgedResult = null
+      let judgedCode = ""
+      let judgedLanguage = ""
+      if (body.code !== undefined && body.code !== null && String(body.code).trim() !== "") {
+        const judgeable = pickUnitForJudge(ctx, unitId)
+        if (!judgeable) {
+          ctx.sendJson(res, 400, {
+            error: "这个单元不在单元索引里，判不了：" + unitId,
+          })
+          return
+        }
+        judgedCode = String(body.code)
+        const entry = judgeable.entry || {}
+        judgedLanguage = String(body.language || entry.language || "cpp").toLowerCase()
+        if (SUPPORTED_LANGUAGES.indexOf(judgedLanguage) === -1) {
+          ctx.sendJson(res, 400, {
+            error: "不支持的语言：" + judgedLanguage,
+            supported: SUPPORTED_LANGUAGES.slice(),
+          })
+          return
+        }
+        judgedResult = await judgeUnit({
+          unit: judgeable,
+          code: judgedCode,
+          language: judgedLanguage,
+          learningRoot: ctx.learning && ctx.learning.ok ? ctx.learning.root : null,
+          pythonOverride: pythonOverrideNow(),
+        })
+        recordUnitAttempt(store, {
+          unit: judgeable,
+          result: judgedResult,
+          code: judgedCode,
+          language: judgedLanguage,
+        })
+      }
+
       // 1. 队列项置 done，done_count 跟着走
       store.updateQueueItem(session.id, unitId, { state: "done" })
       store.updateSession(session.id, { done_count: store.countQueueDone(session.id) })
@@ -646,15 +719,18 @@ function buildRoutes(ctx) {
 
       const next = pickNext(finalQueue)
       const unit = store.getUnit(unitId)
+      const judged = judgedResult !== null
       ctx.sendJson(res, 200, {
         ok: true,
-        judged: false,
-        verdict: null,
-        passed: 0,
-        total: 0,
-        message: "「" + String((unit && unit.title) || unitId) + "」已记为完成",
-        failed: null,
-        stdout: "",
+        judged: judged,
+        verdict: judged ? judgedResult.verdict : null,
+        passed: judged ? judgedResult.passedCases : 0,
+        total: judged ? judgedResult.totalCases : 0,
+        message: judged
+          ? judgedResult.message
+          : "「" + String((unit && unit.title) || unitId) + "」已记为完成",
+        failed: judged ? judgedResult.failedCase || null : null,
+        stdout: judged ? judgedResult.stdout || "" : "",
         next: next ? { unit_id: next.unit_id, seq: next.seq, total: finalQueue.length } : null,
         session: store.getSession(session.id),
         due: newlyDue,

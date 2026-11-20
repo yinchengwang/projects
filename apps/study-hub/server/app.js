@@ -428,6 +428,9 @@ function createApp(opts) {
     learning: learning,
     sendJson: sendJson,
     envProbe: options.envProbe,
+    // 会话提交带代码时要判题，判题要拿完整 Unit（含 entry 与 asserts）
+    units: units,
+    envPython: resolvePythonOverride(env),
   })
   routes.push.apply(routes, sessionRoutes)
 
