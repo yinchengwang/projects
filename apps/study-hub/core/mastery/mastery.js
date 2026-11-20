@@ -186,6 +186,35 @@ function sortByUrgency(items) {
   })
 }
 
+/**
+ * 单元级掌握度。
+ *
+ * 数值与 masteryOf 完全一致——这里只是把签名上的 topic 换成 unitId，
+ * 让「凡是跨轨统计都用 masteryOf」这条口径在调用处也成立（契约 §6.5）。
+ *
+ * @param {string} unitId 单元 id（形如 "algo:lc-00007"）。**不参与计算**，只为可读性。
+ * @param {{attempts:number, firstPass:number, lapses:number, lastAt:string|null}} stat
+ * @param {string} nowIso 当前时刻（ISO8601）
+ * @returns {number} 0~1
+ */
+function masteryOfUnit(unitId, stat, nowIso) {
+  return masteryOf(stat, nowIso)
+}
+
+/**
+ * 覆盖度（单元口径）。
+ *
+ * 公式与 coverageOf 一个字不改。新代码里单元数一律叫 unitCount（G28），
+ * 不再沿用 problems 这个词，所以给一个专门入口。
+ *
+ * @param {number} unitCount 练过的不同单元数（覆盖度的分子）
+ * @param {number} expectedCount 期望单元数（覆盖度的分母）
+ * @returns {number} 0~1
+ */
+function coverageOfUnits(unitCount, expectedCount) {
+  return coverageOf({ problems: Number(unitCount) || 0 }, expectedCount)
+}
+
 module.exports = {
   HALF_LIFE_DAYS: HALF_LIFE_DAYS,
   MASTERY_THRESHOLD: MASTERY_THRESHOLD,
@@ -200,4 +229,7 @@ module.exports = {
   diagnoseAction: diagnoseAction,
   rankTopics: rankTopics,
   sortByUrgency: sortByUrgency,
+  // P3 新增（Task 1）
+  masteryOfUnit: masteryOfUnit,
+  coverageOfUnits: coverageOfUnits,
 }

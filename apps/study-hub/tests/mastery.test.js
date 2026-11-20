@@ -189,3 +189,32 @@ test("sortByUrgency 不改原数组", function () {
   mastery.sortByUrgency(items)
   assert.deepStrictEqual(items, copy)
 })
+
+/* ---------------- P3 新增：单元口径的两个薄封装 ---------------- */
+
+test("masteryOfUnit 与 masteryOf 数值完全一致", function () {
+  const s = stat({ attempts: 4, firstPass: 1, lapses: 2, lastAt: NOW })
+  assert.strictEqual(mastery.masteryOfUnit("algo:lc-00001", s, NOW), mastery.masteryOf(s, NOW))
+})
+
+test("masteryOfUnit 不改统计对象，也不看 unitId", function () {
+  const s = stat({ attempts: 2, firstPass: 2, lapses: 0, lastAt: NOW })
+  const before = JSON.stringify(s)
+  const a = mastery.masteryOfUnit("algo:lc-00001", s, NOW)
+  const b = mastery.masteryOfUnit("db:mvcc", s, NOW)
+  assert.strictEqual(a, b, "unitId 不参与计算，只换了个名字")
+  assert.strictEqual(JSON.stringify(s), before, "不能改传入的统计对象")
+})
+
+test("coverageOfUnits 用练过的单元数除以期望题量", function () {
+  assert.strictEqual(mastery.coverageOfUnits(6, 12), 0.5)
+  assert.strictEqual(mastery.coverageOfUnits(20, 12), 1)
+  assert.strictEqual(mastery.coverageOfUnits(0, 12), 0)
+})
+
+test("coverageOfUnits 期望题量非法时返回 0，不抛错", function () {
+  assert.strictEqual(mastery.coverageOfUnits(3, 0), 0)
+  assert.strictEqual(mastery.coverageOfUnits(3, -1), 0)
+  assert.strictEqual(mastery.coverageOfUnits(3, null), 0)
+})
+
