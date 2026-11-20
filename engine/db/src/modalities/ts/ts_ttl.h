@@ -178,6 +178,39 @@ int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
 int ts_ttl_release_pages_wal(Pager *pg, TsPartState state, u32 first_page,
                              u32 page_count, const TsWal *w, u32 *freed_out);
 
+/*
+ * 回收**封窗时被换掉的旧裸写页**（W-D 的 D-6.2）。
+ *
+ * 【这批页为什么和 TTL 的不一样】
+ *
+ * 封窗（`ts_seal_write_wal`）把裸写页链换成列式页之后，
+ * 那批裸写页就**没人引用了** —— 但它们仍然占着页号，还留着旧数据。
+ * 封窗留下的痕迹只在列式头部页里：`TSC_OLDFIRST` / `TSC_OLDPAGES`。
+ *
+ * 【为什么不能由 TTL 收】
+ *
+ * TTL 只收"这个分区**现在**正在用的页"（目录项指着的那些）。
+ * 而封窗分区在目录里指的是**列式头部页** ⇒ TTL 走
+ * `release_column_part()` 只会回收列式页，永远碰不到那批旧裸写页。
+ * 于是它们在文件里变成永久空洞（坑 M6-42）。
+ *
+ * 调用时机：**封窗提交成功之后**（目录项已经是 SEALED）。
+ * 此时目录已经指向列式页，旧裸写页再也没人读 ⇒ 回收是安全的。
+ *
+ * 【幂等】
+ *
+ * 回收完之后把头部页里的 `TSC_OLDFIRST` 写成 `PAGE_ID_NIL`。
+ * 再调一次就是"没有可收的"（返回 OK、freed = 0）——
+ * 重复回收会把同一页发给两个主人 ⇒ 数据互相踩。
+ *
+ * 契约与 `ts_ttl_release_pages_wal` 一致：w == NULL 表示不写日志。
+ */
+int ts_ttl_release_seal_old_wal(Pager *pg, u32 col_head, const TsWal *w,
+                                u32 *freed_out);
+
+/* 不写日志的版本。 */
+int ts_ttl_release_seal_old(Pager *pg, u32 col_head, u32 *freed_out);
+
 #ifdef __cplusplus
 }
 #endif

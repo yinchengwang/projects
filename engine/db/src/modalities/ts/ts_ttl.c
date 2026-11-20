@@ -35,6 +35,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "modalities/ts/ts_column.h"
+#include "modalities/ts/ts_wal.h"
 #include "storage/page.h"
 
 /* ---------------- 阈值 ---------------- */
@@ -284,6 +286,137 @@ int ts_ttl_release_pages(Pager *pg, TsPartState state, u32 first_page,
 {
     return ts_ttl_release_pages_wal(pg, state, first_page, page_count, NULL,
                                     freed_out);
+}
+
+/* ---------------- 封窗旧裸写页的回收（W-D 的 D-6.2） ---------------- */
+
+/*
+ * 把列式头部页里的"旧裸写页指针"清掉（幂等标记）。
+ *
+ * 【为什么要把这个标记写回页里，而不是只在内存里清】
+ *
+ * 回收完那批页之后，"它们已经还回去了"这件事必须**落盘**。
+ * 只清内存 ⇒ 重开库时又看到 OLDFIRST 指着一批已经属于别人的页 ⇒
+ * 下一次回收会把**别人的页**清零并还回空闲栈 ⇒ 静默的数据损坏。
+ * 所以清标记这一步本身也要走 ts_pg_commit（进 WAL）。
+ */
+static int seal_old_clear(Pager *pg, u32 col_head, const TsWal *w)
+{
+    PageFrame *fr = NULL;
+    u8 before[PAGE_SIZE];
+    int rc;
+
+    rc = pager_get(pg, col_head, &fr);
+    if (rc != OK)
+        return rc;
+
+    if (fr->data[H_TYPE] != (u8)PT_TS_COL ||
+        !page_verify_checksum(fr->data) ||
+        get_u32(fr->data + TSC_FLAGS) != TS_COL_FLAG_HEADER) {
+        (void)pager_unpin(pg, col_head, false);
+        return E_CORRUPT;
+    }
+
+    if (get_u32(fr->data + TSC_OLDFIRST) == PAGE_ID_NIL) {
+        /* 已经清过了（幂等） */
+        (void)pager_unpin(pg, col_head, false);
+        return OK;
+    }
+
+    ts_wal_snap(fr->data, before);
+    put_u32(fr->data + TSC_OLDFIRST, PAGE_ID_NIL);
+    put_u32(fr->data + TSC_OLDPAGES, 0);
+    return ts_pg_commit(pg, col_head, fr, w, before);
+}
+
+int ts_ttl_release_seal_old_wal(Pager *pg, u32 col_head, const TsWal *w,
+                                u32 *freed_out)
+{
+    u32 first;
+    u32 expect;
+    u32 freed = 0;
+    int rc;
+
+    if (freed_out)
+        *freed_out = 0;
+    if (!pg)
+        return E_INVAL;
+    if (col_head == PAGE_ID_NIL)
+        return OK;                  /* 没有列式页 ⇒ 没有旧裸写页 */
+
+    /*
+     * 先读头部页：拿到旧裸写页的首页与页数。
+     *
+     * ⚠️ 这两项是"封窗时那批页还在"的**唯一**记录 ——
+     * 目录项指向的是列式页，不会告诉我们旧页在哪。
+     */
+    {
+        PageFrame *fr = NULL;
+
+        rc = pager_get(pg, col_head, &fr);
+        if (rc != OK)
+            return rc;
+
+        if (fr->data[H_TYPE] != (u8)PT_TS_COL ||
+            !page_verify_checksum(fr->data) ||
+            get_u32(fr->data + TSC_FLAGS) != TS_COL_FLAG_HEADER) {
+            (void)pager_unpin(pg, col_head, false);
+            return E_CORRUPT;
+        }
+
+        first = get_u32(fr->data + TSC_OLDFIRST);
+        expect = get_u32(fr->data + TSC_OLDPAGES);
+
+        rc = pager_unpin(pg, col_head, false);
+        if (rc != OK)
+            return rc;
+    }
+
+    /* 已经收过了（或本来就没有旧页）⇒ 幂等返回 */
+    if (first == PAGE_ID_NIL) {
+        return OK;
+    }
+    if (expect == 0u)
+        return E_CORRUPT;           /* 有首页却没页数：不变量破了 */
+
+    /*
+     * 走旧裸写页链回收 —— 与 TTL 用的是同一段代码（release_raw_chain）。
+     *
+     * 【顺序：先回收页，再清标记】
+     *
+     * 反过来的话（先清标记、后回收页）崩在中间 ⇒
+     * 标记没了、页还在 ⇒ 那批页变成**永久空洞**（浪费空间，但数据不错）。
+     * 而现在的顺序崩在中间 ⇒ 标记还在、部分页已回收 ⇒
+     * 重试会把**已经还回去的页**再清零一次 ⇒ 那可能是别人的页！
+     *
+     * ⇒ 所以正确顺序是：**先清标记（落盘），再回收页**。
+     *   崩在中间 ⇒ 标记没了、页还在 ⇒ 只是空洞（安全方向）。
+     *   这与 TTL 的"先改目录、再回收页"是同一条原则（坑 M6-49）。
+     */
+    rc = seal_old_clear(pg, col_head, w);
+    if (rc != OK)
+        return rc;
+
+    rc = release_raw_chain(pg, first, expect, w, &freed);
+    if (rc != OK) {
+        /*
+         * 页没收完，但标记已经清了 ⇒ 剩下的页成了空洞。
+         * 这是**刻意选的方向**：宁可漏收（浪费空间），不可重复收（踩别人数据）。
+         * 返回错误让调用方知道"没全收干净"。
+         */
+        if (freed_out)
+            *freed_out = freed;
+        return rc;
+    }
+
+    if (freed_out)
+        *freed_out = freed;
+    return OK;
+}
+
+int ts_ttl_release_seal_old(Pager *pg, u32 col_head, u32 *freed_out)
+{
+    return ts_ttl_release_seal_old_wal(pg, col_head, NULL, freed_out);
 }
 
 /* ---------------- TTL 主流程 ---------------- */
