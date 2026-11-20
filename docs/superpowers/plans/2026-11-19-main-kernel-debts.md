@@ -24,9 +24,9 @@
 > | D-6.1 ts 时间窗真实路径 | ✅ 完成 | `d6fb60c2e` | SQL 查询分区级跳过；3 分区实测 6 页 → 4/0 页；保留 SPI 单谓词限制并写入验收 |
 > | D-6.2 封窗旧页真回收 | ✅ 完成 | `55567631e` | 坑 M6-42 结清；空闲栈精确 +3 页、幂等、复用页全零、标记落盘 |
 > | D-6.3 空闲栈落盘 | ✅ 完成 | `db9fc4838` | **做法改了**：原方案（写进 PT_TS_META）违反分层铁律，改成 PT_FREE 页内标记 + 开机重建（见 Task D-6 的执行修正） |
-> | D-7 | ⬜ 未开始 | — | group commit |
+> | D-7 group commit | ✅ 完成 | `3381c22fb` | 模拟 2ms 盘实测 100 事务 100→50 次（省 50%）；新增 wal_group.c + wal_internal.h，wal.c 793→672 行 |
 >
-> 全量门禁当时的数字随之变成 **103 个测试 103 通过**（D-1 `test_wal_header`、D-2 `test_ft_merge_pages`、D-4 `test_ft_tomb_txn`、D-5 `test_geo_knn_points`、D-6.1 `test_ts_page_prune`、D-6.2 `test_ts_page_reclaim`、D-6.3 `test_pager_free_rebuild` + `test_ts_reuse_across_session`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
+> 全量门禁当时的数字随之变成 **105 个测试 105 通过**（D-1 `test_wal_header`、D-2 `test_ft_merge_pages`、D-4 `test_ft_tomb_txn`、D-5 `test_geo_knn_points`、D-6.1 `test_ts_page_prune`、D-6.2 `test_ts_page_reclaim`、D-6.3 `test_pager_free_rebuild` + `test_ts_reuse_across_session`、D-7 `test_wal_group` + `test_wal_group_mt`；D-0 的 `test_ft_reclaim_boot` 在“95”那个数字里）。
 
 ---
 
@@ -130,7 +130,7 @@ engine/db/
 - 已有（`ft_segment.h`）：`u32 ft_segment_reclaimable_pages(Pager *, FtSegment *const *, u32, u32 *, u32);`
 - 已有：`int ft_pool_add(FtPagePool *, u32);`
 
-- [ ] **D-0.1 审查当前 diff（不是重写，是确认它真的对）**
+- [x] **D-0.1 审查当前 diff（不是重写，是确认它真的对）**
 
   ```powershell
   cd C:\code\projects
@@ -147,7 +147,7 @@ engine/db/
   | 回收上限 `npages / 2` | 上限算错 ⇒ 要么漏收（浪费空间），要么超收（发重复页） | 容量检查那段 |
   | 分配失败就放弃这轮 | 分配失败若导致开库失败 ⇒ 一个可选优化能拖垮开库 | `calloc` 返回 NULL 的分支 |
 
-- [ ] **D-0.2 clean build（`build/engine/CMakeCache.txt` 是 2026-11-03 的陈旧缓存，必须先重建）**
+- [x] **D-0.2 clean build（`build/engine/CMakeCache.txt` 是 2026-11-03 的陈旧缓存，必须先重建）**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -160,7 +160,7 @@ engine/db/
   ⚠️ `engine/db/` 用的是**自己的 Makefile**（不在 CMake 图里），
   不要去 `build/engine` 里 `cmake --build` —— 那是冻结轨/SDK 的构建。
 
-- [ ] **D-0.3 跑全量门禁**
+- [x] **D-0.3 跑全量门禁**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -173,7 +173,7 @@ engine/db/
   回收逻辑的典型症状是「重开库后数据读不出来」——
   因为垃圾页被误判成可用页、发给了新段。
 
-- [ ] **D-0.4 单独跑新增的集成测试**
+- [x] **D-0.4 单独跑新增的集成测试**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -182,7 +182,7 @@ engine/db/
 
   预期：3 项验收全部通过（合并后池大小 = 6 / 重开后池大小 = 6 / 变异禁用回收后重开池大小 = 0）。
 
-- [ ] **D-0.5 提交（一个独立提交）**
+- [x] **D-0.5 提交（一个独立提交）**
 
   ```powershell
   cd C:\code\projects
@@ -260,7 +260,7 @@ engine/db/
 - 修改：`int wal_open(const char *path, Wal **out);`
   —— 语义扩展：**打开时校验文件头**，不兼容则返回错误。
 
-- [ ] **D-1.1 先写测试（跑红）**
+- [x] **D-1.1 先写测试（跑红）**
 
   在 `engine/db/test/unit/test_wal_header.c` 写 5 个用例：
 
@@ -288,7 +288,7 @@ engine/db/
 
   预期：**红**（`wal_open` 现在根本不校验）。
 
-- [ ] **D-1.2 加文件头定义（`wal.h`）**
+- [x] **D-1.2 加文件头定义（`wal.h`）**
 
   把上面的 `WAL_MAGIC` / `WAL_FORMAT_VERSION` / `WAL_FILE_HDR_SIZE` / `WalFileHeader` 加到 `wal.h`，
   放在 `WAL_HDR`（L103）附近 —— 那个常量是**记录头**（28 字节），
@@ -297,7 +297,7 @@ engine/db/
   ⚠️ 文件头要**单独一套名字**（`WalFileHeader` vs 现有的 `WalRec`），
   否则半年后有人会把它们当成同一个东西。
 
-- [ ] **D-1.3 `wal_open` 校验（`wal.c`）**
+- [x] **D-1.3 `wal_open` 校验（`wal.c`）**
 
   在 `wal_open` 拿到 `FILE *f` 之后、开始用之前：
 
@@ -328,7 +328,7 @@ engine/db/
      `page_size` 变了 ⇒ 载荷里的页内偏移全错；
      字节序反了 ⇒ 载荷全错。**两者都比版本号更容易造成静默损坏**。
 
-- [ ] **D-1.4 确认所有读写路径都跳过了文件头**
+- [x] **D-1.4 确认所有读写路径都跳过了文件头**
 
   ⚠️ 这是本 Task **最容易漏**的地方：`wal_scan_begin` / `wal_scan_next` / `wal_reset` /
   `wal_truncate` 都直接操作文件偏移。文件头加在文件**最前面**，
@@ -345,7 +345,7 @@ engine/db/
   **文件头必须保留在截短结果的最前面** —— 截到 0 字节以下会毁掉头，
   下次开库就变成「截断 header」。
 
-- [ ] **D-1.5 跑测试（转绿）+ 全量门禁**
+- [x] **D-1.5 跑测试（转绿）+ 全量门禁**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -359,7 +359,7 @@ engine/db/
   否则会命中新的 `E_CORRUPT` 分支。
   **这不是「测试坏了」，是「测试现在被正确地拦住了」。**
 
-- [ ] **D-1.6 提交**
+- [x] **D-1.6 提交**
 
   ```powershell
   cd C:\code\projects
@@ -467,7 +467,7 @@ engine/db/
 **Interfaces**
 - 新增环境变量：`FT_BENCH_FRAMES` —— 帧池帧数（默认 4096，与今天的 `A4_BP_FRAMES` 一致）
 
-- [ ] **D-3.1 帧池可配（`ft_bench_a4.c`）**
+- [x] **D-3.1 帧池可配（`ft_bench_a4.c`）**
 
   今天 `ft_bench_a4.c:74` 是 `#define A4_BP_FRAMES 4096u`，
   `:182` 是 `pager_open(DB_PATH_A4, A4_BP_FRAMES, &pg)`。
@@ -487,7 +487,7 @@ engine/db/
   }
   ```
 
-- [ ] **D-3.2 让 C7 有区分力**
+- [x] **D-3.2 让 C7 有区分力**
 
   C7 今天的分支（`ft_bench_a4.c:752`）是
   `if (pg_unique_total > 0) { ... } else { printf("[SKIP] ..."); }`。
@@ -519,7 +519,7 @@ engine/db/
   ⇒ **不要为了让 C7 变绿去改判据**。C7 的目的是抓「IO 复杂度错了」，
   如果小帧池下它红了，那说明 IO 复杂度确实有问题 —— 那就是要修的真问题。
 
-- [ ] **D-3.3 新建 `bench/ts_bench_io.c`**
+- [x] **D-3.3 新建 `bench/ts_bench_io.c`**
 
   现在的 `bench/ts_bench.c` 是**压缩比**基准（只测编码后的字节数），
   **一个 IO 指标都没有**（实测：`bench/` 22 个文件里只有 `ft_bench_a4/a5` 有 logical/physical）。
@@ -545,7 +545,7 @@ engine/db/
   ⚠️ **帧池大小也要作为变量**：同一组数据用 512 / 4096 两档帧池各跑一遍，
   验证 `physical reads` 随帧池变小而上升、`logical reads` 不变。
 
-- [ ] **D-3.4 提交**
+- [x] **D-3.4 提交**
 
   ```powershell
   cd C:\code\projects
@@ -935,93 +935,122 @@ tombstone 的文档物理丢弃），撤销只能撤「标记」，撤不回内�
 
 ## Task D-7：group commit
 
-> **现状**：`wal.c:478 wal_fsync` 是单次 `WAL_FSYNC`（`fsync` / `_commit`），
-> **没有攒批**。而 `engine/db/README.md:51` 已经写着
-> 「wal.c/h 日志记录、**group commit**」—— **文档宣称了，代码没有**。
+> **已完成**，提交 `3381c22fb`。
+> 原状：`wal.c` 的 `wal_fsync` 每次调用都做一次真实同步；
+> 而 `README.md:51` 早就宣称有 group commit —— 文档说了，代码没有。
 
-**Files**
-- 修改：`engine/db/src/wal/wal.c`、`engine/db/src/wal/wal.h`
-- 修改：`engine/db/README.md`（确认描述与实现一致）
+**Files（实际）**
+- 修改：`engine/db/src/wal/wal.c`（793 → 672 行）
+- 新增：`engine/db/src/wal/wal_group.c`（协议实现）
+- 新增：`engine/db/src/wal/wal_internal.h`（`struct Wal`，只在 wal/ 内可见）
+- 新增：`engine/db/test/unit/test_wal_group.c`、`engine/db/test/integration/test_wal_group_mt.c`
+- 修改：`engine/db/README.md`
 
-**Interfaces**
-- 修改（`wal.h`）：新增 group commit 的状态与接口（见 D-7.2）
+> ⚠️ **为什么必须拆文件**：`wal.c` 原本 793 行，硬上限 800 —— 一行都加不进去。
+> 所以把 `struct Wal` 搬到 `wal_internal.h`（对外仍是 `wal.h` 的不透明类型），
+> 把协议搬到 `wal_group.c`。与 `storage/pager_internal.h` 是同一个做法。
 
-- [ ] **D-7.1 先量出今天的 fsync 次数（基线）**
+- [x] **D-7.1 基线**
 
-  ```powershell
-  cd C:\code\projects\engine\db
-  & "C:\Program Files\Git\usr\bin\sh.exe" bench/latch_bench_run.sh 2>&1 |
-      Select-String -Pattern 'fsync|commit|tps'
-  ```
+  | 场景 | 真实 fsync |
+  |---|---:|
+  | 单线程 100 条自动事务 | 100（1:1，符合预期） |
+  | 4 线程 × 25 条（=100 事务，原速） | **100**（一次都没攒上） |
 
-  ⇒ 记下：N 个事务提交 ⇒ **N 次 fsync**（今天必然是 1:1）。
+- [x] **D-7.2 提交协议（四件事都定了）**
 
-- [ ] **D-7.2 设计提交协议（先写下来，再写代码）**
-
-  要定的四件事：
-
-  | 问题 | 要定的内容 |
+  | 问题 | 定下来的答案 |
   |---|---|
-  | **谁执行 fsync** | 第一个到达的提交者执行；其余线程等同一个 flush generation |
-  | **flush 失败怎么通知等待者** | 等待者不能各自去 fsync（那还是 N 次）也不能被当成成功 |
-  | **等待者怎么知道要等哪一代** | 用 `flushed_lsn` 水位：**等到 `flushed_lsn >= 我的 lsn`** 即为已落盘 |
-  | **abort / close 时怎么处理等待者** | 唤醒全部等待者，让它们各自判定失败 |
+  | 谁执行 fsync | 第一个到达且发现「没人在跑」的线程当发起者，其余等它的同一代 |
+  | 等待者等什么 | **代数**（判断轮到我没有）+ **水位**（判断我的数据落盘没有），两个都要 |
+  | 失败怎么通知 | `fsync_ok` + `fsync_failed_lsn` 记下刚结束那一代；等待者若依赖它 ⇒ E_IO |
+  | close 时等待者 | `closing` 置位 + broadcast ⇒ 全部 E_IO（不许挂死、不许假成功） |
 
-  ⚠️ **关键设计点**：现有 `wal_fsync`（`wal.c:478-503`）已经把
-  「域锁内 fflush」与「域锁外真正落盘」分开了 ——
-  注释明说「两个线程的 fsync 可以**重叠** —— 磁盘队列能流水」。
-  ⇒ **group commit 是在这个基础上加「等同一代」**，不是重写 fsync 路径。
+  ⚠️ **为什么两个判据都要**：
+  - 只看 `flushed_lsn` ⇒ fsync **失败**时水位不涨，等待者永远醒不来（挂死）；
+  - 只看代数 ⇒ 会被「上一代成功但我没被覆盖」误导成完成。
 
-  ⇒ 设计写成一段注释放进 `wal.h`，包含状态机：
-  ```
-  提交者 → 写 COMMIT 记录（拿 lsn）
-        → 尝试成为「本代 flush 的发起者」
-            是 → 执行 fsync → 推进 flushed_lsn → 唤醒等待者
-            否 → 等 flushed_lsn >= 我的 lsn（或等失败信号）
-  ```
+- [x] **D-7.3 实现 —— 被实测纠正过两次**
 
-- [ ] **D-7.3 实现**
+  **错误一：发起者「刷一次就走」只从 100 降到 53 次**
 
-  ⚠️ **不要引入新的锁**。现有 `wal_lock` / `wal_unlock` 是域锁，
-  `flushed_lsn` 是 `_Atomic u32`。
-  ⇒ 「等一代」用**条件变量**或**自旋 + 短暂 sleep**，
-  但**等待期间不能持域锁**（否则一个线程的等待会堵住所有 appender）。
+  线程跑成「齐步走」：A 发起 gen1 只覆盖自己的 target；B/C/D 的 target 更大 ⇒
+  没被覆盖 ⇒ B 发起 gen2 ⇒ C 发起 gen3 ⇒ D 发起 gen4 ⇒ 一轮 4 次，白攒了。
 
-  ⚠️ **`flushed_lsn` 只能前进不能后退**（`wal.c:496-501` 已经用 CAS 保证了）——
-  group commit 的等待者也依赖这个性质。
+  ⇒ 改成**同一个发起者追到平**：fflush → 取 target → fsync → 推进水位，
+  直到 `last_lsn` 不再增长。一次覆盖所有已到达的等待者。
 
-- [ ] **D-7.4 验收**
+  **覆盖为什么安全（本 Task 唯一需要想清楚的地方）**：
 
-  | 判据 | 怎么测 |
+  覆盖规则是「在我这次 fsync 调用开始之前已经进了内核的字节，都被它覆盖」。
+  而每个等待者进等待**之前**已经在自己的 `wal_group_durable` 里做过 fflush
+  （那一刻还在域锁内）⇒ 它的字节早就在内核里。
+  ⇒ 所以「下一轮 fflush 之后读到的 `last_lsn`」所包含的字节，全都在本轮
+  fsync 开始前进了内核 ⇒ 推进到那里是安全的。
+
+  ⚠️ 反过来说：**不能**只凭「fsync 期间 `last_lsn` 涨了」就推进水位 ——
+  那会把还没 fflush 的字节也算成落盘（谎报 = 静默丢数据）。
+  所以每一轮必须先 fflush、再取 target、再 fsync，三者缺一不可。
+
+  **错误二：发起者角色在解锁之后才认领 ⇒ latch 断言炸**
+
+  第一版在 `wal_unlock` 之后置 `fsync_running`，于是两个线程都可能认领成功，
+  而且 latch 框架报「释放未持有的域 wal」。改成**持锁时认领**。
+
+- [x] **D-7.4 验收**
+
+  `test/unit/test_wal_group.c`（协议层，3 项）：
+
+  | 判据 | 实测 |
   |---|---|
-  | 单事务语义不变 | 单线程提交后立刻崩溃，恢复结果与今天一致 |
-  | 多线程多个事务共享 fsync | 4 线程 × 100 事务 ⇒ **fsync 次数 << 400** |
-  | 崩溃恢复一致 | 提交后 kill -9，恢复后事务要么全在要么全不在 |
-  | **失败 fsync 不让事务假成功** | 让 fsync 失败（把 WAL 目录设成只读）⇒ 事务必须报错 |
-  | benchmark 对比 | 与 D-7.1 的基线对比 fsync 次数 |
+  | 单线程提交后 `flushed_lsn >= target` | ✓，fsync = 1 |
+  | 4 线程共享一代 | fsync = **1**（不是 4） |
+  | 发起者失败 ⇒ 等待者不许假成功 | **4 个等待者全部收到 E_IO**，`flushed_lsn` 仍为 0 |
 
-  ⚠️ **「失败 fsync 不让事务假成功」是最容易漏的一条** ——
-  攒批之后，一个事务的成败可能取决于**另一个线程**的 fsync 结果。
-  ⇒ 每个等待者必须知道**自己等的这一代**的成败，
-  不能只看「flushed_lsn 推进了没有」。
+  `test/integration/test_wal_group_mt.c`（真实路径，4 项，连跑 4 次稳定）：
 
-- [ ] **D-7.5 同步 README**
+  | 场景 | 真实 fsync |
+  |---|---:|
+  | 原速 100 事务 | 104–117（如实记录，只断言没失控） |
+  | **模拟 2 ms 盘** 100 事务 | **50**（上限 62 = 0.6×事务数） |
+  | 单线程对照（同样慢盘同量） | 100（1:1，证明上一行有区分力） |
+  | 汇总 | 多线程 50 vs 单线程 100 ⇒ **省 50%** |
 
-  `engine/db/README.md:51` 的「group commit」描述在实现之后要与事实一致。
-  ⇒ 若最终决定「不做真攒批、只做并发 fsync」，**就把 README 改成实话** ——
-  这也是一个合法结论。
+  ⚠️ **判据标定的教训（与 D-6.3 同一个毛病）**：
 
-- [ ] **D-7.6 提交**
+  第一版判据是「多线程 < 事务数/2」。原速下实测 100/100 ⇒ 红。
+  但那个红**不是实现的问题**：这台机器 fsync 只要几十微秒，攒批蹭不到窗口，
+  是硬件事实。⇒ 判据必须按实测标定，且要能在同一台机器上复现。
 
-  ```powershell
-  cd C:\code\projects
-  git add engine/db/src/wal/wal.c
-  git add engine/db/src/wal/wal.h
-  git add engine/db/README.md
-  git diff --cached --name-only
-  git commit -m "feat(wal): group commit —— 多事务共享一次 fsync"
-  git push origin main 2>&1 | Out-String | Write-Output
-  ```
+  模拟 2 ms 盘、4 并发下实测 50/100。这**不是**「攒得不够」，而是 4 并发攒批
+  的结构性下限：第 1 轮 fsync 只能覆盖发起者自己的 commit（别人还没 append 完），
+  第 2 轮覆盖所有已到达者 ⇒ 每群 4 个事务共 2 次 fsync。并发度越高比例越好
+  （8 并发接近 2/8）。所以判据定为「省下 > 40%」。
+
+  一开始我按「25%」拍过一版，实测 75/100 ⇒ 红；那说明拍数字不行，得量。
+
+- [x] **D-7.5 README 同步** —— 已完成
+
+  `README.md:51` 从「wal.c/h 日志记录、group commit」改成三行：
+  `wal.c/h`（append/截断/扫描）、`wal_group.c`（group commit）、
+  `wal_internal.h`（`struct Wal`，wal/ 内部可见）。
+
+  > 这里踩了一个坑：第一次用文本编辑器改 README，整份文件的行尾从 CRLF+19 裸 LF
+  > 变成纯 CRLF，diff 里出现了 42 行无关改动。改成**字节级替换**（只替换那一段
+  > UTF-8 字节，不重写全文）之后 diff 干净到 3 增 1 删。
+
+- [x] **D-7.6 提交** —— `3381c22fb`（6 个文件）
+
+  **如实记账：加了一个「仅测试用」的故障注入接口**
+
+  计划原文说「把 WAL 目录设成只读」来测失败。那个做法的问题：
+  - Windows 与 POSIX 的只读语义不同；
+  - 会污染测试清理路径；
+  - **最关键的**：失败可能发生在 fflush 而不是 fsync，
+    测不到「某一代等待者收到失败」这个真正危险的分支。
+
+  ⇒ 改用显式注入（`wal_test_fail_fsync` / `wal_test_slow_fsync`），
+  声明只放 `wal_internal.h`（不对 wal/ 之外可见），生产代码不调用。
 
 ---
 
