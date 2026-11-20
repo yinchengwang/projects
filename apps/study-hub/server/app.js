@@ -408,6 +408,24 @@ function createApp(opts) {
       routes.push(route)
     })
 
+  // P3：诊断接口。一个接口三个视图（view=mastery|radar|heatmap）。
+  //
+  // 单元清单要给完整 Unit——六轴的 c / python 两轴要看 entry.language，
+  // 而 units 表只存摘要字段（契约 §4.2），entry 不入库。
+  //
+  // 契约 §3.4：app.js 启动时 loadUnits 一次、refreshUnitIndex 复用同一份结果，
+  // 所以这里**不再扫盘**，直接用上面那份 units（即启动时 loadUnits 的产物）。
+  require("./api-diagnose.js")
+    .buildDiagnoseRoutes({
+      store: store,
+      provider: provider,
+      sendJson: sendJson,
+      units: units,
+    })
+    .forEach(function (route) {
+      routes.push(route)
+    })
+
   // M6：LLM 接口。同样单独一个文件（server/api-llm.js），与其它里程碑零冲突。
   routes.push.apply(
     routes,
