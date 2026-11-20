@@ -136,6 +136,102 @@ jobs:
       run: |
         cmake --build build/engine --parallel 4
 
+  # ============ 主核（engine/db/）============
+  #
+  # 【为什么单列两个 job】
+  #
+  # `engine/db/` 自带 Makefile，**不在 CMake 构建图内**（根 CMakeLists.txt 只引入
+  # engine/，engine/CMakeLists.txt 只引入 src/ tools/ test/，均不含 db/）。
+  # 它是本仓唯一长期维护的数据库主内核，有自己独立的分层门禁（tools/check_deps.sh）、
+  # 编译门禁（-Werror）与测试协议（test/run.sh 自动收集 test_*.c）。
+  #
+  # ⇒ 上面那些 CMake job **一个字节都没覆盖它**。主核此前零 CI：
+  #   改动可以在 Windows 本地绿、在 Linux 红，反之亦然。
+  #
+  # 【这两条 job 一次就抓出了什么】
+  #
+  # 见 commit d1f0e52e2 / e8b98685c：首次在 Linux 上跑，撞出
+  #   - blob.c 索引块写越界 20 字节（栈溢出，栈保护 abort，4 个测试同时炸）
+  #   - test_page.c 栈缓冲 100 字节装 120 字节
+  #   - 3 处 GCC 15 / glibc 独有的 -Werror 诊断
+  #   - Makefile 缺 -lm、test/run.sh 缺 -D_POSIX_C_SOURCE（pthread_barrier_* 声明不出来）
+  #
+  # 前两条是**真缺陷**，在 Windows 上一直藏着。这就是这个 job 的价值。
+
+  build-kernel-linux:
+    name: 主核（Linux/GCC）
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: false
+        persist-credentials: false
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    # 主核的 Makefile 只依赖 gcc + make + sh（GitHub 的 ubuntu 镜像三者都是现成的，
+    # 不需要拉 uthash —— 主核不用 uthash，那是 engine/src/db/ 冻结轨的依赖）。
+    - name: 编译（-Wall -Wextra -Werror，零警告是硬要求）
+      working-directory: engine/db
+      run: make all
+
+    - name: 分层门禁（L0..L4 依赖方向）
+      working-directory: engine/db
+      run: sh tools/check_deps.sh
+
+    # test/run.sh 自己编译每个测试再跑，产物落 build/ 与 build/test-logs/。
+    # 失败时脚本会 tail 出每个失败测试的日志，不需要额外的 upload-artifact。
+    - name: 跑测试（105 个）
+      working-directory: engine/db
+      run: JOBS=4 sh test/run.sh
+
+  build-kernel-windows:
+    name: 主核（Windows/MinGW）
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: false
+        persist-credentials: false
+
+    # 照抄 build-engineering-windows 的 setup 头（同一个 msys2/MINGW64 环境），
+    # 只装主核真正要的东西：gcc + make。
+    - name: Set up MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: >-
+          git
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-make
+
+    # ⚠️ 用 mingw32-make 而不是 make：MSYS2 的 MINGW64 环境里
+    # `make` 是 MSYS 版（会去用 /usr/bin/sh），而主核 Makefile 里
+    # SHELL 的探法是 `where sh` / 硬编码 Git 的 sh.exe ——
+    # 与 msys2 的 sh 不同路径。主核在 Windows 上的既定命令就是 mingw32-make
+    # （见 CLAUDE.md 的「主核构建」一节）。
+    - name: 编译
+      working-directory: engine/db
+      run: mingw32-make all
+
+    - name: 分层门禁
+      working-directory: engine/db
+      run: sh tools/check_deps.sh
+
+    - name: 跑测试
+      working-directory: engine/db
+      run: JOBS=4 sh test/run.sh
+
   # ============ 学习层（ds/algo/quiz）============
 
   coverage-ubuntu:
