@@ -63,12 +63,29 @@ else
 LDLIBS  := -lpthread -lm
 endif
 
-CFLAGS  := $(CSTD) $(WARN) $(OPT) $(HARDEN) $(INC) $(SAN)
+CFLAGS  = $(CSTD) $(WARN) $(OPT) $(HARDEN) $(INC) $(SAN) $(MM_FLAGS)
 
 SRC_DIR := src
 # OBJ_DIR 可用命令行覆盖（make OBJ_DIR=build_xxx）——
 # 多个构建同时跑时各写各的目录，免得 gcc 写坏同一个 .o。
 OBJ_DIR ?= build
+
+# ---------------------------------------------------------------------
+# MM：编译期模态裁剪（B1：接入 profile 真相源）
+# ---------------------------------------------------------------------
+MM ?= full
+include tools/mm_profiles.mk
+ifeq ($(filter $(MM),$(MM_PROFILES)),)
+  $(error 未知的 MM profile '$(MM)'。可选：$(MM_PROFILES))
+endif
+OBJ_BASE ?= $(OBJ_DIR)
+MM_OBJ_DIR := $(if $(filter full,$(MM)),$(OBJ_BASE),$(OBJ_BASE)_mm_$(MM))
+override OBJ_DIR := $(MM_OBJ_DIR)
+# B1 先把 profile 数据、独立对象目录和恒定 DB_HAS_* 宏接入；
+# B2 再启用 MM_CROP_SRCS 做真正的源文件裁剪。
+MM_FLAGS :=
+$(foreach m,$(MM_ALL),$(eval MM_FLAGS += -DDB_HAS_$(MM_UP_$(m))=1))
+
 # 【为什么用 wildcard 而不是 $(shell find ...)】
 #
 # Windows 上 make 的 $(shell ...) 走 cmd.exe：单引号不是引用符（'*.c' 被原样传下去），
@@ -279,10 +296,12 @@ deps:
 test: $(TARGET)
 	@sh test/run.sh
 
-check: deps test
+check: deps
+	@sh tools/mm_profiles_test.sh
+	@sh test/run.sh
 
 clean:
-	rm -rf $(OBJ_DIR) $(BIGLOCK_DIR) $(TARGET)
+	rm -rf $(OBJ_DIR) $(OBJ_BASE)_mm_* $(BIGLOCK_DIR) $(TARGET)
 
 -include $(DEPS)
 -include $(BENCH_DEPS)
