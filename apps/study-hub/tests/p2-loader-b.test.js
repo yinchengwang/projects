@@ -55,11 +55,19 @@ function grokkingDir(learningRoot) {
  * 与产品代码同一条通路：STUDY_HUB_PYTHON 指定了就用它（numpy 只装在 py -3 的机器上
  * 必须这样指定），没指定就走自动探测。loader 与 demo 实跑必须用同一个，
  * 否则会出现「loader 说缺 numpy、demo 其实跑得动」这种自相矛盾的结论。
+ *
+ * 没指定时会**找一个真的装了 numpy 的解释器**：本机常见情形是 PATH 上的 python 没装、
+ * 而 py -3 装了。这里不替用户改环境变量，只在测试内部挑一个能跑的——
+ * 一个都找不到才返回 null（那种情况才是「本机真的缺 numpy」，该 skip）。
  * @returns {string|null}
  */
 function pythonOverride() {
   const raw = process.env.STUDY_HUB_PYTHON
-  return raw && String(raw).trim() !== "" ? String(raw).trim() : null
+  if (raw && String(raw).trim() !== "") return String(raw).trim()
+  for (const candidate of ["py -3", "python3", "python"]) {
+    if (detectNumpy(candidate).available) return candidate
+  }
+  return null
 }
 
 function skipNoLearning(t, what) {
@@ -273,7 +281,14 @@ test("AI 卡的 demo 实跑：没有 numpy 时明确 skip 并写明原因", func
   }
   const numpy = detectNumpy(pythonOverride())
   if (!numpy.available) {
-    t.skip("本机没有装 numpy：13 张 AI 卡与 clustering 卡依赖 numpy，按契约 §14.1 明确跳过，不静默跳过")
+    t.skip(
+      "自动探测到的 Python（" +
+        py.cmd +
+        " " +
+        py.args.join(" ") +
+        "）没有 numpy，按契约 §14.1 明确跳过，不静默跳过。" +
+        "若本机别的解释器装了 numpy（比如 py -3），用 STUDY_HUB_PYTHON 指定它即可跑起来"
+    )
     return
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "p2-ai-"))
