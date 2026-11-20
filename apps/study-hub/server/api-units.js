@@ -12,6 +12,38 @@
 
 const { toHtml } = require("../core/unit/markdown.js")
 
+/** 样例用例最多暴露几条（契约 §8.1.1） */
+const SAMPLE_CASE_COUNT = 2
+
+/**
+ * 把单元里的 output 断言整理成「样例用例」。
+ *
+ * 为什么从 asserts 派生而不是另存一份：断言集本来就是从用例派生的
+ * （loader A 把 `problem.cases` 逐条转成 `output` 断言），两边各算一次口径迟早打架。
+ * 从 asserts 取前 N 条，就天然保证「cases.sample 与 asserts 前 N 条同源同值」。
+ *
+ * @param {object} unit
+ * @returns {{sample: Array<{input: string, expect: string}>, total: number}|null}
+ *   不是 problem 类就返回 null（响应里不带 cases 字段）
+ */
+function buildCases(unit) {
+  const src = unit || {}
+  if (String(src.kind || "") !== "problem") return null
+  const asserts = Array.isArray(src.asserts) ? src.asserts : []
+  const cases = asserts.filter(function (item) {
+    return item && String(item.type || "") === "output"
+  })
+  return {
+    sample: cases.slice(0, SAMPLE_CASE_COUNT).map(function (item) {
+      return {
+        input: item.input === undefined || item.input === null ? "" : String(item.input),
+        expect: item.expect === undefined || item.expect === null ? "" : String(item.expect),
+      }
+    }),
+    total: cases.length,
+  }
+}
+
 /**
  * 组装路由表。
  * @param {{store: object, unitSnapshot: object, sendJson: Function}} ctx
@@ -69,14 +101,23 @@ function buildUnitRoutes(ctx) {
         ctx.sendJson(res, 404, { error: "单元不存在", id: id })
         return
       }
-      ctx.sendJson(res, 200, {
+      const payload = {
         unit: unit,
         statement_html: toHtml(unit.statement || ""),
-      })
+      }
+      // 契约 §8.1.1：problem 类带 cases（sample 最多 2 条），card 类不带这个字段。
+      // 旧路由 /api/problem/:id 下线前，这两条保护先搬到这里。
+      const cases = buildCases(unit)
+      if (cases) payload.cases = cases
+      ctx.sendJson(res, 200, payload)
     },
   })
 
   return routes
 }
 
-module.exports = { buildUnitRoutes: buildUnitRoutes }
+module.exports = {
+  buildUnitRoutes: buildUnitRoutes,
+  buildCases: buildCases,
+  SAMPLE_CASE_COUNT: SAMPLE_CASE_COUNT,
+}
