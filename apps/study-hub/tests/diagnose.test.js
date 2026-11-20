@@ -1,290 +1,319 @@
 "use strict"
 /**
- * diagnose.test.js —— 诊断页的纯函数层
+ * diagnose.test.js —— 诊断页三视图的纯函数层
  *
- * 渲染层（mountDiagnose / showDiagnose）要真实 DOM，node 里没有，
- * 所以这里只测纯函数：视图数据怎么算、怎么排、截断到几条。
+ * 渲染层要真 DOM（Node 里没有），所以这里只测纯函数：
+ * 视图数据怎么算、怎么排、截断到几条、hero 说哪句话。
  */
 
 const test = require("node:test")
 const assert = require("node:assert")
-const fs = require("node:fs")
-const path = require("node:path")
 
 const Charts = require("../web/charts.js")
 
 /**
- * 页面脚本在浏览器里跑，但「注册进 window.AlgoPlan.pages」这一步可以在 Node 里验：
+ * 页面脚本在浏览器里跑，但「注册进页面表」这一步可以在 Node 里验：
  * 给一个最小的 window 替身，把页面脚本 require 进来。
  * 顺序很重要：先搭好替身，再 require——脚本加载时就会注册自己。
+ *
+ * P1 把前端全局改名成 StudyHub（契约 §13），旧名 AlgoPlan 也留一份替身，
+ * 顺便验一下「认新名」这件事。
  */
 global.window = {
-  AlgoPlan: {
+  StudyHub: {
     pages: {},
     el: function (tag, attrs, children) {
       return { tag: tag, attrs: attrs, children: children }
     },
     getJson: async function () {
-      return { topics: [], summary: {}, series: [] }
+      return { view: "mastery", tracks: [], topics: [], summary: {} }
     },
   },
+  AlgoPlan: { pages: {} },
+  StudyHubCharts: Charts,
   AlgoPlanCharts: Charts,
 }
 
 const Diagnose = require("../web/diagnose.js")
 
-/** 一份固定数据：覆盖四个档位 */
-const TOPICS = [
-  {
-    topic: "数组",
-    mastery: 0.28,
-    coverage: 0.4,
-    bucket: "weak-sparse",
-    label: "薄弱且练得少",
-    action: "轮次里优先排这类题——先补量",
-    attempts: 6,
-    expected: 5,
-    unitCount: 2,
-  },
-  {
-    topic: "哈希表",
-    mastery: 0.62,
-    coverage: 0.8,
-    bucket: "strong-dense",
-    label: "掌握",
-    action: "保持手感",
-    attempts: 5,
-    expected: 5,
-    unitCount: 4,
-  },
-  {
-    topic: "动态规划",
-    mastery: 0.45,
-    coverage: 0.2,
-    bucket: "weak-dense",
-    label: "练过但总错",
-    action: "回头复盘错题",
-    attempts: 4,
-    expected: 5,
-    unitCount: 1,
-  },
-  {
-    topic: "二分查找",
-    mastery: 0.7,
-    coverage: 0.5,
-    bucket: "strong-sparse",
-    label: "偶然会，没练透",
-    action: "多练同类型题",
-    attempts: 2,
-    expected: 5,
-    unitCount: 2,
-  },
-]
-
-const SERIES = [
-  { date: "2026-11-01", count: 0 },
-  { date: "2026-11-02", count: 3 },
-  { date: "2026-11-03", count: 1 },
-]
-
-/* ---------------- 基础 ---------------- */
-
-test("percent 与 charts.formatPercent 同口径", function () {
-  assert.strictEqual(Diagnose.percent(0.42), Charts.formatPercent(0.42))
-  assert.strictEqual(Diagnose.percent(0.42), "42%")
-  assert.strictEqual(Diagnose.percent(undefined), "0%")
-})
-
-test("bucketCounts 数出四个档位各有多少个知识点", function () {
-  const counts = Diagnose.bucketCounts(TOPICS)
-  assert.strictEqual(counts["weak-sparse"], 1)
-  assert.strictEqual(counts["strong-dense"], 1)
-  assert.strictEqual(counts["weak-dense"], 1)
-  assert.strictEqual(counts["strong-sparse"], 1)
-})
-
-test("bucketCounts 遇到不认识的档位不炸", function () {
-  const counts = Diagnose.bucketCounts([{ bucket: "不存在的档" }, null])
-  assert.strictEqual(counts["weak-dense"], 0)
-})
-
-test("legendItems 的颜色跟 charts 的主题色一致", function () {
-  const items = Diagnose.legendItems()
-  assert.strictEqual(items.length, 2)
-  assert.strictEqual(items[0].name, "掌握度")
-  assert.strictEqual(items[0].color, Charts.DEFAULT_THEME.series1)
-  assert.strictEqual(items[1].name, "覆盖度")
-  assert.strictEqual(items[1].color, Charts.DEFAULT_THEME.series2)
-})
-
-test("summaryCards 把概览数字变成标签 + 数值", function () {
-  const cards = Diagnose.summaryCards({
-    topicCount: 4,
-    avgMastery: 0.5,
-    avgCoverage: 0.4,
-    weakCount: 2,
-    totalAttempts: 17,
-    totalProblems: 9,
-    untouchedTopics: 3,
-    minExpectedQuestions: 5,
-  })
-  const byLabel = {}
-  cards.forEach(function (card) {
-    byLabel[card.label] = card.value
-  })
-  assert.strictEqual(byLabel["知识点"], "4")
-  assert.strictEqual(byLabel["平均掌握度"], "50%")
-  assert.strictEqual(byLabel["平均覆盖度"], "40%")
-  assert.strictEqual(byLabel["薄弱知识点"], "2")
-  assert.strictEqual(byLabel["总提交数"], "17")
-  assert.strictEqual(byLabel["练过题数"], "9")
-  assert.strictEqual(byLabel["未涉及的知识点"], "3")
-  assert.strictEqual(byLabel["期望题量下限"], "5")
-})
-
-/* ---------------- 选数据 ---------------- */
-
-test("radarTopics 选提交次数最多的几个知识点", function () {
-  const rows = Diagnose.radarTopics(TOPICS, 2)
-  assert.strictEqual(rows.length, 2)
-  assert.strictEqual(rows[0].topic, "数组")
-  assert.strictEqual(rows[1].topic, "哈希表")
-})
-
-test("radarTopics 提交次数相同时按知识点名排，顺序稳定", function () {
-  const rows = Diagnose.radarTopics(
-    [
-      { topic: "乙", mastery: 0.1, coverage: 0.1, attempts: 3 },
-      { topic: "甲", mastery: 0.1, coverage: 0.1, attempts: 3 },
-    ],
-    5
-  )
-  const names = rows.map(function (row) {
-    return row.topic
-  })
-  // 中文按码位排（跟 Array.prototype.sort 一致），不按拼音硬编码顺序
-  assert.deepStrictEqual(names, names.slice().sort())
-  assert.strictEqual(names.length, 2)
-})
-
-test("radarTopics 的值被夹到 0..1", function () {
-  const rows = Diagnose.radarTopics([{ topic: "x", mastery: 1.5, coverage: -1, attempts: 1 }], 5)
-  assert.strictEqual(rows[0].mastery, 1)
-  assert.strictEqual(rows[0].coverage, 0)
-})
-
-test("weakRows 只收两个弱档，并按处置优先级排", function () {
-  const rows = Diagnose.weakRows(TOPICS, 10)
-  assert.strictEqual(rows.length, 2)
-  assert.strictEqual(rows[0].topic, "动态规划", "练过但总错排最前")
-  assert.strictEqual(rows[0].label, "练过但总错")
-  assert.strictEqual(rows[1].topic, "数组")
-  assert.strictEqual(rows[1].display, "28%")
-})
-
-test("weakRows 超过上限就截断", function () {
-  const many = []
-  for (let i = 0; i < 12; i += 1) {
-    many.push({
-      topic: "t" + i,
-      mastery: 0.1,
-      coverage: 0.1,
+/** 一份固定的 mastery 视图数据：三轨 + 知识点 */
+const MASTERY_PAYLOAD = {
+  view: "mastery",
+  tracks: [
+    {
+      track: "algorithm",
+      label: "算法",
+      mastery: 0.57,
+      coverage: 0.4,
+      bucket: "weak-dense",
+      label2: "练过但总错",
+      action: "先回去看概念笔记，别急着刷题——量够了，理解没到位",
+      unitCount: 51,
+    },
+    {
+      track: "database",
+      label: "数据库",
+      mastery: 0.97,
+      coverage: 0.2,
+      bucket: "strong-sparse",
+      label2: "偶然会，没练透",
+      action: "安排复习巩固——会做，但还没练透",
+      unitCount: 12,
+    },
+    {
+      track: "ai",
+      label: "AI",
+      mastery: 0,
+      coverage: 0,
+      bucket: "weak-sparse",
+      label2: "薄弱且练得少",
+      action: "轮次里优先排这类题——先补量",
+      unitCount: 8,
+    },
+  ],
+  topics: [
+    {
+      track: "algorithm",
+      topic: "数组",
+      mastery: 0.57,
+      coverage: 0.4,
+      bucket: "weak-dense",
+      label: "练过但总错",
+      action: "先回去看概念笔记",
+    },
+    {
+      track: "algorithm",
+      topic: "SQL",
+      mastery: 0.18,
+      coverage: 0.2,
       bucket: "weak-sparse",
       label: "薄弱且练得少",
-      action: "",
-      attempts: 1,
-    })
-  }
-  assert.strictEqual(Diagnose.weakRows(many, 8).length, 8)
-})
+      action: "先补量",
+    },
+    {
+      track: "database",
+      topic: "事务",
+      mastery: 0.97,
+      coverage: 0.2,
+      bucket: "strong-sparse",
+      label: "偶然会，没练透",
+      action: "安排复习巩固",
+    },
+  ],
+  summary: { unitCount: 3, topicCount: 3, sessionCount: 5, totalAttempts: 12 },
+}
 
-test("coverageRows 按覆盖度从低到高排，并带上「练了几 / 期望几」", function () {
-  const rows = Diagnose.coverageRows(TOPICS, 10)
-  assert.strictEqual(rows.length, 4)
-  assert.strictEqual(rows[0].topic, "动态规划")
-  assert.strictEqual(rows[0].coverage, 0.2)
-  assert.strictEqual(rows[0].detail, "练了 1 / 期望 5 个单元")
-  assert.strictEqual(rows[3].topic, "哈希表")
-})
+/** 一份固定的 radar 视图数据：六轴 + 弱项 + 强项 */
+const RADAR_PAYLOAD = {
+  view: "radar",
+  axes: [
+    { id: "algorithm", label: "算法", value: 0.57 },
+    { id: "database", label: "数据库", value: 0.97 },
+    { id: "ai", label: "AI", value: 0 },
+    { id: "c", label: "C/C++", value: 0.57 },
+    { id: "python", label: "Python", value: 0.97 },
+    { id: "sql", label: "SQL", value: 0.18 },
+  ],
+  weak: [
+    { unit_id: "algo:lc-00002", track: "algorithm", title: "合并区间", mastery: 0.18, topic: "数组" },
+  ],
+  strong: [
+    { unit_id: "db:mvcc", track: "database", title: "MVCC", mastery: 0.97, topic: "事务" },
+    { unit_id: "algo:lc-00001", track: "algorithm", title: "两数之和", mastery: 0.96, topic: "数组" },
+  ],
+}
 
-/* ---------------- 视图 ---------------- */
+/** 一份固定的 heatmap 视图数据：两个会话 + 三个格子 */
+const HEATMAP_PAYLOAD = {
+  view: "heatmap",
+  sessions: [
+    { id: "s1", index: 1, started_at: "2026-11-09T10:00:00.000Z" },
+    { id: "s2", index: 2, started_at: "2026-11-10T10:00:00.000Z" },
+  ],
+  cells: [
+    { session_id: "s1", track: "algorithm", state: "pass", seq: 1 },
+    { session_id: "s1", track: "database", state: "pending", seq: 1 },
+    { session_id: "s2", track: "algorithm", state: "wrong_answer", seq: 1 },
+  ],
+}
 
-test("buildDiagnoseView 出四块内容：雷达、弱项榜、曲线、覆盖", function () {
-  const view = Diagnose.buildDiagnoseView({
-    topics: TOPICS,
-    summary: { topicCount: 4, avgMastery: 0.5 },
-    series: SERIES,
-  })
+/* ---------------- 三轨总览 ---------------- */
 
-  assert.strictEqual(view.radar.labels.length, 4)
-  assert.strictEqual(view.radar.series.length, 2)
-  assert.strictEqual(view.radar.series[0].name, "掌握度")
-  assert.strictEqual(view.radar.series[1].name, "覆盖度")
-  assert.strictEqual(view.radar.series[0].values.length, 4)
-
-  assert.strictEqual(view.weak.rows.length, 2)
-  assert.strictEqual(view.curve.points.length, 3)
-  assert.strictEqual(view.curve.points[1].count, 3)
-  assert.strictEqual(view.coverage.rows.length, 4)
-
-  // 每块都要有表格孪生
-  ;[view.radar, view.weak, view.curve, view.coverage].forEach(function (block) {
-    assert.ok(Array.isArray(block.table.columns), "缺表格列")
-    assert.ok(Array.isArray(block.table.rows), "缺表格行")
-    assert.strictEqual(block.table.rows.length, block.table.rows.length)
-  })
-})
-
-test("buildDiagnoseView 表格孪生的行数跟图表行数对得上", function () {
-  const view = Diagnose.buildDiagnoseView({ topics: TOPICS, summary: {}, series: SERIES })
-  assert.strictEqual(view.radar.table.rows.length, view.radar.labels.length)
-  assert.strictEqual(view.weak.table.rows.length, view.weak.rows.length)
-  assert.strictEqual(view.curve.table.rows.length, view.curve.points.length)
-  assert.strictEqual(view.coverage.table.rows.length, view.coverage.rows.length)
-})
-
-test("buildDiagnoseView 空数据不炸", function () {
-  const view = Diagnose.buildDiagnoseView({})
-  assert.deepStrictEqual(view.radar.labels, [])
-  assert.deepStrictEqual(view.weak.rows, [])
-  assert.deepStrictEqual(view.curve.points, [])
-  assert.deepStrictEqual(view.coverage.rows, [])
-  assert.strictEqual(view.summary.length, Diagnose.summaryCards({}).length)
-})
-
-/* ---------------- 静态资源接线 ---------------- */
-
-test("index.html 引入 charts.js / diagnose.js / diagnose.css", function () {
-  const html = fs.readFileSync(path.join(__dirname, "..", "web", "index.html"), "utf8")
-  assert.ok(html.indexOf('src="/charts.js"') !== -1, "少 charts.js")
-  assert.ok(html.indexOf('src="/diagnose.js"') !== -1, "少 diagnose.js")
-  assert.ok(html.indexOf('href="/diagnose.css"') !== -1, "少 diagnose.css")
-  assert.ok(
-    html.indexOf('src="/charts.js"') < html.indexOf('src="/diagnose.js"'),
-    "charts.js 必须先加载"
+test("三轨并列：trackBarRows 三行、顺序固定、百分比按掌握度", function () {
+  const rows = Diagnose.trackBarRows(MASTERY_PAYLOAD)
+  assert.strictEqual(rows.length, 3)
+  assert.deepStrictEqual(
+    rows.map(function (r) {
+      return r.track
+    }),
+    ["algorithm", "database", "ai"]
   )
+  assert.strictEqual(rows[0].label, "算法")
+  assert.strictEqual(rows[0].display, "57%")
+  assert.strictEqual(rows[1].display, "97%")
 })
 
-test("diagnose.css 存在且定义了诊断页要用的类名", function () {
-  const css = fs.readFileSync(path.join(__dirname, "..", "web", "diagnose.css"), "utf8")
-  assert.ok(css.indexOf(".diag-panel") !== -1)
-  assert.ok(css.indexOf(".diag-card") !== -1)
-  assert.ok(css.indexOf(".chart") !== -1)
-})
-
-/* ---------------- 页面注册 ---------------- */
-
-test("页面脚本注册进 window.AlgoPlan.pages", function () {
-  const page = global.window.AlgoPlan.pages.diagnose
-  assert.ok(page, "诊断页没有注册")
-  assert.strictEqual(page.title, "诊断")
-  assert.strictEqual(typeof page.render, "function", "诊断页缺少 render")
-})
-
-test("web/app.js 的 TABS 里有「诊断」这一项", function () {
-  const app = fs.readFileSync(path.join(__dirname, "..", "web", "app.js"), "utf8")
-  assert.ok(
-    /\{\s*key:\s*"diagnose"\s*,\s*label:\s*"诊断"\s*\}/.test(app),
-    "TABS 里没有诊断页"
+test("下钻明细只给选中那条轨的知识点，按掌握度从低到高", function () {
+  const rows = Diagnose.topicRowsForTrack(MASTERY_PAYLOAD, "algorithm")
+  assert.strictEqual(rows.length, 2)
+  assert.deepStrictEqual(
+    rows.map(function (r) {
+      return r.topic
+    }),
+    ["SQL", "数组"]
   )
+  assert.strictEqual(rows[0].display, "18%")
+})
+
+test("下钻的条形颜色按档位给：弱档橙、强档绿", function () {
+  const algo = Diagnose.topicRowsForTrack(MASTERY_PAYLOAD, "algorithm")
+  assert.strictEqual(algo[0].color, Charts.DEFAULT_THEME.series2, "薄弱且练得少是橙")
+  const db = Diagnose.topicRowsForTrack(MASTERY_PAYLOAD, "database")
+  assert.strictEqual(db[0].color, Charts.DEFAULT_THEME.series3, "偶然会没练透是绿")
+})
+
+test("概览数字块给四个数", function () {
+  const cards = Diagnose.summaryCards(MASTERY_PAYLOAD)
+  assert.deepStrictEqual(
+    cards.map(function (c) {
+      return c.label
+    }),
+    ["练过单元", "练过知识点", "会话数", "总提交数"]
+  )
+  assert.strictEqual(cards[0].value, "3")
+  assert.strictEqual(cards[3].value, "12")
+})
+
+test("hero 挑覆盖度大于 0 的轨里掌握度最低的那条", function () {
+  const view = Diagnose.buildMasteryView(MASTERY_PAYLOAD)
+  assert.strictEqual(view.hero.title, "先治这一条轨")
+  assert.ok(view.hero.text.indexOf("算法") === 0, view.hero.text)
+  assert.ok(view.hero.text.indexOf("57%") !== -1, view.hero.text)
+})
+
+test("一条轨都没练过时 hero 给中文空态", function () {
+  const view = Diagnose.buildMasteryView({ view: "mastery", tracks: [], topics: [], summary: {} })
+  assert.strictEqual(view.hero.title, "还没有练习记录")
+  assert.ok(view.hero.text.indexOf("先去做几道题") !== -1, view.hero.text)
+})
+
+test("buildMasteryView 的形状：view / tracks / drilldown / table", function () {
+  const view = Diagnose.buildMasteryView(MASTERY_PAYLOAD)
+  assert.strictEqual(view.view, "mastery")
+  assert.strictEqual(view.tracks.length, 3)
+  assert.strictEqual(view.drilldown.length, 3)
+  assert.deepStrictEqual(
+    view.drilldown.map(function (d) {
+      return d.track
+    }),
+    ["algorithm", "database", "ai"]
+  )
+  assert.deepStrictEqual(view.table.columns, ["轨", "掌握度", "覆盖度", "诊断", "单元数"])
+  assert.strictEqual(view.table.rows.length, 3)
+})
+
+/* ---------------- 六轴雷达 ---------------- */
+
+test("雷达六轴：顺序与百分比", function () {
+  const axes = Diagnose.radarAxes(RADAR_PAYLOAD)
+  assert.deepStrictEqual(
+    axes.map(function (a) {
+      return a.id
+    }),
+    ["algorithm", "database", "ai", "c", "python", "sql"]
+  )
+  assert.strictEqual(axes[0].display, "57%")
+  assert.strictEqual(axes[2].display, "0%")
+})
+
+test("弱项清单带上轨名与中文建议", function () {
+  const rows = Diagnose.weakRows(RADAR_PAYLOAD)
+  assert.strictEqual(rows.length, 1)
+  assert.strictEqual(rows[0].unit_id, "algo:lc-00002")
+  assert.strictEqual(rows[0].trackLabel, "算法")
+  assert.strictEqual(rows[0].title, "合并区间")
+  assert.ok(rows[0].advice.indexOf("18%") !== -1, rows[0].advice)
+  assert.ok(rows[0].advice.indexOf("笔记") !== -1, rows[0].advice)
+})
+
+test("强项清单带上轨名", function () {
+  const rows = Diagnose.strongRows(RADAR_PAYLOAD)
+  assert.strictEqual(rows.length, 2)
+  assert.deepStrictEqual(
+    rows.map(function (r) {
+      return r.unit_id
+    }),
+    ["db:mvcc", "algo:lc-00001"]
+  )
+  assert.strictEqual(rows[0].trackLabel, "数据库")
+})
+
+test("雷达 hero 挑最短的那块板", function () {
+  const view = Diagnose.buildRadarView(RADAR_PAYLOAD)
+  assert.strictEqual(view.hero.title, "最短的那块板")
+  assert.ok(view.hero.text.indexOf("SQL") === 0, view.hero.text)
+  assert.ok(view.hero.text.indexOf("18%") !== -1, view.hero.text)
+})
+
+test("buildRadarView 的形状", function () {
+  const view = Diagnose.buildRadarView(RADAR_PAYLOAD)
+  assert.strictEqual(view.view, "radar")
+  assert.strictEqual(view.axes.length, 6)
+  assert.strictEqual(view.weak.length, 1)
+  assert.strictEqual(view.strong.length, 2)
+  assert.deepStrictEqual(view.table.columns, ["维度", "掌握度"])
+})
+
+/* ---------------- 会话热力图 ---------------- */
+
+test("热力图按会话分组，格子带汉字标记与中文全称", function () {
+  const view = Diagnose.buildHeatmapView(HEATMAP_PAYLOAD)
+  assert.strictEqual(view.sessionRows.length, 2)
+  const first = view.sessionRows[0]
+  assert.strictEqual(first.id, "s1")
+  assert.strictEqual(first.index, 1)
+  assert.strictEqual(first.cells.length, 2)
+  assert.strictEqual(first.cells[0].mark, "通")
+  assert.strictEqual(first.cells[0].label, "通过")
+  assert.strictEqual(first.cells[0].trackLabel, "算法")
+  assert.strictEqual(first.cells[1].mark, "待")
+})
+
+test("热力图图例六项，颜色只分组", function () {
+  const legend = Diagnose.legendItems()
+  assert.strictEqual(legend.length, 6)
+  assert.strictEqual(legend[0].mark, "通")
+  assert.strictEqual(legend[0].label, "通过")
+  assert.strictEqual(legend[0].color, Charts.DEFAULT_THEME.series3)
+  assert.strictEqual(legend[1].color, Charts.DEFAULT_THEME.series2)
+  assert.strictEqual(legend[5].color, Charts.DEFAULT_THEME.track)
+})
+
+test("热力图 hero 说最近一次会话的通过数", function () {
+  const view = Diagnose.buildHeatmapView(HEATMAP_PAYLOAD)
+  assert.strictEqual(view.hero.title, "最近一次会话")
+  assert.ok(view.hero.text.indexOf("第 2 次会话") !== -1, view.hero.text)
+  assert.ok(view.hero.text.indexOf("通过 0 个") !== -1, view.hero.text)
+})
+
+test("热力图的表格孪生逐格列出", function () {
+  const view = Diagnose.buildHeatmapView(HEATMAP_PAYLOAD)
+  assert.deepStrictEqual(view.table.columns, ["会话", "轨", "结果", "序号"])
+  assert.strictEqual(view.table.rows.length, 3)
+  assert.deepStrictEqual(view.table.rows[0], ["1", "算法", "通过", "1"])
+})
+
+/* ---------------- 分发与注册 ---------------- */
+
+test("buildDiagnoseView 按视图名分发，非法名回落到总览", function () {
+  assert.strictEqual(Diagnose.buildDiagnoseView(MASTERY_PAYLOAD, "mastery").view, "mastery")
+  assert.strictEqual(Diagnose.buildDiagnoseView(RADAR_PAYLOAD, "radar").view, "radar")
+  assert.strictEqual(Diagnose.buildDiagnoseView(HEATMAP_PAYLOAD, "heatmap").view, "heatmap")
+  assert.strictEqual(Diagnose.buildDiagnoseView(MASTERY_PAYLOAD, "bogus").view, "mastery")
+})
+
+test("页面注册进 window.StudyHub.pages.diagnose", function () {
+  assert.ok(global.window.StudyHub.pages.diagnose, "要注册进页面表")
+  assert.strictEqual(global.window.StudyHub.pages.diagnose.title, "诊断")
+  assert.strictEqual(typeof global.window.StudyHub.pages.diagnose.render, "function")
 })

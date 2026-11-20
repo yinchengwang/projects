@@ -1,9 +1,24 @@
-"use strict";
+"use strict"
+/**
+ * diagnose.js —— 诊断页（三视图）
+ *
+ * 三个视图看同一份数据：
+ *   A 三轨总览：三条轨并列，点一条轨下钻它的知识点
+ *   B 六轴雷达：六个维度一张雷达图 + 弱项 / 强项清单
+ *   C 会话热力图：横轴会话序号、纵轴三轨、格子是那次的结果
+ *
+ * 规矩：
+ *   - 三个视图是**页内标签**，不是路由（G29：不许在前端加路由）
+ *   - 可测逻辑全是纯函数并导出（契约 §9.4：DOM 桩没有 querySelector / innerHTML）
+ *   - 颜色只是辅助，每张图旁边都有中文表格孪生
+ *   - 前端不另立档位口径：四档标签与处方由接口给
+ */
+
 ;(function (root, factory) {
   if (typeof module === "object" && module.exports) {
     module.exports = factory(require("./charts.js"))
   } else {
-    root.AlgoPlanDiagnose = factory(root.AlgoPlanCharts)
+    root.AlgoPlanDiagnose = factory(root.StudyHubCharts || root.AlgoPlanCharts)
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function (Charts) {
   "use strict"
@@ -12,584 +27,907 @@
     throw new Error("诊断页依赖 charts.js，请确认 charts.js 在 diagnose.js 之前加载")
   }
 
-  /**
-   * diagnose.js —— 诊断页（掌握度雷达 / 弱项榜 / 每日题量曲线 / 知识点覆盖）
-   *
-   * 零第三方依赖：图表由 web/charts.js 手绘 SVG 生成。
-   * 同一份文件既能被 node:test 直接 require，也能在浏览器里挂到 window.AlgoPlanDiagnose。
-   *
-   * 分工：
-   *   纯函数（buildDiagnoseView 等）——算数据、排序、截断，可单测
-   *   渲染层（mountDiagnose / showDiagnose）——只做 DOM 装配，无业务分支
-   *
-   * 层次（跟 style.css 的四件套对齐）：
-   *   页头 → 概览数字块（.stat-grid）→ 四张图卡（.panel），
-   *   每张卡内用 .block 分「图」与「表格孪生」两块。
-   */
+  /* ---------------- 常量 ---------------- */
 
-  /**
-   * 公共界面构件。浏览器里 ui.js 先加载挂 window.AlgoPlanUI；
-   * Node 下没有全局挂载，就 require 同一份文件——实现只有一份。
-   */
+  /** 三个视图（页内标签，不是路由） */
+  const VIEWS = ["mastery", "radar", "heatmap"]
+
+  /** 视图的中文标签 */
+  const VIEW_LABELS = { mastery: "三轨总览", radar: "六轴雷达", heatmap: "会话热力图" }
+
+  /** 三轨的中文名（接口给了 label 就用接口的，这个只是兜底） */
+  const TRACK_LABELS = { algorithm: "算法", database: "数据库", ai: "AI" }
+
+  /** 三轨的固定顺序（热力图的纵轴用它） */
+  const TRACK_CODES = ["algorithm", "database", "ai"]
+
+  /** 四档 → 药丸色调。四档的中文标签由接口给，这里只映射颜色 */
+  const BUCKET_TONE = {
+    "weak-dense": "bad",
+    "weak-sparse": "warn",
+    "strong-sparse": "accent",
+    "strong-dense": "ok",
+  }
+
+  /** 下钻明细最多列几行 */
+  const MAX_TOPIC_ROWS = 12
+
+  /** 弱项 / 强项清单最多列几行 */
+  const MAX_WEAK_ROWS = 12
+
   const UI =
     (typeof globalThis !== "undefined" &&
-      (globalThis.AlgoPlanUI || (globalThis.AlgoPlan && globalThis.AlgoPlan.ui))) ||
+      (globalThis.AlgoPlanUI ||
+        (globalThis.StudyHub && globalThis.StudyHub.ui) ||
+        (globalThis.AlgoPlan && globalThis.AlgoPlan.ui))) ||
     (typeof require === "function" ? require("./ui.js") : null)
 
-  /** 雷达图最多放几个知识点（轴太多就看不清了） */
-  const MAX_RADAR_TOPICS = 6
+  /* ---------------- 纯函数层 ---------------- */
 
-  /** 弱项榜最多列几行 */
-  const MAX_WEAK_ROWS = 8
-
-  /** 知识点覆盖最多列几行 */
-  const MAX_COVERAGE_ROWS = 10
-
-  /** 处置优先级：练过但总错 > 薄弱且练得少 > 偶然会没练透 > 掌握 */
-  const URGENCY_ORDER = ["weak-dense", "weak-sparse", "strong-sparse", "strong-dense"]
-
-  /** 两个弱档 */
-  const WEAK_BUCKETS = ["weak-dense", "weak-sparse"]
-
-  /**
-   * 四个档位：中文标签 + 徽章色调。
-   * 中文文字必须留着——颜色只是辅助，不能只靠颜色表意。
-   */
-  const BUCKET_META = [
-    { bucket: "weak-dense", label: "练过但总错", tone: "bad" },
-    { bucket: "weak-sparse", label: "薄弱且练得少", tone: "warn" },
-    { bucket: "strong-sparse", label: "偶然会，没练透", tone: "accent" },
-    { bucket: "strong-dense", label: "掌握", tone: "ok" },
-  ]
-
-  /** 中文标签 → 徽章色调（弱项榜的行只带标签，不带档位键） */
-  const LABEL_TONE = BUCKET_META.reduce(function (acc, item) {
-    acc[item.label] = item.tone
-    return acc
-  }, {})
-
-  /** 百分比格式化，跟 charts.formatPercent 同口径 */
+  /** 0..1 → 整数百分比 */
   function percent(value) {
-    return Charts.formatPercent(value)
+    const n = Number(value)
+    if (!Number.isFinite(n) || n <= 0) return "0%"
+    return String(Math.min(100, Math.round(n * 100))) + "%"
   }
 
-  /** 四个档位各有多少个知识点 */
-  function bucketCounts(topics) {
-    const counts = {
-      "weak-dense": 0,
-      "weak-sparse": 0,
-      "strong-sparse": 0,
-      "strong-dense": 0,
-    }
-    ;(topics || []).forEach(function (item) {
-      if (item && Object.prototype.hasOwnProperty.call(counts, item.bucket)) {
-        counts[item.bucket] += 1
-      }
-    })
-    return counts
+  /** 轨名的中文兜底 */
+  function trackLabelOf(track) {
+    const key = String(track || "")
+    return TRACK_LABELS[key] || key
   }
 
-  /** 雷达图图例：两条序列，颜色取自 charts 的主题色 */
-  function legendItems() {
-    return [
-      { name: "掌握度", color: Charts.DEFAULT_THEME.series1 },
-      { name: "覆盖度", color: Charts.DEFAULT_THEME.series2 },
-    ]
-  }
-
-  /** 概览卡片 */
-  function summaryCards(summary) {
-    const s = summary || {}
-    return [
-      { label: "知识点", value: String(Number(s.topicCount) || 0) },
-      { label: "平均掌握度", value: percent(s.avgMastery) },
-      { label: "平均覆盖度", value: percent(s.avgCoverage) },
-      { label: "薄弱知识点", value: String(Number(s.weakCount) || 0) },
-      { label: "总提交数", value: String(Number(s.totalAttempts) || 0) },
-      { label: "练过题数", value: String(Number(s.totalProblems) || 0) },
-      { label: "未涉及的知识点", value: String(Number(s.untouchedTopics) || 0) },
-      { label: "期望题量下限", value: String(Number(s.minExpectedQuestions) || 0) },
-    ]
+  /** 四档 → 条形颜色：弱档橙、强档绿、没诊断出来用蓝 */
+  function bucketColor(bucket) {
+    const theme = Charts.DEFAULT_THEME
+    const key = String(bucket || "")
+    if (key === "weak-dense" || key === "weak-sparse") return theme.series2
+    if (key === "strong-dense" || key === "strong-sparse") return theme.series3
+    return theme.series1
   }
 
   /**
-   * 雷达图要展示的知识点：练得最多的几个（提交次数降序，同次数按名字排）。
-   * 选「练得最多的」是因为雷达看的是主战场的长相，弱项由弱项榜负责。
+   * 三轨并列的条形行。
+   * @param {object} payload /api/diagnose?view=mastery 的响应
+   * @returns {Array<object>}
    */
-  function radarTopics(topics, max) {
-    const list = Array.isArray(topics) ? topics.slice() : []
-    const limit = Math.max(0, Math.floor(Number(max) || MAX_RADAR_TOPICS))
-    list.sort(function (a, b) {
-      const da = Number(a.attempts) || 0
-      const db = Number(b.attempts) || 0
-      if (da !== db) return db - da
-      return String(a.topic) < String(b.topic) ? -1 : 1
-    })
-    return list.slice(0, limit).map(function (item) {
+  function trackBarRows(payload) {
+    const data = payload || {}
+    const list = Array.isArray(data.tracks) ? data.tracks : []
+    return list.map(function (item) {
+      const track = String((item && item.track) || "")
+      const mastery = Number((item && item.mastery) || 0)
+      const coverage = Number((item && item.coverage) || 0)
       return {
-        topic: String(item.topic),
-        mastery: Charts.clamp01(item.mastery),
-        coverage: Charts.clamp01(item.coverage),
-        attempts: Number(item.attempts) || 0,
-      }
-    })
-  }
-
-  /** 弱项榜：只收两个弱档，按处置优先级排 */
-  function weakRows(topics, limit) {
-    const list = Array.isArray(topics) ? topics.slice() : []
-    const cap = Math.max(0, Math.floor(Number(limit) || MAX_WEAK_ROWS))
-    const rows = list.filter(function (item) {
-      return item && WEAK_BUCKETS.indexOf(item.bucket) !== -1
-    })
-    rows.sort(function (a, b) {
-      const ia = URGENCY_ORDER.indexOf(a.bucket)
-      const ib = URGENCY_ORDER.indexOf(b.bucket)
-      if (ia !== ib) return ia - ib
-      const ma = Number(a.mastery) || 0
-      const mb = Number(b.mastery) || 0
-      if (ma !== mb) return ma - mb
-      return String(a.topic) < String(b.topic) ? -1 : 1
-    })
-    return rows.slice(0, cap).map(function (item) {
-      return {
-        topic: String(item.topic),
-        mastery: Charts.clamp01(item.mastery),
-        coverage: Charts.clamp01(item.coverage),
-        label: String(item.label || ""),
-        action: String(item.action || ""),
-        display: percent(item.mastery),
-      }
-    })
-  }
-
-  /** 知识点覆盖：按覆盖度从低到高排 */
-  function coverageRows(topics, limit) {
-    const list = Array.isArray(topics) ? topics.slice() : []
-    const cap = Math.max(0, Math.floor(Number(limit) || MAX_COVERAGE_ROWS))
-    list.sort(function (a, b) {
-      const ca = Number(a.coverage) || 0
-      const cb = Number(b.coverage) || 0
-      if (ca !== cb) return ca - cb
-      return String(a.topic) < String(b.topic) ? -1 : 1
-    })
-    return list.slice(0, cap).map(function (item) {
-      const unitCount = Number(item.unitCount) || 0
-      const expected = Number(item.expected) || 0
-      return {
-        topic: String(item.topic),
-        coverage: Charts.clamp01(item.coverage),
-        expected: expected,
-        unitCount: unitCount,
-        display: percent(item.coverage),
-        detail: "练了 " + unitCount + " / 期望 " + expected + " 个单元",
+        track: track,
+        label: String((item && item.label) || trackLabelOf(track)),
+        mastery: mastery,
+        coverage: coverage,
+        display: percent(mastery),
+        coverageDisplay: percent(coverage),
+        bucket: String((item && item.bucket) || ""),
+        bucketLabel: String((item && item.label2) || ""),
+        action: String((item && item.action) || ""),
+        unitCount: Number((item && item.unitCount) || 0),
       }
     })
   }
 
   /**
-   * 算整个诊断页要显示的数据。纯函数，渲染层只负责把它摆出来。
-   * @param {{topics?: object[], summary?: object, series?: object[]}} data
+   * 下钻明细：某一条轨的知识点，按掌握度从低到高。
+   * @param {object} payload
+   * @param {string} track 轨代码
+   * @param {number} [limit] 最多几行
+   * @returns {Array<object>}
+   */
+  function topicRowsForTrack(payload, track, limit) {
+    const data = payload || {}
+    const all = Array.isArray(data.topics) ? data.topics : []
+    const max = Number(limit) > 0 ? Number(limit) : MAX_TOPIC_ROWS
+    return all
+      .filter(function (item) {
+        return String((item && item.track) || "") === String(track || "")
+      })
+      .map(function (item) {
+        const bucket = String((item && item.bucket) || "")
+        const mastery = Number((item && item.mastery) || 0)
+        const topic = String((item && item.topic) || "")
+        return {
+          key: String(track || "") + ":" + topic,
+          track: String((item && item.track) || ""),
+          topic: topic,
+          mastery: mastery,
+          display: percent(mastery),
+          coverage: Number((item && item.coverage) || 0),
+          coverageDisplay: percent((item && item.coverage) || 0),
+          bucket: bucket,
+          bucketLabel: String((item && item.label) || ""),
+          action: String((item && item.action) || ""),
+          color: bucketColor(bucket),
+        }
+      })
+      .sort(function (a, b) {
+        return a.mastery - b.mastery
+      })
+      .slice(0, max)
+  }
+
+  /**
+   * 概览数字块：四个数。
+   * @param {object} payload
+   * @returns {Array<{label: string, value: string}>}
+   */
+  function summaryCards(payload) {
+    const data = payload || {}
+    const s = data.summary || {}
+    return [
+      { label: "练过单元", value: String(Number(s.unitCount) || 0) },
+      { label: "练过知识点", value: String(Number(s.topicCount) || 0) },
+      { label: "会话数", value: String(Number(s.sessionCount) || 0) },
+      { label: "总提交数", value: String(Number(s.totalAttempts) || 0) },
+    ]
+  }
+
+  /**
+   * 雷达六轴。顺序由接口给（契约 §8.3.1 固定六轴顺序），前端不重排。
+   * @param {object} payload
+   * @returns {Array<object>}
+   */
+  function radarAxes(payload) {
+    const data = payload || {}
+    const list = Array.isArray(data.axes) ? data.axes : []
+    return list.map(function (item) {
+      const id = String((item && item.id) || "")
+      const value = Number((item && item.value) || 0)
+      return {
+        id: id,
+        label: String((item && item.label) || trackLabelOf(id)),
+        value: value,
+        display: percent(value),
+      }
+    })
+  }
+
+  /**
+   * 一句建议。
+   *
+   * 接口的清单只给掌握度、没有覆盖度——算不出四档，所以前端不自己判档，
+   * 只把掌握度写进句子里，给一句能执行的话。
+   * @param {object} row
+   * @param {boolean} weak true = 弱项，false = 强项
+   * @returns {string}
+   */
+  function adviceFor(row, weak) {
+    const item = row || {}
+    const display = String(item.display || percent(item.mastery))
+    if (weak) {
+      return "掌握度 " + display + "——先补这个概念的笔记，别急着刷题"
+    }
+    return "掌握度 " + display + "——已掌握，不用主动排"
+  }
+
+  /**
+   * 弱项清单。
+   * @param {object} payload
+   * @param {number} [limit]
+   * @returns {Array<object>}
+   */
+  function weakRows(payload, limit) {
+    const data = payload || {}
+    const list = Array.isArray(data.weak) ? data.weak : []
+    const max = Number(limit) > 0 ? Number(limit) : MAX_WEAK_ROWS
+    return list.slice(0, max).map(function (item) {
+      const track = String((item && item.track) || "")
+      const mastery = Number((item && item.mastery) || 0)
+      const row = {
+        unit_id: String((item && item.unit_id) || ""),
+        track: track,
+        trackLabel: trackLabelOf(track),
+        title: String((item && item.title) || ""),
+        topic: String((item && item.topic) || ""),
+        mastery: mastery,
+        display: percent(mastery),
+      }
+      row.advice = adviceFor(row, true)
+      return row
+    })
+  }
+
+  /**
+   * 强项清单。
+   * @param {object} payload
+   * @param {number} [limit]
+   * @returns {Array<object>}
+   */
+  function strongRows(payload, limit) {
+    const data = payload || {}
+    const list = Array.isArray(data.strong) ? data.strong : []
+    const max = Number(limit) > 0 ? Number(limit) : MAX_WEAK_ROWS
+    return list.slice(0, max).map(function (item) {
+      const track = String((item && item.track) || "")
+      const mastery = Number((item && item.mastery) || 0)
+      const row = {
+        unit_id: String((item && item.unit_id) || ""),
+        track: track,
+        trackLabel: trackLabelOf(track),
+        title: String((item && item.title) || ""),
+        topic: String((item && item.topic) || ""),
+        mastery: mastery,
+        display: percent(mastery),
+      }
+      row.advice = adviceFor(row, false)
+      return row
+    })
+  }
+
+  /**
+   * 热力图图例：六种状态。颜色只分组，状态看汉字与中文全称。
+   * @returns {Array<{state: string, mark: string, label: string, color: string}>}
+   */
+  function legendItems() {
+    const theme = Charts.DEFAULT_THEME
+    return Charts.HEATMAP_STATE_ORDER.map(function (state) {
+      const meta = Charts.HEATMAP_STATES[state] || { mark: "?", label: String(state) }
+      return {
+        state: state,
+        mark: meta.mark,
+        label: meta.label,
+        color: Charts.heatmapStateColor(state, theme),
+      }
+    })
+  }
+
+  /**
+   * 热力图按会话分组。
+   * @param {object} payload
+   * @returns {Array<{id: string, index: number, cells: Array<object>}>}
+   */
+  function heatmapRows(payload) {
+    const data = payload || {}
+    const sessions = Array.isArray(data.sessions) ? data.sessions : []
+    const cells = Array.isArray(data.cells) ? data.cells : []
+    return sessions.map(function (session, position) {
+      const sid = String((session && session.id) || "")
+      const index = Number(session && session.index) > 0 ? Number(session.index) : position + 1
+      const mine = cells.filter(function (cell) {
+        return String((cell && cell.session_id) || "") === sid
+      })
+      return {
+        id: sid,
+        index: index,
+        startedAt: String((session && session.started_at) || ""),
+        cells: mine.map(function (cell) {
+          const state = String((cell && cell.state) || "pending")
+          const meta = Charts.HEATMAP_STATES[state] || { mark: "?", label: state }
+          const track = String((cell && cell.track) || "")
+          return {
+            session_id: sid,
+            track: track,
+            trackLabel: trackLabelOf(track),
+            state: state,
+            mark: meta.mark,
+            label: meta.label,
+            seq: Number((cell && cell.seq) || 0),
+          }
+        }),
+      }
+    })
+  }
+
+  /* ---------------- 视图模型 ---------------- */
+
+  /**
+   * 三轨总览的主卡文案：挑覆盖度大于 0 的轨里掌握度最低的那条。
+   * @param {Array<object>} tracks
+   * @returns {{title: string, text: string}}
+   */
+  function masteryHero(tracks) {
+    const list = Array.isArray(tracks) ? tracks : []
+    if (list.length === 0) {
+      return { title: "还没有练习记录", text: "先去做几道题，这里才有得诊断。" }
+    }
+    let weakest = null
+    list.forEach(function (item) {
+      if (Number(item.coverage) <= 0) return
+      if (!weakest || Number(item.mastery) < Number(weakest.mastery)) weakest = item
+    })
+    if (!weakest) {
+      return { title: "还没有可诊断的轨", text: "先去做几道题，这里才有得诊断。" }
+    }
+    return {
+      title: "先治这一条轨",
+      text: weakest.label + " 掌握度 " + weakest.display + "——" + (weakest.action || "先补量"),
+    }
+  }
+
+  /**
+   * 雷达的主卡文案：六轴里最短的那块板。
+   * @param {Array<object>} axes
+   * @returns {{title: string, text: string}}
+   */
+  function radarHero(axes) {
+    const list = Array.isArray(axes) ? axes : []
+    let weakest = null
+    list.forEach(function (item) {
+      if (Number(item.value) <= 0) return
+      if (!weakest || Number(item.value) < Number(weakest.value)) weakest = item
+    })
+    if (!weakest) {
+      return { title: "还没有练习记录", text: "先去做几道题，这里才有得诊断。" }
+    }
+    return {
+      title: "最短的那块板",
+      text: weakest.label + " 掌握度 " + weakest.display + "——先补这个概念的笔记，别急着刷题",
+    }
+  }
+
+  /**
+   * 热力图的主卡文案：最近一次会话的结果。
+   * @param {Array<object>} rows
+   * @returns {{title: string, text: string}}
+   */
+  function heatmapHero(rows) {
+    const list = Array.isArray(rows) ? rows : []
+    if (list.length === 0) {
+      return { title: "还没有会话记录", text: "先去做几道题，这里才有得诊断。" }
+    }
+    const last = list[list.length - 1]
+    let passed = 0
+    let answered = 0
+    last.cells.forEach(function (cell) {
+      if (cell.state === "pass") passed += 1
+      if (cell.state !== "pending") answered += 1
+    })
+    return {
+      title: "最近一次会话",
+      text: "第 " + last.index + " 次会话：通过 " + passed + " 个，作答 " + answered + " 个。",
+    }
+  }
+
+  /**
+   * 三轨总览视图模型。
+   * @param {object} payload
    * @returns {object}
    */
-  function buildDiagnoseView(data) {
-    const payload = data || {}
-    const topics = Array.isArray(payload.topics) ? payload.topics : []
-    const series = Array.isArray(payload.series) ? payload.series : []
-    const radar = radarTopics(topics, MAX_RADAR_TOPICS)
-    const weak = weakRows(topics, MAX_WEAK_ROWS)
-    const coverage = coverageRows(topics, MAX_COVERAGE_ROWS)
-
+  function buildMasteryView(payload) {
+    const data = payload || {}
+    const tracks = trackBarRows(data)
     return {
-      summary: summaryCards(payload.summary),
-      buckets: bucketCounts(topics),
-      radar: {
-        title: "掌握度雷达（练得最多的 " + radar.length + " 个知识点）",
-        labels: radar.map(function (row) {
-          return row.topic
+      view: "mastery",
+      title: "三轨总览",
+      hero: masteryHero(tracks),
+      tracks: tracks,
+      drilldown: tracks.map(function (track) {
+        return {
+          track: track.track,
+          label: track.label,
+          rows: topicRowsForTrack(data, track.track),
+        }
+      }),
+      cards: summaryCards(data),
+      table: {
+        columns: ["轨", "掌握度", "覆盖度", "诊断", "单元数"],
+        rows: tracks.map(function (track) {
+          return [
+            track.label,
+            track.display,
+            track.coverageDisplay,
+            track.bucketLabel || "未诊断",
+            String(track.unitCount),
+          ]
         }),
-        series: [
-          { name: "掌握度", values: radar.map(function (row) { return row.mastery }) },
-          { name: "覆盖度", values: radar.map(function (row) { return row.coverage }) },
-        ],
-        rows: radar,
-        table: {
-          columns: ["知识点", "掌握度", "覆盖度", "提交数"],
-          rows: radar.map(function (row) {
-            return [row.topic, percent(row.mastery), percent(row.coverage), String(row.attempts)]
-          }),
-        },
-      },
-      weak: {
-        title: "弱项榜",
-        rows: weak,
-        table: {
-          columns: ["知识点", "掌握度", "诊断", "建议"],
-          rows: weak.map(function (row) {
-            return [row.topic, row.display, row.label, row.action]
-          }),
-        },
-      },
-      curve: {
-        title: "每日题量曲线（近 " + series.length + " 天）",
-        points: series.map(function (row) {
-          return { date: String(row.date), count: Number(row.count) || 0 }
-        }),
-        table: {
-          columns: ["日期", "题量"],
-          rows: series.map(function (row) {
-            return [String(row.date), String(Number(row.count) || 0)]
-          }),
-        },
-      },
-      coverage: {
-        title: "知识点覆盖",
-        rows: coverage,
-        table: {
-          columns: ["知识点", "覆盖度", "练过 / 期望"],
-          rows: coverage.map(function (row) {
-            return [row.topic, row.display, row.detail]
-          }),
-        },
       },
     }
+  }
+
+  /**
+   * 六轴雷达视图模型。
+   * @param {object} payload
+   * @returns {object}
+   */
+  function buildRadarView(payload) {
+    const data = payload || {}
+    const axes = radarAxes(data)
+    return {
+      view: "radar",
+      title: "六轴雷达",
+      hero: radarHero(axes),
+      axes: axes,
+      weak: weakRows(data),
+      strong: strongRows(data),
+      table: {
+        columns: ["维度", "掌握度"],
+        rows: axes.map(function (axis) {
+          return [axis.label, axis.display]
+        }),
+      },
+    }
+  }
+
+  /**
+   * 会话热力图视图模型。
+   * @param {object} payload
+   * @returns {object}
+   */
+  function buildHeatmapView(payload) {
+    const data = payload || {}
+    const rows = heatmapRows(data)
+    const tableRows = []
+    rows.forEach(function (row) {
+      row.cells.forEach(function (cell) {
+        tableRows.push([String(row.index), cell.trackLabel, cell.label, String(cell.seq)])
+      })
+    })
+    return {
+      view: "heatmap",
+      title: "会话热力图",
+      hero: heatmapHero(rows),
+      sessions: Array.isArray(data.sessions) ? data.sessions : [],
+      sessionRows: rows,
+      cells: Array.isArray(data.cells) ? data.cells : [],
+      legend: legendItems(),
+      table: {
+        columns: ["会话", "轨", "结果", "序号"],
+        rows: tableRows,
+      },
+    }
+  }
+
+  /**
+   * 按视图名分发。名字不认识就回落到三轨总览。
+   * @param {object} payload
+   * @param {string} view
+   * @returns {object}
+   */
+  function buildDiagnoseView(payload, view) {
+    const name = String(view || "")
+    if (name === "radar") return buildRadarView(payload)
+    if (name === "heatmap") return buildHeatmapView(payload)
+    return buildMasteryView(payload)
+  }
+
+  /**
+   * 最弱的那条轨（覆盖度大于 0 的里面挑掌握度最低的）。
+   * 下钻默认落在它身上。
+   * @param {object} model 视图模型
+   * @returns {string} 轨代码，空串表示没有
+   */
+  function weakestTrack(model) {
+    const tracks = (model && model.tracks) || []
+    let best = null
+    tracks.forEach(function (item) {
+      if (Number(item.coverage) <= 0) return
+      if (!best || Number(item.mastery) < Number(best.mastery)) best = item
+    })
+    return best ? String(best.track) : ""
   }
 
   /* ---------------- 渲染层 ---------------- */
 
-  /** 极简 DOM 构造器——与 M4 的 A.el 同签名，用不上 A.el 时的兜底 */
-  function dEl(tag, attrs, children) {
-    const node = document.createElement(tag)
-    if (attrs) {
-      Object.keys(attrs).forEach(function (key) {
-        if (key === "class") node.className = attrs[key]
-        else if (key === "text") node.textContent = attrs[key]
-        else node.setAttribute(key, attrs[key])
-      })
+  /** 前端全局：P1 改名成 StudyHub，旧名也认一份（契约 §13） */
+  function appGlobal() {
+    if (typeof globalThis !== "undefined") {
+      if (globalThis.StudyHub) return globalThis.StudyHub
+      if (globalThis.AlgoPlan) return globalThis.AlgoPlan
     }
-    ;(children || []).forEach(function (child) {
-      node.appendChild(child)
-    })
-    return node
+    if (typeof window !== "undefined") {
+      if (window.StudyHub) return window.StudyHub
+      if (window.AlgoPlan) return window.AlgoPlan
+    }
+    return null
   }
 
-  /**
-   * 公共构件的兜底：ui.js 没加载时按同样的类名手写一套，页面不至于空白。
-   * 正常路径走的是 ui.js——实现只有一份，这里只是防一手。
-   */
-  const U = {
-    pageHead: function (opts) {
-      if (UI) return UI.pageHead(opts)
-      const kids = []
-      if (opts.eyebrow) kids.push(dEl("span", { class: "eyebrow", text: opts.eyebrow }))
-      kids.push(dEl("h2", { class: "page-title", text: opts.title }))
-      if (opts.sub) kids.push(dEl("p", { class: "page-sub", text: opts.sub }))
-      return dEl("section", { class: "page-head" }, kids)
-    },
-    panel: function (opts) {
-      if (UI) return UI.panel(opts)
-      const kids = []
-      if (opts.title) kids.push(dEl("h2", { text: opts.title }))
-      ;(opts.children || []).forEach(function (child) {
-        if (child) kids.push(child)
-      })
-      const cls = "panel" + (opts.className ? " " + opts.className : "")
-      return dEl("section", { class: cls }, kids)
-    },
-    block: function (opts) {
-      if (UI) return UI.block(opts)
-      const kids = []
-      if (opts.title) kids.push(dEl("p", { class: "block-title", text: opts.title }))
-      ;(opts.children || []).forEach(function (child) {
-        if (child) kids.push(child)
-      })
-      return dEl("div", { class: "block" }, kids)
-    },
-    statGrid: function (items) {
-      if (UI) return UI.statGrid(items)
-      const cells = (items || []).map(function (item) {
-        const kids = [
-          dEl("span", { class: "stat-value", text: String(item.value) }),
-          dEl("span", { class: "stat-label", text: String(item.label) }),
-        ]
-        if (item.hint) kids.push(dEl("span", { class: "stat-hint", text: String(item.hint) }))
-        return dEl("div", { class: "stat" + (item.tone ? " tone-" + item.tone : "") }, kids)
-      })
-      return dEl("div", { class: "stat-grid" }, cells)
-    },
-    pill: function (text, tone) {
-      if (UI) return UI.pill(text, tone)
-      return dEl("span", { class: "pill" + (tone ? " " + tone : ""), text: String(text) })
-    },
-    empty: function (title, hint) {
-      if (UI) return UI.empty(title, hint)
-      const kids = [dEl("strong", { text: String(title) })]
-      if (hint) kids.push(dEl("span", { text: String(hint) }))
-      return dEl("div", { class: "empty" }, kids)
-    },
+  /** 图表库全局：Task 6 同时挂了 StudyHubCharts 与 AlgoPlanCharts */
+  function chartsGlobal() {
+    if (typeof globalThis !== "undefined") {
+      if (globalThis.StudyHubCharts) return globalThis.StudyHubCharts
+      if (globalThis.AlgoPlanCharts) return globalThis.AlgoPlanCharts
+    }
+    if (typeof window !== "undefined") {
+      if (window.StudyHubCharts) return window.StudyHubCharts
+      if (window.AlgoPlanCharts) return window.AlgoPlanCharts
+    }
+    return null
   }
 
-  /** 概览数字的色调：弱项多的时候用 bad 挑出来，掌握类用 ok，平均掌握度用 accent */
-  function statTone(label, value) {
-    const n = Number(String(value).replace("%", "")) || 0
-    if (label === "平均掌握度") return "accent"
-    if (label === "薄弱知识点") return n > 0 ? "bad" : "ok"
-    if (label === "未涉及的知识点") return n > 0 ? "warn" : ""
-    if (label === "练过题数") return n > 0 ? "ok" : ""
-    return ""
-  }
-
-  /** 概览数字块：八个数字铺开，弱项那一格补一句说明 */
-  function overviewStats(view) {
-    const buckets = view.buckets || {}
-    return (view.summary || []).map(function (card) {
-      const item = { label: card.label, value: card.value, tone: statTone(card.label, card.value) }
-      if (card.label === "薄弱知识点") {
-        item.hint =
-          "薄弱且练得少 " + (buckets["weak-sparse"] || 0) + " · 练过但总错 " + (buckets["weak-dense"] || 0)
-      }
-      return item
-    })
-  }
-
-  /** 放一张图（SVG 字符串由 web/charts.js 生成，标签已转义） */
-  function chartHost(el, svg) {
-    const host = el("div", { class: "chart-host" })
-    host.innerHTML = svg
+  /** 图表容器：SVG 字符串塞进 .chart-host（G8 的既有做法） */
+  function chartHost(make, svg) {
+    const host = make("div", { class: "chart-host" })
+    host.innerHTML = String(svg || "")
     return host
   }
 
-  /** 表格孪生：每张图都能展开成表格看 */
-  function tableTwin(el, table) {
-    const data = table || {}
-    const head = el(
-      "tr",
-      {},
-      (data.columns || []).map(function (name) {
-        return el("th", { text: name })
+  /** 表格孪生：图看形状，表看数字——不靠颜色也能读 */
+  function tableTwin(make, table) {
+    const t = table || { columns: [], rows: [] }
+    const wrap = make("details", { class: "chart-table" }, [])
+    wrap.appendChild(make("summary", { text: "表格孪生（不靠颜色也能读）" }))
+    const node = make("table", {}, [])
+    const head = make("tr", {}, [])
+    t.columns.forEach(function (name) {
+      head.appendChild(make("th", { text: String(name) }))
+    })
+    node.appendChild(head)
+    t.rows.forEach(function (row) {
+      const tr = make("tr", {}, [])
+      row.forEach(function (cell) {
+        tr.appendChild(make("td", { text: String(cell) }))
       })
-    )
-    const body = (data.rows || []).map(function (row) {
-      return el(
-        "tr",
-        {},
-        row.map(function (cell) {
-          return el("td", { text: String(cell) })
+      node.appendChild(tr)
+    })
+    wrap.appendChild(node)
+    return wrap
+  }
+
+  /** 页内切换条：三个视图标签（不是路由，G29） */
+  function tabRow(make, active, onSelect) {
+    const row = make("div", { class: "diag-tabs" }, [])
+    VIEWS.forEach(function (name) {
+      const selected = name === active
+      row.appendChild(
+        make(
+          "button",
+          {
+            class: "diag-tab",
+            type: "button",
+            role: "tab",
+            "aria-selected": selected ? "true" : "false",
+            text: VIEW_LABELS[name],
+            onclick: function () {
+              if (typeof onSelect === "function") onSelect(name)
+            },
+          },
+          []
+        )
+      )
+    })
+    return row
+  }
+
+  /** 三轨并列：一条轨一张卡，卡里两根条（掌握度 / 覆盖度） */
+  function trackCards(make, C, model, opts) {
+    const options = opts || {}
+    const wrap = make("div", { class: "diag-tracks" }, [])
+    model.tracks.forEach(function (track) {
+      const selected = track.track === options.drillTrack
+      const card = make(
+        "div",
+        {
+          class: "diag-track",
+          role: "button",
+          tabindex: "0",
+          "aria-pressed": selected ? "true" : "false",
+          onclick: function () {
+            if (typeof options.onSelectTrack === "function") options.onSelectTrack(track.track)
+          },
+        },
+        []
+      )
+      const head = make("div", { class: "diag-track-head" }, [])
+      head.appendChild(make("span", { class: "diag-track-name", text: track.label }))
+      if (track.bucketLabel) {
+        head.appendChild(UI.pill(track.bucketLabel, BUCKET_TONE[track.bucket]))
+      }
+      card.appendChild(head)
+      card.appendChild(
+        chartHost(
+          make,
+          C.barSvg({
+            rows: [
+              {
+                label: "掌握度",
+                value: track.mastery,
+                display: track.display,
+                color: C.DEFAULT_THEME.series1,
+              },
+              {
+                label: "覆盖度",
+                value: track.coverage,
+                display: track.coverageDisplay,
+                color: C.DEFAULT_THEME.series2,
+              },
+            ],
+            max: 1,
+            width: 320,
+            labelWidth: 56,
+            valueWidth: 48,
+            title: track.label + " 的掌握度与覆盖度",
+          })
+        )
+      )
+      card.appendChild(make("p", { class: "diag-track-action", text: track.action || "" }))
+      wrap.appendChild(card)
+    })
+    return wrap
+  }
+
+  /** 下钻明细：选中那条轨的知识点 */
+  function drilldown(make, C, model, opts) {
+    const options = opts || {}
+    const selected = String(options.drillTrack || "")
+    let target = null
+    model.drilldown.forEach(function (item) {
+      if (item.track === selected) target = item
+    })
+    if (!target) {
+      return UI.empty("点上面任意一条轨", "选中之后这里会列出那条轨的知识点与处方。")
+    }
+    const wrap = make("div", { class: "diag-drill" }, [])
+    wrap.appendChild(
+      chartHost(
+        make,
+        C.barSvg({
+          rows: target.rows.map(function (row) {
+            return { label: row.topic, value: row.mastery, display: row.display, color: row.color }
+          }),
+          max: 1,
+          width: 520,
+          title: target.label + " 的知识点掌握度",
         })
       )
-    })
-    return el("details", { class: "chart-table" }, [
-      el("summary", { text: "表格视图" }),
-      el("table", {}, [
-        el("thead", {}, [head]),
-        el("tbody", {}, body),
-      ]),
-    ])
+    )
+    wrap.appendChild(topicList(make, target.rows))
+    return wrap
   }
 
-  /** 四档处方：每档一个药丸 + 知识点数 */
-  function bucketCards(make, view) {
-    const buckets = view.buckets || {}
-    const cards = BUCKET_META.map(function (item) {
-      return make("div", { class: "diag-card" }, [
-        U.pill(item.label, item.tone),
-        make("span", { class: "diag-card-count", text: String(buckets[item.bucket] || 0) + " 个知识点" }),
-      ])
+  /** 下钻的知识点行：名字 + 数字 + 档位药丸 + 处方 */
+  function topicList(make, rows) {
+    if (!rows.length) {
+      return UI.empty("这条轨还没有知识点", "先做几道题，这里才有得诊断。")
+    }
+    const list = make("ul", { class: "diag-advice" }, [])
+    rows.forEach(function (row) {
+      const item = make("li", { class: "diag-topic" }, [])
+      item.appendChild(make("span", { class: "diag-topic-name", text: row.topic }))
+      item.appendChild(make("span", { class: "diag-topic-pct", text: row.display }))
+      if (row.bucketLabel) {
+        item.appendChild(UI.pill(row.bucketLabel, BUCKET_TONE[row.bucket]))
+      }
+      item.appendChild(make("span", { class: "diag-topic-action", text: row.action || "" }))
+      list.appendChild(item)
     })
-    return make("div", { class: "diag-cards" }, cards)
+    return list
+  }
+
+  /** 清单行（弱项 / 强项）：名字 + 数字 + 轨名药丸 + 建议 */
+  function listRows(make, rows, emptyTitle, emptyHint) {
+    if (!rows.length) return UI.empty(emptyTitle, emptyHint)
+    const list = make("ul", { class: "diag-advice" }, [])
+    rows.forEach(function (row) {
+      const item = make("li", { class: "diag-topic" }, [])
+      item.appendChild(make("span", { class: "diag-topic-name", text: row.title || row.unit_id }))
+      item.appendChild(make("span", { class: "diag-topic-pct", text: row.display }))
+      item.appendChild(UI.pill(row.trackLabel, "accent"))
+      item.appendChild(make("span", { class: "diag-topic-action", text: row.advice || "" }))
+      list.appendChild(item)
+    })
+    return list
+  }
+
+  /** 热力图图例：颜色 + 汉字 + 中文全称，三重承载 */
+  function legendRow(make, items) {
+    const row = make("div", { class: "diag-heat-legend" }, [])
+    items.forEach(function (item) {
+      const cell = make("span", { class: "diag-heat-legend-item" }, [])
+      cell.appendChild(make("i", { class: "diag-heat-swatch", style: "background:" + item.color }))
+      cell.appendChild(make("span", { class: "diag-heat-mark", text: item.mark }))
+      cell.appendChild(make("span", { class: "diag-heat-label", text: item.label }))
+      row.appendChild(cell)
+    })
+    return row
+  }
+
+  /** 三轨总览卡 */
+  function masteryPanel(make, C, model, opts) {
+    return UI.panel({
+      title: "三轨总览",
+      className: "diag-panel",
+      children: [
+        UI.statGrid(model.cards),
+        UI.block({
+          title: "三轨并列（点一条轨看它的知识点）",
+          children: [trackCards(make, C, model, opts)],
+        }),
+        UI.block({ title: "下钻明细", children: [drilldown(make, C, model, opts)] }),
+        UI.block({ title: "表格孪生", children: [tableTwin(make, model.table)] }),
+      ],
+    })
+  }
+
+  /** 六轴雷达卡 */
+  function radarPanel(make, C, model) {
+    return UI.panel({
+      title: "六轴雷达",
+      className: "diag-panel",
+      children: [
+        UI.block({
+          title: "六维掌握度",
+          children: [
+            chartHost(
+              make,
+              C.radarSvg({
+                labels: model.axes.map(function (axis) {
+                  return axis.label
+                }),
+                series: [
+                  {
+                    name: "掌握度",
+                    values: model.axes.map(function (axis) {
+                      return axis.value
+                    }),
+                  },
+                ],
+                size: 360,
+                title: "六轴掌握度雷达图",
+              })
+            ),
+          ],
+        }),
+        UI.block({
+          title: "弱项清单",
+          children: [listRows(make, model.weak, "没有弱项", "六轴都在一半以上，暂时不用补。")],
+        }),
+        UI.block({ title: "表格孪生", children: [tableTwin(make, model.table)] }),
+      ],
+    })
+  }
+
+  /** 会话热力图卡 */
+  function heatmapPanel(make, C, model) {
+    return UI.panel({
+      title: "会话热力图",
+      className: "diag-panel",
+      children: [
+        UI.block({
+          title: "会话 × 轨道",
+          children: [
+            chartHost(
+              make,
+              C.heatmapSvg({
+                sessions: model.sessions,
+                cells: model.cells,
+                tracks: TRACK_CODES,
+                trackLabels: TRACK_LABELS,
+                title: "会话热力图",
+              })
+            ),
+            legendRow(make, model.legend),
+          ],
+        }),
+        UI.block({ title: "表格孪生", children: [tableTwin(make, model.table)] }),
+      ],
+    })
   }
 
   /**
-   * 把视图数据摆进 DOM。
-   * @param {Element} container 容器（一般是 #view）
-   * @param {object} view buildDiagnoseView 的返回值
-   * @param {object} [charts] web/charts.js
-   * @param {Function} [el] DOM 构造器 el(tag, attrs, children)，默认用 M4 的 A.el
+   * 把视图模型摆进 DOM。
+   * @param {HTMLElement} container
+   * @param {object} view 视图模型
+   * @param {object} charts charts.js
+   * @param {Function} el 造节点的函数
+   * @param {object} [options] {activeView, drillTrack, onSelectView, onSelectTrack}
    */
-  function mountDiagnose(container, view, charts, el) {
+  function mountDiagnose(container, view, charts, el, options) {
     const C = charts || Charts
-    const make =
-      el ||
-      (typeof window !== "undefined" && window.AlgoPlan && window.AlgoPlan.el
-        ? window.AlgoPlan.el
-        : dEl)
+    const make = el || (UI && UI.el)
+    const opts = options || {}
+    const model = view || buildMasteryView({})
+    const active = VIEWS.indexOf(String(opts.activeView)) === -1 ? "mastery" : String(opts.activeView)
+    const drill = String(opts.drillTrack || "") || weakestTrack(model)
+
     container.textContent = ""
 
-    // 页头：这一页的第一眼
     container.appendChild(
-      U.pageHead({
+      UI.pageHead({
         eyebrow: "诊断",
         title: "能力诊断",
-        sub:
-          "掌握度 = 首次通过率 + 遗忘因子 + 失误惩罚；覆盖度 = 练过的题数 ÷ 期望题量。两个维度交叉出四档处方。",
+        sub: "三个视图看同一份数据：三轨总览比强弱，六轴雷达找短板，会话热力图看每一次的结果。",
       })
     )
 
-    // 概览：八个数字铺成数字块 + 四档处方
+    // 切换条是导航，不是内容——放静默卡
     container.appendChild(
-      U.panel({
-        title: "诊断概览",
-        className: "diag-panel",
-        children: [
-          U.statGrid(overviewStats(view)),
-          U.block({ title: "四档处方", children: [bucketCards(make, view)] }),
-        ],
+      UI.panel({
+        title: "视图",
+        className: "quiet",
+        children: [tabRow(make, active, opts.onSelectView)],
       })
     )
 
-    // 掌握度雷达
-    const legend = legendItems().map(function (item) {
-      const dot = make("i", {})
-      dot.setAttribute("style", "background:" + item.color)
-      return make("span", {}, [dot, document.createTextNode(item.name)])
-    })
-    container.appendChild(
-      U.panel({
-        title: view.radar.title,
-        className: "diag-panel",
-        children: [
-          U.block({
-            title: "图",
-            children: [
-              make("div", { class: "diag-legend" }, legend),
-              chartHost(
-                make,
-                C.radarSvg({
-                  labels: view.radar.labels,
-                  series: view.radar.series,
-                  title: view.radar.title,
-                })
-              ),
-            ],
-          }),
-          U.block({ title: "表格孪生", children: [tableTwin(make, view.radar.table)] }),
-        ],
-      })
-    )
+    // 主卡：现在该做什么
+    container.appendChild(UI.hero({ title: model.hero.title, sub: model.hero.text }))
 
-    // 弱项榜
-    const weakBars = view.weak.rows.map(function (row) {
-      return { label: row.topic, value: row.mastery, display: row.display }
-    })
-    const weakAdvice = view.weak.rows.map(function (row) {
-      return make("li", {}, [
-        U.pill(row.label, LABEL_TONE[row.label] || ""),
-        make("span", { class: "diag-topic", text: row.topic }),
-        make("span", { class: "muted", text: row.action }),
-      ])
-    })
-    container.appendChild(
-      U.panel({
-        title: view.weak.title,
-        className: "diag-panel",
-        children: [
-          U.block({
-            title: "图",
-            children: [
-              weakBars.length === 0
-                ? make("p", { class: "diag-empty", text: "目前没有薄弱知识点——保持住。" })
-                : chartHost(make, C.barSvg({ rows: weakBars, title: view.weak.title })),
-              weakAdvice.length === 0
-                ? null
-                : make("ul", { class: "diag-advice" }, weakAdvice),
-            ],
-          }),
-          U.block({ title: "表格孪生", children: [tableTwin(make, view.weak.table)] }),
-        ],
-      })
-    )
-
-    // 每日题量曲线
-    container.appendChild(
-      U.panel({
-        title: view.curve.title,
-        className: "diag-panel",
-        children: [
-          U.block({
-            title: "图",
-            children: [
-              chartHost(make, C.lineSvg({ points: view.curve.points, title: view.curve.title })),
-            ],
-          }),
-          U.block({ title: "表格孪生", children: [tableTwin(make, view.curve.table)] }),
-        ],
-      })
-    )
-
-    // 知识点覆盖
-    const coverageBars = view.coverage.rows.map(function (row) {
-      return { label: row.topic, value: row.coverage, display: row.display }
-    })
-    container.appendChild(
-      U.panel({
-        title: view.coverage.title,
-        className: "diag-panel",
-        children: [
-          U.block({
-            title: "图",
-            children: [
-              coverageBars.length === 0
-                ? make("p", { class: "diag-empty", text: "还没有练过任何题目。" })
-                : chartHost(make, C.barSvg({ rows: coverageBars, title: view.coverage.title })),
-            ],
-          }),
-          U.block({ title: "表格孪生", children: [tableTwin(make, view.coverage.table)] }),
-        ],
-      })
-    )
-  }
-
-  /**
-   * M4 的页面入口：拉数据并渲染诊断页。
-   * @param {Element} view M4 传进来的 #view
-   * @returns {Promise<void>}
-   */
-  async function renderPage(view) {
-    const api = typeof window !== "undefined" ? window.AlgoPlan : null
-    const C = typeof window !== "undefined" && window.AlgoPlanCharts ? window.AlgoPlanCharts : Charts
-    if (!api) return
-    const make = typeof api.el === "function" ? api.el : dEl
-    view.textContent = ""
-    view.appendChild(make("div", { class: "panel muted", text: "正在加载诊断数据…" }))
-    try {
-      const body = await api.getJson("/api/insights")
-      const model = buildDiagnoseView(body)
-      view.textContent = ""
-      mountDiagnose(view, model, C, make)
-    } catch (err) {
-      view.textContent = ""
-      view.appendChild(
-        make("section", { class: "panel" }, [
-          make("h2", { text: "诊断数据加载失败" }),
-          make("p", { class: "error", text: String((err && err.message) || err) }),
-        ])
+    if (model.view === "radar") {
+      container.appendChild(radarPanel(make, C, model))
+    } else if (model.view === "heatmap") {
+      container.appendChild(heatmapPanel(make, C, model))
+    } else {
+      container.appendChild(
+        masteryPanel(make, C, model, { drillTrack: drill, onSelectTrack: opts.onSelectTrack })
       )
     }
   }
 
-  /* 注册进 M4 的页面表——浏览器里 window.AlgoPlan 一定在，Node 测试里用替身 */
-  if (typeof window !== "undefined" && window.AlgoPlan && window.AlgoPlan.pages) {
-    window.AlgoPlan.pages.diagnose = {
-      title: "诊断",
-      render: renderPage,
+  /**
+   * 页面入口：拉数据 → 算视图 → 摆 DOM。
+   *
+   * 同一个页面实例里缓存已经拉过的视图：切标签不重复请求。
+   * @param {HTMLElement} view 页面容器
+   */
+  async function renderPage(view) {
+    const app = appGlobal()
+    if (!app) return
+    const make = typeof app.el === "function" ? app.el : UI && UI.el
+    const cache = {}
+    let active = "mastery"
+    let drill = ""
+
+    async function paint() {
+      view.textContent = ""
+      view.appendChild(make("div", { class: "diag-loading", text: "正在加载诊断数据…" }))
+      try {
+        if (!cache[active]) {
+          cache[active] = await app.getJson("/api/diagnose?view=" + active)
+        }
+        const model = buildDiagnoseView(cache[active], active)
+        view.textContent = ""
+        mountDiagnose(view, model, chartsGlobal() || Charts, make, {
+          activeView: active,
+          drillTrack: drill,
+          onSelectView: function (next) {
+            if (next === active) return
+            active = next
+            paint()
+          },
+          onSelectTrack: function (next) {
+            drill = next
+            paint()
+          },
+        })
+      } catch (err) {
+        view.textContent = ""
+        view.appendChild(
+          UI.panel({
+            title: "诊断数据加载失败",
+            children: [make("p", { class: "error", text: String((err && err.message) || err) })],
+          })
+        )
+      }
     }
+
+    await paint()
   }
 
+  /* ---------------- 注册进页面表 ---------------- */
+
+  /** 把页面注册到前端全局的页面表里（P1 改名成 StudyHub，旧名也认一份） */
+  function registerPage() {
+    const app = appGlobal()
+    if (!app || !app.pages) return null
+    app.pages.diagnose = { title: "诊断", render: renderPage }
+    return app
+  }
+
+  registerPage()
+
   return {
-    MAX_RADAR_TOPICS: MAX_RADAR_TOPICS,
-    MAX_WEAK_ROWS: MAX_WEAK_ROWS,
-    MAX_COVERAGE_ROWS: MAX_COVERAGE_ROWS,
-    URGENCY_ORDER: URGENCY_ORDER,
-    WEAK_BUCKETS: WEAK_BUCKETS,
-    BUCKET_META: BUCKET_META,
-    LABEL_TONE: LABEL_TONE,
+    VIEWS: VIEWS,
+    VIEW_LABELS: VIEW_LABELS,
+    TRACK_LABELS: TRACK_LABELS,
+    BUCKET_TONE: BUCKET_TONE,
     percent: percent,
-    bucketCounts: bucketCounts,
-    legendItems: legendItems,
+    trackBarRows: trackBarRows,
+    topicRowsForTrack: topicRowsForTrack,
     summaryCards: summaryCards,
-    radarTopics: radarTopics,
+    radarAxes: radarAxes,
     weakRows: weakRows,
-    coverageRows: coverageRows,
+    strongRows: strongRows,
+    legendItems: legendItems,
+    adviceFor: adviceFor,
+    weakestTrack: weakestTrack,
+    buildMasteryView: buildMasteryView,
+    buildRadarView: buildRadarView,
+    buildHeatmapView: buildHeatmapView,
     buildDiagnoseView: buildDiagnoseView,
     mountDiagnose: mountDiagnose,
     renderPage: renderPage,

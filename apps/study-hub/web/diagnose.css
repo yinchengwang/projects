@@ -3,7 +3,7 @@
    --------------------------------------------------------------------------
    卡片外框、层次（.panel / .block / .stat-grid / .pill / .empty）与暗色配色
    全部来自 style.css —— 这里只补诊断页特有的细节：
-     概览的四档处方卡、雷达图图例、图与表格孪生、弱项建议行。
+     页内视图切换条、三轨并列卡、下钻明细、热力图图例、图与表格孪生。
    配色一律取 style.css 的 CSS 变量，不另起一套、不写死颜色值。
    ========================================================================== */
 
@@ -28,50 +28,131 @@
 }
 
 /* --------------------------------------------------------------------------
-   四档处方：档位药丸 + 知识点数。中文标签在药丸里，颜色只是辅助
+   页内切换条：三个视图标签（不是路由）
    -------------------------------------------------------------------------- */
 
-.diag-cards {
+.diag-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
-.diag-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.diag-tab {
   background: var(--surface-2);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 12px;
 }
 
-.diag-card-count {
+.diag-tab:hover {
+  border-color: var(--accent-line);
   color: var(--fg);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+}
+
+.diag-tab[aria-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg);
 }
 
 /* --------------------------------------------------------------------------
-   雷达图图例：两个序列的颜色取自 charts.js 的主题色
+   三轨并列：一条轨一张卡，点一下就下钻
    -------------------------------------------------------------------------- */
 
-.diag-legend {
+.diag-tracks {
   display: flex;
-  gap: 18px;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
-.diag-legend i {
+.diag-track {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex: 1 1 240px;
+  min-width: 220px;
+  padding: 10px 12px;
+}
+
+.diag-track:hover {
+  border-color: var(--accent-line);
+}
+
+.diag-track[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.diag-track-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.diag-track-name {
+  color: var(--fg-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.diag-track-action {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+/* --------------------------------------------------------------------------
+   下钻明细
+   -------------------------------------------------------------------------- */
+
+.diag-drill {
+  margin-top: 6px;
+}
+
+.diag-topic-pct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.diag-topic-action {
+  color: var(--muted);
+  flex: 1 1 auto;
+}
+
+/* --------------------------------------------------------------------------
+   热力图图例：颜色 + 汉字 + 中文全称，三重承载
+   -------------------------------------------------------------------------- */
+
+.diag-heat-legend {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 14px;
+  margin: 4px 0 0;
+}
+
+.diag-heat-legend-item {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+
+.diag-heat-swatch {
+  border-radius: 3px;
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 6px;
-  vertical-align: middle;
+  height: 12px;
+  width: 12px;
+}
+
+.diag-heat-mark {
+  color: var(--fg);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -103,7 +184,7 @@
 }
 
 /* --------------------------------------------------------------------------
-   弱项榜的建议行：药丸（档位）+ 知识点 + 处方
+   建议行：药丸 + 名字 + 数字 + 处方
    -------------------------------------------------------------------------- */
 
 .diag-advice {
@@ -131,11 +212,11 @@
 }
 
 /* --------------------------------------------------------------------------
-   空状态
+   加载占位
    -------------------------------------------------------------------------- */
 
-.diag-empty {
+.diag-loading {
   color: var(--muted);
   font-size: 13px;
-  margin: 4px 0 0;
+  padding: 12px 0;
 }

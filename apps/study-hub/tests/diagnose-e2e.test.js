@@ -235,38 +235,53 @@ test("端到端：首页引用了诊断页的资源", async function () {
 test("端到端：真实响应喂给前端，出来的 SVG 干净", async function () {
   const { app, base } = await startServer()
   try {
-    const body = await (await fetch(base + "/api/insights")).json()
-    const view = buildDiagnoseView(body)
-
+    const radarBody = await (await fetch(base + "/api/diagnose?view=radar")).json()
+    const radarView = buildDiagnoseView(radarBody, "radar")
     const radar = Charts.radarSvg({
-      labels: view.radar.labels,
-      series: view.radar.series,
-      title: view.radar.title,
-    })
-    const curve = Charts.lineSvg({ points: view.curve.points, title: view.curve.title })
-    const weak = Charts.barSvg({
-      rows: view.weak.rows.map(function (row) {
-        return { label: row.topic, value: row.mastery, display: row.display }
+      labels: radarView.axes.map(function (axis) {
+        return axis.label
       }),
-      title: view.weak.title,
-    })
-    const coverage = Charts.barSvg({
-      rows: view.coverage.rows.map(function (row) {
-        return { label: row.topic, value: row.coverage, display: row.display }
-      }),
-      title: view.coverage.title,
+      series: [
+        {
+          name: "掌握度",
+          values: radarView.axes.map(function (axis) {
+            return axis.value
+          }),
+        },
+      ],
+      title: radarView.title,
     })
 
-    ;[radar, curve, weak, coverage].forEach(function (svg) {
+    const heatBody = await (await fetch(base + "/api/diagnose?view=heatmap")).json()
+    const heatView = buildDiagnoseView(heatBody, "heatmap")
+    const heat = Charts.heatmapSvg({
+      sessions: heatView.sessions,
+      cells: heatView.cells,
+      tracks: ["algorithm", "database", "ai"],
+      title: heatView.title,
+    })
+
+    const masteryBody = await (await fetch(base + "/api/diagnose?view=mastery")).json()
+    const masteryView = buildDiagnoseView(masteryBody, "mastery")
+    const bars = Charts.barSvg({
+      rows: masteryView.tracks.map(function (track) {
+        return { label: track.label, value: track.mastery, display: track.display }
+      }),
+      max: 1,
+      title: masteryView.title,
+    })
+
+    ;[radar, heat, bars].forEach(function (svg) {
       assert.ok(svg.indexOf("NaN") === -1, "SVG 里出现了 NaN")
       assert.ok(svg.indexOf("undefined") === -1, "SVG 里出现了 undefined")
       assert.ok(svg.indexOf("Infinity") === -1, "SVG 里出现了 Infinity")
     })
 
-    // 雷达图上有两个知识点，曲线有 30 天
-    assert.ok(radar.indexOf("数组") !== -1, "雷达图里没有「数组」")
-    assert.ok(radar.indexOf("哈希表") !== -1, "雷达图里没有「哈希表」")
-    assert.ok(curve.indexOf("<title>") !== -1)
+    assert.ok(radar.indexOf("<title>") !== -1, "雷达图要有标题")
+    assert.ok(
+      heat.indexOf("还没有会话记录") !== -1 || heat.indexOf("heatmap-cell") !== -1,
+      "热力图要么是空态文案，要么有格子"
+    )
   } finally {
     await app.close()
   }
