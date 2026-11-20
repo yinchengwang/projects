@@ -263,20 +263,31 @@ test("GET /api/progress 给出今日进度与配额", async function () {
   })
 })
 
-test("M3 的 POST /api/attempt 没有被 M4 改掉（跨里程碑回归闸门）", async function () {
+test("M3 的 POST /api/attempt 已下线，新判题路由接手（跨里程碑回归闸门）", async function () {
   await withApp(async function (base) {
+    // 旧路由下线了：走「接口不存在」分支（契约 §8.1.2）
     const res = await fetch(base + "/api/attempt", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ problemId: "不存在的题", code: "", language: "cpp" }),
     })
+    assert.strictEqual(res.status, 404)
     const body = await res.json()
-    // 路由被删掉时，走的是「接口不存在」分支；路由还在时，走的是 M3 的业务分支
-    // （题不存在 → 404 +「题目不存在」；代码为空 → 400 +「代码不能为空」）。
-    assert.notStrictEqual(
+    assert.strictEqual(
       body.error,
       "接口不存在",
-      "/api/attempt 被 M4 误删了——检查 buildRoutes 是否被整体替换"
+      "旧路由 POST /api/attempt 应当已下线（契约 §8.1.2）"
     )
+
+    // 新路由接手：同一个 app 里判题照常
+    const judged = await fetch(base + "/api/units/algo:lc-00001/judge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "int main() { return 0; }", language: "cpp" }),
+    })
+    assert.strictEqual(judged.status, 200)
+    const result = await judged.json()
+    assert.strictEqual(result.verdict, "wrong_answer")
+    assert.strictEqual(result.total, 1)
   })
 })

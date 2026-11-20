@@ -171,10 +171,10 @@ test("LLM 关着时 app 照常起得来：页面、题库、单题接口全都�
     const bankBody = await bank.json()
     assert.equal(bankBody.total, 1)
 
-    const one = await fetch(base + "/api/problem/lc-00001")
+    const one = await fetch(base + "/api/units/algo:lc-00001")
     assert.equal(one.status, 200)
     const oneBody = await one.json()
-    assert.equal(oneBody.id, "lc-00001")
+    assert.equal(oneBody.unit.id, "algo:lc-00001")
   })
 })
 
@@ -291,10 +291,13 @@ test("LLM 关着时，题库读取与 health 都不受任何影响", async funct
 
 test("LLM 关着时，单题接口仍不泄露参考解法（G14 不受 LLM 开关影响）", async function () {
   await withOffApp(async function (base) {
-    const res = await fetch(base + "/api/problem/lc-00001")
+    const res = await fetch(base + "/api/units/algo:lc-00001")
     assert.equal(res.status, 200)
-    const body = await res.json()
-    assert.equal(body.solution, undefined, "单题接口不许返回参考解法")
+    const raw = await res.text()
+    assert.ok(raw.indexOf("int main") === -1, "单题接口不许返回参考解法")
+    const body = JSON.parse(raw)
+    assert.equal(body.unit.solution, undefined, "单题接口不许返回参考解法")
+    assert.equal(body.unit.entry.reference, "", "参考解法字段应为空")
     assert.equal(body.cases.total, 1)
     assert.equal(body.cases.sample.length, 1)
   })

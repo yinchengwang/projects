@@ -4,7 +4,7 @@
  *
  * 起因：numpy 只装在 py -3（Python 3.12），而探测默认命中 PATH 上的 python（3.11，无 numpy）。
  * settings 表里本来就有一个 judge.python.cmd 键（契约 §5.1「既有」），
- * 但只有旧路由 /api/attempt 读过它——P2 的判题、/api/env、loader B 都写死 detectXxx(null)。
+ * 但当时只有旧路由 /api/attempt 读过它——P2 的判题、/api/env、loader B 都写死 detectXxx(null)。
  *
  * 这个套件钉住三件事：
  *   1. detectPython / detectNumpy 的缓存必须按**解释器**分键，不能串味；
@@ -145,7 +145,7 @@ test("judgeUnit：pythonOverride 传了就要真的换掉工具链", async funct
 })
 
 test("judgeUnit：override 指向坏解释器时按既有口径回落到自动探测", async function () {
-  // 契约口径（server/api.js 的注释写明）：「先按 settings 里缓存的解释器试，
+  // 契约口径（judge/sandbox.js 的 detectPython 写明）：「先按 settings 里缓存的解释器试，
   // 不行再按 python3 → python → py -3 探测」。所以坏 override 不是错误，
   // 是「探测失败后回落」。这条钉住回落后仍能判题，不会因为配置写错就判不了。
   const learningRoot = tempLearning()

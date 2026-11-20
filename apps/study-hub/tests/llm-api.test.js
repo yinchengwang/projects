@@ -4,7 +4,7 @@
  *
  * 钉住：
  *   1. 五个接口的路径、入参与响应形状，严格照接口契约 §5；
- *   2. 造出来的新题真的落盘；落盘后 GET /api/problem/:id 仍不泄露参考解法（G14）；
+ *   2. 造出来的新题真的落盘；落盘后 GET /api/units/:id 仍不泄露参考解法（G14）；
  *   3. LLM 设置能读能写，但**接口里绝不出现密钥**。
  */
 
@@ -189,22 +189,51 @@ test("POST /api/bank/llm-generate 返回 {problem, model}，且题目真的落�
   })
 })
 
-test("造完题后 GET /api/problem/:id 仍然不泄露参考解法（G14）", async function () {
-  await withApp(async function (base) {
-    const made = await fetch(base + "/api/bank/llm-generate", {
+test("造完题后 GET /api/units/:id 仍然不泄露参考解法（G14）", async function () {
+  // 单元索引是**启动时物化**的：新题落盘后，同一个进程里按单元 id 查不到，
+  // 要重起一个 app 才看得见（契约 §8.1.2.5）。所以这里用两个 app、同一个 learning 仓。
+  const root = tempLearning()
+  const app1 = createApp({
+    dbPath: ":memory:",
+    learningRoot: root,
+    llmClient: makeFakeClient(),
+    env: {},
+  })
+  const port1 = await app1.listen(0)
+  let id = ""
+  try {
+    const made = await fetch("http://127.0.0.1:" + port1 + "/api/bank/llm-generate", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ track: "interview", difficulty: "medium", sessionId: "s1" }),
     })
     const madeBody = await made.json()
-    const id = madeBody.problem.id
-    const res = await fetch(base + "/api/problem/" + id)
+    id = madeBody.problem.id
+  } finally {
+    await app1.close()
+  }
+
+  const app2 = createApp({
+    dbPath: ":memory:",
+    learningRoot: root,
+    llmClient: makeFakeClient(),
+    env: {},
+  })
+  const port2 = await app2.listen(0)
+  try {
+    const res = await fetch("http://127.0.0.1:" + port2 + "/api/units/algo:" + id)
     assert.equal(res.status, 200)
-    const body = await res.json()
-    assert.equal(body.solution, undefined, "单题接口不许返回参考解法")
+    const raw = await res.text()
+    assert.ok(raw.indexOf("int main") === -1, "单题接口不许返回参考解法")
+    const body = JSON.parse(raw)
+    assert.equal(body.unit.solution, undefined, "单题接口不许返回参考解法")
+    assert.equal(body.unit.entry.reference, "", "参考解法字段应为空")
     assert.equal(body.cases.total, 1)
     assert.equal(body.cases.sample.length, 1)
-  })
+  } finally {
+    await app2.close()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test("POST /api/llm/fill 返回 {problem, model}，needsFill 变 false", async function () {

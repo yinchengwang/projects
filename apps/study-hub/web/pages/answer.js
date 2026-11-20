@@ -2,6 +2,13 @@
 /**
  * answer.js —— 作答页：看题面 → 写代码 → 提交判题 → 写错题订正
  *
+ * ⚠️ **本页已下线**：`index.html` 不再加载它，`APP.pages.answer` 也已在
+ * `web/app.js` 里删掉。P2 起单题详情与判题搬到了单元页
+ * （`GET /api/units/:id` 与 `POST /api/units/:id/judge`），
+ * 旧的 `GET /api/problem/:id` 与 `POST /api/attempt` 已下线——
+ * 所以下面这两处调用现在只会拿到 404「接口不存在」。
+ * 按 AGENTS.md「死代码只做文字提醒，不擅自删除」，**保留原样**，此处只作提醒。
+ *
  * 判题接口 POST /api/attempt 由 M3 提供；M3 还没上线时这里给出中文提示，不白屏。
  * 订正写回 POST /api/correction 由 M4 提供；写回只改 learning 仓的工作区，
  * **app 不会自动提交**，diff 摆在这里给用户看，提交与否由用户决定。

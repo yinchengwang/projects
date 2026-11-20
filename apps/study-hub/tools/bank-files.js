@@ -7,7 +7,7 @@
  * 例：lc-00070（爬楼梯）在目录来源里属于 dp-basic → advanced，
  *     在题解来源里没有专题信息 → 未分类 → fundamentals。
  * 只查自己那条路径会漏判冲突，结果同一个 id 写出两份文件，
- * provider 列表里就重了，GET /api/problem/:id 也会指向不确定的那一份。
+ * provider 列表里就重了，GET /api/units/:id 也会指向不确定的那一份。
  * 契约 §6 的 G19 写的是「同 id 已存在则跳过」，所以按 id 找。
  */
 

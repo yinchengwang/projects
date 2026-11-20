@@ -2,7 +2,7 @@
 /**
  * router.js —— 极简路由：方法匹配 + 路径参数 + JSON body 解析
  *
- * 零依赖。路径参数用 :name 段式，例如 "/api/problem/:id"。
+ * 零依赖。路径参数用 :name 段式，例如 "/api/units/:id"。
  * 路由匹配只认路径段，不认正则通配——本机工具用不上那套。
  */
 
@@ -18,7 +18,7 @@ class HttpError extends Error {
 }
 
 /**
- * 把 "/api/problem/:id" 编成匹配函数。
+ * 把 "/api/units/:id" 编成匹配函数。
  * @param {string} pattern
  * @returns {(urlPath: string) => (object|null)} 命中返回参数对象，不命中返回 null
  */

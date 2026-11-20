@@ -71,10 +71,10 @@ test("端到端：导入 → 起服务 → 打接口", async function () {
       ["lc-00001", "self-00001"]
     )
 
-    const problem = await (await fetch(base + "/api/problem/self-00001")).json()
-    assert.strictEqual(problem.title, "字符串反转")
+    const problem = await (await fetch(base + "/api/units/algo:self-00001")).json()
+    assert.strictEqual(problem.unit.title, "字符串反转")
     assert.strictEqual(problem.cases.total, 2)
-    assert.strictEqual(problem.solution, undefined)
+    assert.strictEqual(problem.unit.solution, undefined)
   } finally {
     await app.close()
   }

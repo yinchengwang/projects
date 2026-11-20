@@ -250,7 +250,7 @@
     var hash = (global.location && global.location.hash) || ""
     // 旧形态：lc-00001。
     // ⚠️ 老实现返回的是 `old[0]`，**带着前导的 / 或 #**（例如 "/lc-00001"）——
-    // 那个值被 state.currentId 拿去拼接口 URL 会变成 /api/problem//lc-00001。
+    // 那个值被 state.currentId 拿去拼接口 URL 会变成 /api/units//lc-00001。
     // P2 一并修掉：只返回 id 本身。
     var old = /(?:^|[#\/=])(lc|nc|jz|self|llm)-[0-9a-z]{5,12}/.exec(hash)
     if (old) return String(old[0]).replace(/^[#\/=]/, "")

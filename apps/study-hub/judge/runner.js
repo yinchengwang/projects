@@ -545,7 +545,8 @@ async function judge(params) {
 
   if (cases.length === 0) {
     // verdict 只有五类（G27），没有用例不属于任何一类，落到 wrong_answer 并说清原因。
-    // 正常路径不会走到这里：server/api.js 的 POST /api/attempt 会先挡一道并返回 400。
+    // 旧路由（server/api.js 的 POST /api/attempt）会先挡一道并返回 400；它下线后
+    // 这条就是唯一的说法了——接口层只管参数，判题结论一律走 verdict（契约 §8.1.2.2）。
     return makeResult(
       "wrong_answer", 0, 0, started, null,
       "题目没有测试用例，无法判定是否通过；请先在题库里补齐用例", ""

@@ -125,7 +125,7 @@ function buildUnitRoutes(ctx) {
         statement_html: toHtml(unit.statement || ""),
       }
       // 契约 §8.1.1：problem 类带 cases（sample 最多 2 条），card 类不带这个字段。
-      // 旧路由 /api/problem/:id 下线前，这两条保护先搬到这里。
+      // 旧路由 /api/problem/:id 已下线，这两条保护现在只在这里。
       const cases = buildCases(unit)
       if (cases) payload.cases = cases
       ctx.sendJson(res, 200, payload)

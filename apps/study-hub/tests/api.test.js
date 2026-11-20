@@ -1,6 +1,9 @@
 "use strict"
 /**
  * api.test.js —— M1 的三个接口：健康检查、题库列表、单题详情
+ *
+ * P2 起单题详情搬到 GET /api/units/:id（契约 §8.1.2），
+ * 旧的 GET /api/problem/:id 已下线，这里钉住它确实下线了。
  */
 
 const test = require("node:test")
@@ -113,13 +116,14 @@ test("GET /api/bank 支持 track 过滤", async function () {
   })
 })
 
-test("GET /api/problem/:id 返回题面与样例用例", async function () {
+test("GET /api/units/:id 返回题面与样例用例", async function () {
   await withApp(async function (base) {
-    const res = await fetch(base + "/api/problem/lc-00001")
+    const res = await fetch(base + "/api/units/algo:lc-00001")
     assert.strictEqual(res.status, 200)
     const body = await res.json()
-    assert.strictEqual(body.id, "lc-00001")
-    assert.strictEqual(body.statement, "给定整数数组与目标值。")
+    assert.strictEqual(body.unit.id, "algo:lc-00001")
+    assert.strictEqual(body.unit.title, "两数之和")
+    assert.strictEqual(body.unit.statement, "给定整数数组与目标值。")
     assert.strictEqual(body.cases.total, 3)
     assert.strictEqual(body.cases.sample.length, 2)
   })
@@ -127,32 +131,42 @@ test("GET /api/problem/:id 返回题面与样例用例", async function () {
 
 test("单题接口不泄露参考解法", async function () {
   await withApp(async function (base) {
-    const res = await fetch(base + "/api/problem/lc-00001")
+    const res = await fetch(base + "/api/units/algo:lc-00001")
     const raw = await res.text()
     assert.strictEqual(raw.indexOf("int main"), -1, "响应里不应出现参考解法")
     const body = JSON.parse(raw)
-    assert.strictEqual(body.solution, undefined)
+    assert.strictEqual(body.unit.solution, undefined)
+    assert.strictEqual(body.unit.entry.reference, "", "参考解法字段应为空")
   })
 })
 
 test("单题接口最多暴露 2 个样例用例，其余用例不外泄", async function () {
   await withApp(async function (base) {
-    const res = await fetch(base + "/api/problem/lc-00001")
+    const res = await fetch(base + "/api/units/algo:lc-00001")
     const body = await res.json()
     assert.strictEqual(body.cases.total, 3)
     assert.strictEqual(body.cases.sample.length, 2)
-    const raw = await fetch(base + "/api/problem/lc-00001").then(function (r) {
+    const raw = await fetch(base + "/api/units/algo:lc-00001").then(function (r) {
       return r.text()
     })
     assert.strictEqual(raw.indexOf("3,3,0,0,0"), -1, "第 3 个用例不应出现在响应里")
   })
 })
 
-test("GET /api/problem/:id 题目不存在返回 404", async function () {
+test("GET /api/units/:id 单元不存在返回 404", async function () {
   await withApp(async function (base) {
-    const res = await fetch(base + "/api/problem/lc-99999")
+    const res = await fetch(base + "/api/units/algo:lc-99999")
     assert.strictEqual(res.status, 404)
     const body = await res.json()
-    assert.strictEqual(body.error, "题目不存在")
+    assert.strictEqual(body.error, "单元不存在")
+  })
+})
+
+test("旧路由已下线：GET /api/problem/:id 返回 404", async function () {
+  await withApp(async function (base) {
+    const res = await fetch(base + "/api/problem/lc-00001")
+    assert.strictEqual(res.status, 404)
+    const body = await res.json()
+    assert.strictEqual(body.error, "接口不存在")
   })
 })

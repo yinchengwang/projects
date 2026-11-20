@@ -310,7 +310,7 @@ node tools/import-codeforces.js --rewrite
 |---|---|---|
 | GET | `/api/health` | 运行状态、learning 仓连接情况、题库概况 |
 | GET | `/api/bank` | 题库列表，支持 `track` / `topic` / `difficulty` / `status` / `prefix` / `limit` |
-| GET | `/api/problem/:id` | 单题详情。**只回前 2 个样例用例 + 用例总数，不回参考解法** |
+| GET | `/api/units/:id` | 单元详情。**只回前 2 个样例用例 + 用例总数，不回参考解法**。`:id` 形如 `algo:lc-00001` / `db:mvcc` |
 | POST | `/api/llm/explain` | 讲解。入参 `{problemId, level}`，回 `{text, model}` |
 | POST | `/api/llm/hint` | 分级求助。入参 `{problemId, level}`，回 `{text, model}` |
 | POST | `/api/llm/grade-idea` | 批改思路。入参 `{problemId, idea}`，回 `{verdict, comment, model}` |
@@ -318,7 +318,7 @@ node tools/import-codeforces.js --rewrite
 | POST | `/api/llm/fill` | 补全缺口并**写回**。入参 `{problemId}`，回 `{problem, model}` |
 | GET | `/api/llm/settings` | LLM 开关、provider、模型名、密钥来源、配额 |
 | PUT | `/api/llm/settings` | 保存 LLM 开关、provider、模型名、地址。**不接受密钥** |
-| POST | `/api/attempt` | 提交代码判题。入参 `{problemId, code, language, mode}`；响应 `{attemptId, verdict, passedCases, totalCases, durationMs, failedCase, message, compilerOutput}` |
+| POST | `/api/units/:id/judge` | 提交代码判题。入参 `{code, language}`；响应 `{verdict, passed, total, durationMs, message, failed, stdout, stderr, unit}` |
 | GET | `/api/next` | 下一个动作：复习 / 轮次推进 / 主动探索，带「这一步大约 N 分钟」。轮次卡片若不在题库里，`problemId` 为空而 `roundId` / `itemId` 有值——界面会把你带到轮次页去勾掉它 |
 | POST | `/api/review/:id/grade` | 给复习卡片打分（`quality` 0~5），返回下一次复习时间、间隔、难度因子、遗忘次数 |
 | GET | `/api/rounds` | learning/progress 下的轮次清单与解析告警 |
@@ -467,7 +467,7 @@ node tests/run-all.js
 | `sandbox.test.js` | 工具链探测、临时目录、喂 stdin、超时杀进程树 |
 | `judge-fixtures.test.js` | fixture 自检：正例对、三类负例确实坏 |
 | `runner.test.js` | 五类 verdict 端到端、判题契约反例、输出上限、宽限期兜底、临时目录清理 |
-| `attempt.test.js` | `POST /api/attempt` 的形状、校验、流水落库 |
+| `attempt.test.js` | `POST /api/units/:id/judge` 的形状、校验、流水落库、解释器自愈 |
 | `web-panel.test.js` | 结果面板数据整理（纯函数） |
 | `web-dom.test.js` | 前端渲染路径（DOM 桩）：样例渲染、草稿不丢、渲染竞态 |
 | `sm2.test.js` | SM-2 公式、easiness 下限、六档 quality 映射、到期与逾期排序 |

@@ -10,7 +10,9 @@
  * 表被谁读：`/api/health`（attempts 总数）、`/api/progress`（今日 solved）、
  * `server/insights.js`（P3 诊断的知识点统计与每日曲线）。
  * 也就是说**只写不读不会有问题，只读不写会让人以为练过 0 次**——
- * 这正是 P2 落地时抓到的缺陷：全仓只有旧路由 `/api/attempt` 会写这张表。
+ * 这正是 P2 落地时抓到的缺陷：当时全仓只有旧路由 `/api/attempt` 会写这张表。
+ * 旧路由下线后，写这张表的**就是上面那两条链路**（单元页判题 / 会话提交），
+ * 口径仍然只有这一份。
  */
 
 const { normalizeUnitId } = require("../core/unit/unit.js")

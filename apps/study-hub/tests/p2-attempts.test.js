@@ -2,10 +2,11 @@
 /**
  * p2-attempts.test.js —— 新链路必须记作答流水
  *
- * 为什么要有这个套件：实测发现**全仓只有旧路由 `POST /api/attempt` 会写 `attempts` 表**，
+ * 为什么要有这个套件：实测发现**当时全仓只有旧路由 `POST /api/attempt` 会写 `attempts` 表**，
  * 而 P2 的新链路（`POST /api/units/:id/judge` 与 `POST /api/session/submit`）一条都不写。
  * 后果是 P3 的诊断（掌握度、知识点统计、每日题量曲线）全部依赖 `attempts`，
  * 新链路上练得再多，诊断页也是一片 0——一张会被读、却没人写的表。
+ * （旧路由下线后，写这张表的就是这两条新链路。）
  *
  * 契约里的依据：
  *   §4.1 `insertAttempt` 入参「P1 起新增可选 unit_id、track、assert_total、assert_passed」；

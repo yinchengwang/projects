@@ -226,9 +226,10 @@
    * 把单元整理成页面要用的视图数据（纯函数）。
    * @param {object} unit
    * @param {string} statementHtml
+   * @param {{total?: number, sample?: object[]}} [cases] 接口返回的用例信息（契约 §8.1.1）
    * @returns {object}
    */
-  function buildUnitView(unit, statementHtml) {
+  function buildUnitView(unit, statementHtml, cases) {
     const u = unit || {}
     const entry = u.entry || {}
     const track = String(u.track || "")
@@ -236,6 +237,9 @@
     const isProblem = kind === "problem"
     const status = String(u.status || "todo")
     const html = String(statementHtml === null || statementHtml === undefined ? "" : statementHtml)
+    // 断言条数读 cases.total：接口只暴露前 2 条样例，unit.asserts 也是被裁过的，
+    // 两者都不是「这道题一共几条断言」。卡类没有 cases 字段，回落到 unit.asserts.length。
+    const totalCases = cases && Number.isFinite(Number(cases.total)) ? Number(cases.total) : null
     return {
       id: String(u.id || ""),
       title: String(u.title || "未命名单元"),
@@ -254,7 +258,7 @@
       demoPath: String(entry.demo || ""),
       scriptPath: String(entry.script || ""),
       language: String(entry.language || (isProblem ? "cpp" : "python")),
-      assertCount: Array.isArray(u.asserts) ? u.asserts.length : 0,
+      assertCount: totalCases === null ? (Array.isArray(u.asserts) ? u.asserts.length : 0) : totalCases,
       hasStatement: html.trim() !== "",
       statementNodes: parseHtmlNodes(html),
     }
@@ -541,10 +545,11 @@
 
     const unit = (payload && payload.unit) || {}
     const html = String((payload && payload.statement_html) || "")
+    const cases = (payload && payload.cases) || null
     pageState.unit = unit
     pageState.statementHtml = html
     pageState.isProblem = unit.kind === "problem"
-    pageState.view = buildUnitView(unit, html)
+    pageState.view = buildUnitView(unit, html, cases)
 
     holder.textContent = ""
     holder.appendChild(renderUnit(pageState.view, unit, html))

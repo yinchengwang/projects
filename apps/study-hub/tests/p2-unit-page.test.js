@@ -169,6 +169,25 @@ test("buildUnitView：题面为空时说清没有正文", function () {
   assert.strictEqual(v.statementNodes.length, 0)
 })
 
+test("buildUnitView：断言条数读 cases.total，不读 unit.asserts.length", function () {
+  // 契约 §8.1.2.4：/api/units/:id 只暴露前 2 条样例，unit.asserts 也是裁过的，
+  // 两者都不是「这道题一共几条断言」。要显示总条数，只能读 cases.total。
+  const unit = problemUnit({ asserts: [{ type: "output", input: "1 2", expect: "3", cmp: "exact" }] })
+  const v = unitPage.buildUnitView(unit, "<p>题面</p>", {
+    sample: [
+      { input: "1 2", expect: "3" },
+      { input: "4 5", expect: "9" },
+    ],
+    total: 3,
+  })
+  assert.strictEqual(v.assertCount, 3, "总条数要读 cases.total（3），不是裁过的 asserts.length（1）")
+})
+
+test("buildUnitView：没有 cases 时回落 unit.asserts.length（卡类）", function () {
+  const v = unitPage.buildUnitView(cardUnit(), "<p>正文</p>")
+  assert.strictEqual(v.assertCount, 1, "卡类没有 cases 字段，回落到 unit.asserts.length")
+})
+
 test("parseHtmlNodes：标题、段落、列表都认得", function () {
   const html = "<h2>版本链</h2><p>每行数据有多个版本。</p><ul><li>写操作新增版本</li><li>读操作看快照</li></ul>"
   const nodes = unitPage.parseHtmlNodes(html)

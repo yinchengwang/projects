@@ -237,29 +237,48 @@ test("端到端：单次会话第 21 次请求被护栏挡住，提示会话额�
 })
 
 test("端到端：造出来的题不会从单题接口泄露参考解法（G14）", async function () {
+  // 单元索引是**启动时物化**的：新题落盘后，同一个进程里按单元 id 查不到，
+  // 要重起一个 app 才看得见（契约 §8.1.2.5）。所以这里用两个 app、同一个 learning 仓。
   const root = tempLearning()
-  const app = createApp({
+  const app1 = createApp({
     dbPath: ":memory:",
     learningRoot: root,
     llmClient: makeFakeClient(),
     env: {},
     localBank: null,
   })
-  const port = await app.listen(0)
-  const base = "http://127.0.0.1:" + port
+  const port1 = await app1.listen(0)
+  let id = ""
   try {
-    const gen = await post(base, "/api/bank/llm-generate", {
+    const gen = await post("http://127.0.0.1:" + port1, "/api/bank/llm-generate", {
       track: "interview",
       difficulty: "medium",
       sessionId: "g14",
     })
-    const res = await fetch(base + "/api/problem/" + gen.body.problem.id)
+    id = gen.body.problem.id
+  } finally {
+    await app1.close()
+  }
+
+  const app2 = createApp({
+    dbPath: ":memory:",
+    learningRoot: root,
+    llmClient: makeFakeClient(),
+    env: {},
+    localBank: null,
+  })
+  const port2 = await app2.listen(0)
+  try {
+    const res = await fetch("http://127.0.0.1:" + port2 + "/api/units/algo:" + id)
     assert.equal(res.status, 200)
-    const body = await res.json()
-    assert.equal(body.solution, undefined, "单题接口不许返回参考解法")
+    const raw = await res.text()
+    assert.ok(raw.indexOf("int main") === -1, "单题接口不许返回参考解法")
+    const body = JSON.parse(raw)
+    assert.equal(body.unit.solution, undefined, "单题接口不许返回参考解法")
+    assert.equal(body.unit.entry.reference, "", "参考解法字段应为空")
     assert.equal(body.cases.total, 1)
     assert.ok(body.cases.sample.length <= 2, "样例用例最多给 2 个")
   } finally {
-    await app.close()
+    await app2.close()
   }
 })

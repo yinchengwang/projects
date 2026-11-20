@@ -13,10 +13,13 @@
  */
 
 const { readJsonBody, HttpError } = require("./router.js")
-const { judgeUnit } = require("../judge/runner.js")
+const { judgeUnit, DEFAULT_CASE_TIMEOUT_MS } = require("../judge/runner.js")
 const { detectCompiler, detectPython, detectNumpy } = require("../judge/sandbox.js")
 const { recordUnitAttempt } = require("./attempt-log.js")
 const PYTHON_SETTING_KEY = "judge.python.cmd"
+
+/** settings 键：单用例超时（毫秒） */
+const TIMEOUT_SETTING_KEY = "judge.timeout_ms"
 
 /** 只支持这两种语言（与 judge/runner.js 的 LANGUAGES 一致） */
 const SUPPORTED_LANGUAGES = ["cpp", "python"]
@@ -88,6 +91,56 @@ function buildUnitRunRoutes(ctx) {
     return ctx.envPython || null
   }
 
+  /**
+   * 单用例超时（毫秒）：settings 里的 judge.timeout_ms，默认 2000。
+   * 读法与旧路由一致：非有限数或 <= 0 回落默认值。
+   * @returns {number}
+   */
+  function timeoutMsNow() {
+    if (!store || typeof store.getSetting !== "function") return DEFAULT_CASE_TIMEOUT_MS
+    const raw = Number(store.getSetting(TIMEOUT_SETTING_KEY, String(DEFAULT_CASE_TIMEOUT_MS)))
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_CASE_TIMEOUT_MS
+  }
+
+  /**
+   * 这个单元走哪条判题路：与 judge/runner.js 的 judgeUnit 分流口径逐字一致。
+   * @param {object} unit
+   * @returns {string} "script"（走断言脚本）或 "user"（走用户代码）
+   */
+  function gradedOf(unit) {
+    const entry = (unit && unit.entry) || {}
+    const kind = String((unit && unit.kind) || "")
+    return String(entry.graded || (kind === "card" ? "script" : "user"))
+  }
+
+  /**
+   * 解释器自愈：settings 里配的解释器跑不起来时，用探测到的真身把它顶掉。
+   *
+   * 与旧路由**唯一**一处刻意不同的地方（旧路由见 api.js 删除前的注释）：
+   *  - 旧路由「无论有没有 override 都回写」——那会把一次自动探测的结果**钉死**进
+   *    settings。而 settings 的优先级**高于** STUDY_HUB_PYTHON 环境变量
+   *    （pythonOverrideNow() 就是这个顺序），钉死之后用户再设环境变量就不生效了。
+   *    所以这里**只在 settings 里原本配了一条、而它跑不起来时**才回写。
+   *  - 生效的不是 settings 里那一条时（测试注入的 ctx.pythonOverride、
+   *    STUDY_HUB_PYTHON 环境变量）也不回写——那不是 settings 的内容，别去覆盖它。
+   *
+   * @param {string|null} usedOverride 本次判题实际用的 override
+   */
+  function healPythonSetting(usedOverride) {
+    if (!store || typeof store.getSetting !== "function") return
+    if (ctx.pythonOverride !== undefined && ctx.pythonOverride !== null) return
+    const stored = store.getSetting(PYTHON_SETTING_KEY)
+    const storedText = stored === undefined || stored === null ? "" : String(stored).trim()
+    // settings 里没配 → 不回写（否则会把一次自动探测的结果钉死进 settings）
+    if (storedText === "") return
+    // 生效的不是 settings 里那一条 → 不回写（那是环境变量或注入值，不是 settings 的内容）
+    if (!usedOverride || String(usedOverride).trim() !== storedText) return
+    const python = detectPython(storedText)
+    if (!python) return
+    const text = python.cmd + (python.args.length ? " " + python.args.join(" ") : "")
+    if (text !== storedText) store.setSetting(PYTHON_SETTING_KEY, text)
+  }
+
   function notFound(res, id) {
     ctx.sendJson(res, 404, { error: "单元不存在", id: String(id) })
   }
@@ -125,13 +178,24 @@ function buildUnitRunRoutes(ctx) {
         }
       }
 
+      const pythonOverride = pythonOverrideNow()
+
       const result = await judgeUnit({
         unit: unit,
         code: code,
         language: language,
         learningRoot: learningRoot,
-        pythonOverride: pythonOverrideNow(),
+        pythonOverride: pythonOverride,
+        // 单用例超时只对走 user 判题那条路的单元生效：卡类走 judgeCardScript，
+        // 那里 timeoutMs 是**整段脚本**的超时（默认 30s），顶上一个 2000ms 的
+        // 单用例超时会让 13 张 AI 卡的脚本成片超时。判据与 judgeUnit 分流一致。
+        timeoutMs: gradedOf(unit) === "script" ? undefined : timeoutMsNow(),
       })
+
+      // 解释器自愈：只在这次判题真的用到 Python、且 settings 里配的那条跑不起来时回写
+      if (kind === "card" || language === "python") {
+        healPythonSetting(pythonOverride)
+      }
 
       // 记流水：P3 的诊断（掌握度 / 知识点统计 / 每日曲线）全靠 attempts 表，
       // 不记的话「在单元页判过十次」在诊断里等于没练过。

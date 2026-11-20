@@ -4,14 +4,16 @@
  *
  * 这两条保护原来由旧的 `GET /api/problem/:id` 扛着。实测发现新路由 `/api/units/:id`
  * 把 `unit.asserts` 全量返回——`algo:self-00010` 的 3 条 `input/expect` 全给了，
- * 比旧路由更漏。旧路由下线之前必须先把这两条保护搬过来（契约 §8.1.1）。
+ * 比旧路由更漏。旧路由下线之后，这两条保护就只在这里了（契约 §8.1.1）。
  *
- * 本套件钉住契约 §8.1.1 的五条规则：
+ * 本套件钉住契约 §8.1.1 的六条规则：
  *   1. kind=problem 必须带 cases，形状 {sample:[{input,expect}], total:number}
  *   2. cases.sample 最多 2 条，且与 unit.asserts 前 2 条同源同值
  *   3. kind=card 不带 cases
  *   4. 响应全文里不许出现参考解法（statement 不含、entry.reference 为空）
- *   5. unit.asserts 全量保留（判题链路与单元页条数都要用）
+ *   5. kind=problem 时 unit.asserts 也裁到前 2 条——否则第 3 条用例会从
+ *      unit.asserts 里漏出去，「第 3 条不外泄」这条保护就是假的
+ *   6. 「一共几条断言」读 cases.total，不读 unit.asserts.length
  */
 
 const test = require("node:test")
