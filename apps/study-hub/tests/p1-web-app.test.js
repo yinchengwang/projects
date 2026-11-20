@@ -16,11 +16,9 @@ global.document = dom.document
 global.window = global
 
 const app = require("../web/app.js")
-// 浏览器里这些页面是 index.html 的 <script src> 逐个加载的（见 web/index.html 第 26-30 行）。
-// Node 下的 app.js 只 require 了 today / answer（旧视图要用），review / rounds 得测试自己补，
-// 否则「四个旧页仍注册在 pages 里」那条用例会误判成「页面丢了」。
-require("../web/pages/review.js")
-require("../web/pages/rounds.js")
+// 浏览器里这些页面是 index.html 的 <script src> 逐个加载的。
+// P3 起 today / review / rounds 三个旧页已从 index.html 摘掉、也不再注册（契约 §9.1），
+// 所以这里**不再**手工 require 它们——否则会把它们又注册回 pages，让退役断言误判。
 require("../web/diagnose.js")
 
 test("全局名换成 window.StudyHub，window.AlgoPlan 是同一个对象的别名", function () {
@@ -114,13 +112,13 @@ test("标签栏里还没有 P4 才交付的页", function () {
   assert.strictEqual(keys.indexOf("supply"), -1, "供给是 P4 交付的")
 })
 
-test("过渡期：today / review / rounds 三个旧页仍注册在 pages 里（只是从标签栏摘掉）", function () {
+test("旧页按契约 §9.1 分批退役：answer 在 P2，today / review / rounds 在 P3", function () {
   const PAGES = global.window.StudyHub.pages
-  assert.ok(PAGES.today, "旧页 today 仍注册")
-  assert.ok(PAGES.review)
-  assert.ok(PAGES.rounds)
-  // answer.js 在 P2 退役（契约 §9.1）：文件仍在仓库里，但不再注册
+  // P2 退役 answer.js，P3 退役 today / review / rounds——文件都还在仓库里，只是不再注册
   assert.strictEqual(PAGES.answer, undefined, "answer 页已在 P2 退役")
+  assert.strictEqual(PAGES.today, undefined, "today 页已在 P3 退役")
+  assert.strictEqual(PAGES.review, undefined, "review 页已在 P3 退役")
+  assert.strictEqual(PAGES.rounds, undefined, "rounds 页已在 P3 退役")
 })
 
 test("诊断页靠别名照样注册得上", function () {

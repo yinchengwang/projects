@@ -258,13 +258,13 @@ node tools/import-codeforces.js --rewrite
 
 | 优先级 | 来源 | 说明 |
 |---|---|---|
-| ① 覆盖值 | `settings` 表的 `insights.expected_override.<topic>` | 手工指定某个知识点的期望题量 |
-| ② 题库题数 | 题库里带这个 topic 的题目数 | 「这个知识点一共就这么多题」 |
-| ③ 下限常量 | `settings` 表的 `insights.expected_min_questions`，默认 **5** | 「至少练够 5 题才叫练透」 |
+| ① 覆盖值 | `settings` 表的 `insights.expected_override.<轨>:<知识点>` | 手工指定某个知识点的期望题量 |
+| ② 题库单元数 | 题库里带这个复合键的单元数 | 「这个知识点一共就这么多单元」 |
+| ③ 下限常量 | `settings` 表的 `insights.expected_min_questions`，默认 **5** | 「至少练够 5 个单元才叫练透」 |
 
-**②③ 的合成规则：`期望题量 = max(题库题数, 下限常量)`。**
+**②③ 的合成规则：`期望题量 = max(题库单元数, 下限常量)`。**
 
-下限存在的理由：只有 1 道题的冷门知识点，练 1 道就是 100% 覆盖，会被误判成「掌握」。
+下限存在的理由：只有 1 个单元的冷门知识点，练 1 个就是 100% 覆盖，会被误判成「掌握」。
 下限常量把这个洞堵上。
 
 **可配置**（改完刷新诊断页立刻生效）：
@@ -272,7 +272,8 @@ node tools/import-codeforces.js --rewrite
 | 键名 | 作用 | 默认 |
 |---|---|---|
 | `insights.expected_min_questions` | 所有知识点的期望题量下限 | `5` |
-| `insights.expected_override.<topic>` | 单个知识点的期望题量（如 `insights.expected_override.数组`） | 无 |
+| `insights.expected_override.<轨>:<知识点>` | 单个知识点的期望题量（如 `insights.expected_override.algorithm:数组`） | 无 |
+| `insights.expected_override.<知识点>` | 旧的裸名键，**仍然认**（老配置不失效） | 无 |
 
 ### 四档诊断
 
@@ -293,16 +294,35 @@ node tools/import-codeforces.js --rewrite
 默认最近 30 天，`GET /api/insights?days=N` 可调（`days=0` 表示全部）。
 窗口内某天没提交会**补 0**，这样「哪天没练」在曲线上看得见。
 
-### 诊断页
+### 三层掌握度（P3）
 
-顶栏的「诊断」页有四块内容，全部是**手绘 SVG**（零第三方图表库）：
+P3 起，诊断有三层口径，**每一层的掌握度都是它下一层单元掌握度的均值**：
 
-1. **掌握度雷达**——两条序列：掌握度、覆盖度，取练得最多的 6 个知识点；
-2. **弱项榜**——只收「练过但总错」「薄弱且练得少」两档，条形末端标掌握度；
-3. **每日题量曲线**——折线 + 面积，窗口内没提交的日期补 0；
-4. **知识点覆盖**——每个知识点「练过 N / 期望 M 题」的覆盖条。
+| 层 | 键 | 算什么 |
+|---|---|---|
+| 单元 | `unit_id` | 该单元的作答流水算一次 |
+| 知识点 | `<轨>:<知识点>` | 该知识点下**练过的单元**的掌握度均值 |
+| 轨道 | `algorithm` / `database` / `ai` | 该轨**练过的单元**的掌握度均值 |
+
+旧接口 `/api/insights` 的知识点掌握度是「把该知识点下所有题目的提交流水**合并**算一次」，
+和 P3 的「先算每个单元再取均值」**数值不同**。两者都对，**不可混用**：旧接口一个字没改，
+P3 的新口径只走新接口 `/api/diagnose`。
+
+三层数值统一四舍五入到 **9 位小数**：均值是浮点除法，`(0.8 + 0.4) / 2` 在 IEEE 754 下
+等于 `0.6000000000000001`，不收敛会一路漏进响应与界面。
+
+### 诊断页（P3）
+
+顶栏的「诊断」页有**三个视图**（页内标签切换，不是新标签页），全部是**手绘 SVG**（零第三方图表库）：
+
+1. **三轨总览**（默认）——三条轨并列，每条轨两根条：掌握度与覆盖度；点一条轨，下钻区列出那条轨的知识点（按掌握度从低到高）与各自的处方；
+2. **六轴雷达**——六个维度：算法、数据库、AI、C/C++、Python、SQL，一条序列是掌握度；下面给弱项清单与强项清单，每条都带一句能执行的话；
+3. **会话热力图**——横轴是会话序号，纵轴是三轨，格子是那次作答的结果；格子里带一个汉字（通 / 错 / 超 / 编 / 崩 / 待），颜色只做分组，不靠颜色单独表意。
 
 每张图都能展开成表格视图（表格孪生），方便核对数字。
+
+> 旧页面的「每日题量曲线」不再画在这一页——曲线数据仍在 `GET /api/insights` 的 `series` 里，
+> 接口没删；P3 的三视图按接口契约定死，曲线不在其中。
 
 ## 接口
 
@@ -325,13 +345,16 @@ node tools/import-codeforces.js --rewrite
 | PATCH | `/api/rounds/:id/items/:itemId` | 勾选写回（`status` / `doneDate` / `commitSha`），只改目标行，返回 diff |
 | POST | `/api/correction` | 写错题订正到 `notes/practice/<id>-订正.md`，返回文件路径与 diff |
 | GET | `/api/progress` | 今日进度与单日复习配额 |
-| GET | `/api/insights` | 诊断数据。`?days=N` 调曲线窗口（默认 30，`0`＝全部）。返回 `{topics, summary, series}` |
+| GET | `/api/insights` | 诊断数据（旧口径，合并流水）。`?days=N` 调曲线窗口（默认 30，`0`＝全部）。返回 `{topics, summary, series}` |
+| GET | `/api/diagnose` | 三轨诊断（P3 新口径，单元均值）。`?view=mastery`（三轨总览）/ `?view=radar`（六轴雷达）/ `?view=heatmap`（会话热力图），默认 `mastery`；视图名不认识返回 400 |
 
 `GET /api/insights` 的响应：
 
 ```json
 {
   "topics": [{
+    "id": "algorithm:数组",
+    "track": "algorithm",
     "topic": "数组",
     "mastery": 0.2836,
     "coverage": 0.4,
@@ -344,7 +367,7 @@ node tools/import-codeforces.js --rewrite
     "lastAt": "2026-11-10T11:00:00.000Z",
     "expected": 5,
     "expectedSource": "floor",
-    "problems": 2
+    "unitCount": 2
   }],
   "summary": {
     "topicCount": 2,

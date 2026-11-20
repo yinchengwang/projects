@@ -318,6 +318,15 @@ if (typeof module !== "undefined" && module.exports) {
   // 旧测试要的 renderBank / renderPractice 等仍从 __test 拿得到。
   if (APP.pages) delete APP.pages.answer
 
+  // P3 起旧三页不再注册（文件保留在仓库里作为历史，契约 §9.1）。
+  // 文件与旧导出都留着：tests/web-dom.test.js 还要用 today.js 的 renderHealth。
+  // 下面 renderLegacy 走的是 todayPage.render（模块引用），不受注册被删的影响。
+  if (APP.pages) {
+    delete APP.pages.today
+    delete APP.pages.review
+    delete APP.pages.rounds
+  }
+
   /** 旧视图：today / bank / practice（M1、M3 的老测试仍在用这三个视图） */
   let legacyView = "today"
 

@@ -206,7 +206,13 @@ test("P2-15：tests/pages.test.js 已改成当期口径", function () {
     -1,
     "旧的「引用四个页面脚本」那条断言还在，会被 answer.js 退役打红"
   )
-  assert.ok(src.indexOf("answer.js 已退役") !== -1, "要改成当期口径的断言")
+  // P2 改成「answer.js 已退役」，P3 又扩成「旧三页与 answer.js 都已退役」——
+  // 两种写法都算当期口径，只要有「退役」这层意思就行
+  assert.ok(
+    src.indexOf("answer.js 都已退役") !== -1 || src.indexOf("answer.js 已退役") !== -1,
+    "要改成当期口径的断言"
+  )
+  assert.ok(src.indexOf("P3") !== -1 || src.indexOf("today") !== -1, "旧三页的退役也要写进断言")
   // 「四个页面脚本都注册进 window.AlgoPlan.pages」那条**留着不动**
   assert.ok(
     src.indexOf("四个页面脚本都注册进 window.AlgoPlan.pages") !== -1,

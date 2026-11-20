@@ -196,6 +196,98 @@ test("端到端：每日题量曲线按天分组，窗口内缺失的日期补 0
   }
 })
 
+/* ---------------- P3：GET /api/diagnose 三视图 ---------------- */
+
+test("端到端：GET /api/diagnose?view=mastery 返回三轨与知识点，形状照契约", async function () {
+  const { app, base } = await startServer()
+  try {
+    const res = await fetch(base + "/api/diagnose?view=mastery")
+    assert.strictEqual(res.status, 200)
+    const body = await res.json()
+    assert.strictEqual(body.view, "mastery")
+    assert.deepStrictEqual(
+      body.tracks.map(function (track) {
+        return track.track
+      }),
+      ["algorithm", "database", "ai"],
+      "三轨顺序固定"
+    )
+    assert.ok(Array.isArray(body.topics))
+    assert.ok(body.summary)
+    assert.strictEqual(typeof body.summary.unitCount, "number")
+  } finally {
+    await app.close()
+  }
+})
+
+test("端到端：GET /api/diagnose?view=radar 返回固定顺序的六个维度", async function () {
+  const { app, base } = await startServer()
+  try {
+    const body = await (await fetch(base + "/api/diagnose?view=radar")).json()
+    assert.strictEqual(body.view, "radar")
+    assert.deepStrictEqual(
+      body.axes.map(function (axis) {
+        return axis.id
+      }),
+      ["algorithm", "database", "ai", "c", "python", "sql"]
+    )
+    assert.ok(Array.isArray(body.weak))
+    assert.ok(Array.isArray(body.strong))
+  } finally {
+    await app.close()
+  }
+})
+
+test("端到端：GET /api/diagnose?view=heatmap 返回会话与格子", async function () {
+  const { app, base } = await startServer()
+  try {
+    const body = await (await fetch(base + "/api/diagnose?view=heatmap")).json()
+    assert.strictEqual(body.view, "heatmap")
+    assert.ok(Array.isArray(body.sessions))
+    assert.ok(Array.isArray(body.cells))
+  } finally {
+    await app.close()
+  }
+})
+
+test("端到端：视图名不认识就返回 400 与中文错误", async function () {
+  const { app, base } = await startServer()
+  try {
+    const res = await fetch(base + "/api/diagnose?view=bogus")
+    assert.strictEqual(res.status, 400)
+    const body = await res.json()
+    assert.strictEqual(body.error, "诊断视图只能是 mastery / radar / heatmap")
+  } finally {
+    await app.close()
+  }
+})
+
+test("端到端：数值都在 0~1，没练过的知识点不出现", async function () {
+  const { app, base } = await startServer()
+  try {
+    const body = await (await fetch(base + "/api/diagnose?view=mastery")).json()
+    body.tracks.forEach(function (track) {
+      assert.ok(track.mastery >= 0 && track.mastery <= 1, "掌握度要在 0~1：" + track.mastery)
+      assert.ok(track.coverage >= 0 && track.coverage <= 1, "覆盖度要在 0~1：" + track.coverage)
+      if (track.coverage > 0) {
+        assert.ok(track.mastery > 0, "练过的轨掌握度不能是 0：" + track.track)
+      }
+    })
+    body.topics.forEach(function (topic) {
+      assert.ok(topic.mastery >= 0 && topic.mastery <= 1, "知识点掌握度要在 0~1")
+      assert.ok(topic.coverage > 0, "出现在 topics 里的知识点一定是练过的：" + topic.topic)
+      assert.ok(topic.label, "知识点要带四档的中文标签")
+      assert.ok(topic.action, "知识点要带处方")
+    })
+    const names = body.topics.map(function (topic) {
+      return topic.topic
+    })
+    assert.ok(names.indexOf("动态规划") === -1, "没练过的动态规划不该出现在 topics 里")
+  } finally {
+    await app.close()
+  }
+})
+
 /* ---------------- 静态资源 ---------------- */
 
 test("端到端：charts.js / diagnose.js / diagnose.css 都取得到", async function () {
@@ -294,4 +386,6 @@ test("README 写清楚了诊断接口与期望题量口径", function () {
   assert.ok(readme.indexOf("/api/insights") !== -1, "README 里没有写 /api/insights")
   assert.ok(readme.indexOf("期望题量") !== -1, "README 里没有写期望题量口径")
   assert.ok(readme.indexOf("insights.expected_min_questions") !== -1, "README 里没有写可配置的键名")
+  assert.ok(readme.indexOf("/api/diagnose") !== -1, "README 里没有写 /api/diagnose")
+  assert.ok(readme.indexOf("三轨总览") !== -1, "README 里没有写诊断页的三个视图")
 })

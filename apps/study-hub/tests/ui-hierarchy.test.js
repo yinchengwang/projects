@@ -26,11 +26,23 @@ require("../web/app.js")
 // 页面脚本把自己注册进 window.AlgoPlan.pages——统一从那里取 render，
 // 不依赖各页面脚本自己导出了什么
 const todayPage = require("../web/pages/today.js")
-require("../web/pages/review.js")
-require("../web/pages/rounds.js")
+const reviewPage = require("../web/pages/review.js")
+const roundsPage = require("../web/pages/rounds.js")
 const unitPage = require("../web/pages/unit.js")
 const libraryPage = require("../web/pages/library.js")
-const PAGES = global.window.AlgoPlan.pages
+const diagnosePage = require("../web/diagnose.js")
+
+/**
+ * 在册的页面表。
+ *
+ * P3 起 today / review / rounds 三页**不再注册**（契约 §9.1：文件保留在仓库里作为历史，
+ * 只是不再注册）。所以这里手工拼一张表：诊断页取它自己的 render（`require` 时已注册进
+ * APP.pages.diagnose，但那份注册在 app.js 的 delete 之前，取不到就退回模块导出），
+ * 其余在册页面从 APP.pages 取。
+ */
+const PAGES = Object.assign({}, global.window.AlgoPlan.pages, {
+  diagnose: global.window.AlgoPlan.pages.diagnose || { title: "诊断", render: diagnosePage.render },
+})
 /** 铺一个假的 fetch：按路径前缀返回预设响应 */
 function stubFetch(routes) {
   global.fetch = async function (url) {
@@ -189,66 +201,77 @@ const COMMON_ROUTES = {
     },
     series: [{ date: "2026-11-11", count: 4 }],
   },
+  "/api/diagnose": {
+    view: "mastery",
+    tracks: [
+      {
+        track: "algorithm",
+        label: "算法",
+        mastery: 0.31,
+        coverage: 0.4,
+        bucket: "weak-sparse",
+        label2: "薄弱且练得少",
+        action: "轮次里优先排这类题——先补量",
+        unitCount: 51,
+      },
+      {
+        track: "database",
+        label: "数据库",
+        mastery: 0.72,
+        coverage: 0.2,
+        bucket: "strong-sparse",
+        label2: "偶然会，没练透",
+        action: "安排复习巩固——会做，但还没练透",
+        unitCount: 12,
+      },
+    ],
+    topics: [
+      {
+        track: "algorithm",
+        topic: "数组",
+        mastery: 0.31,
+        coverage: 0.4,
+        bucket: "weak-sparse",
+        label: "薄弱且练得少",
+        action: "先补量",
+      },
+      {
+        track: "database",
+        topic: "事务",
+        mastery: 0.72,
+        coverage: 0.2,
+        bucket: "strong-sparse",
+        label: "偶然会，没练透",
+        action: "安排复习巩固",
+      },
+    ],
+    summary: { unitCount: 3, topicCount: 2, sessionCount: 4, totalAttempts: 9 },
+  },
 }
 
-/* ---------------- 各页的层次 ---------------- */
-
-test("今日页：页头 + 主卡 + 数字块 + 静默卡，四层都在", async function () {
+test("诊断页：页头 + 主卡 + 静默卡 + 数字块 + 中文药丸，四层都在", async function () {
   stubFetch(COMMON_ROUTES)
   const view = mountView()
-  await PAGES.today.render(view)
+  await PAGES.diagnose.render(view)
 
   const heads = findAllByClass(view, "page-head")
-  assert.strictEqual(heads.length, 1, "今日页有且只有一个页头")
+  assert.strictEqual(heads.length, 1, "诊断页有且只有一个页头")
   assert.ok(findByClass(heads[0], "eyebrow"), "页头里要有眉标")
   assert.ok(findByClass(heads[0], "page-title"), "页头里要有大标题")
   assert.ok(findByClass(heads[0], "page-sub"), "页头里要有副标")
 
-  assert.ok(findByClass(view, "panel hero"), "「下一步」要在主卡里")
-  assert.ok(findByClass(view, "stat-grid"), "今日进度要摆成数字块")
-  assert.ok(findByClass(view, "panel quiet"), "运行状态是背景信息，用静默卡")
-})
+  assert.ok(findByClass(view, "panel hero"), "「先治哪条轨」要在主卡里")
+  assert.ok(findByClass(view, "stat-grid"), "概览要摆成数字块")
+  assert.ok(findByClass(view, "panel quiet"), "视图切换是背景信息，用静默卡")
 
-test("复习页：页头 + 主卡 + 数字块", async function () {
-  // 复习页要有一张真的到期卡片才会渲染主卡
-  const routes = Object.assign({}, COMMON_ROUTES)
-  routes["/api/next"] = {
-    action: {
-      kind: "review",
-      problemId: "lc-00001",
-      title: "两数之和",
-      estimatedMinutes: 5,
-      reason: "上次做的是 14 天前，该复习了",
-      reviewQueueLength: 3,
-    },
-    reviewQueueLength: 3,
-  }
-  stubFetch(routes)
-  const view = mountView()
-  await PAGES.review.render(view)
-
-  assert.strictEqual(findAllByClass(view, "page-head").length, 1, "复习页有且只有一个页头")
-  assert.ok(findByClass(view, "panel hero"), "「该复习这道」要在主卡里")
-  assert.ok(findByClass(view, "stat-grid"), "队列概况要摆成数字块")
-})
-
-test("轮次页：页头 + 当前轮次进主卡 + 状态是中文药丸", async function () {
-  stubFetch(COMMON_ROUTES)
-  const A = global.window.AlgoPlan
-  A.state.currentRoundId = "r33"
-  const view = mountView()
-  await PAGES.rounds.render(view)
-
-  assert.strictEqual(findAllByClass(view, "page-head").length, 1, "轮次页有且只有一个页头")
-  assert.ok(findByClass(view, "panel hero"), "当前轮次要在主卡里")
-
-  const pills = findAllByClass(view, "pill")
-  assert.ok(pills.length > 0, "轮次状态要用药丸承载，不能只靠颜色")
-  const texts = pills.map(function (p) { return p.textContent })
-  assert.ok(
-    texts.join(" ").indexOf("待完成") !== -1,
-    "状态要有中文文字：" + texts.join(",")
-  )
+  const pills = findAllByClassToken(view, "pill")
+  assert.ok(pills.length > 0, "诊断结论要用药丸承载，不能只靠颜色")
+  const texts = pills
+    .map(function (p) {
+      return p.textContent
+    })
+    .join(" ")
+  assert.ok(texts.indexOf("薄弱且练得少") !== -1, "药丸要带中文：" + texts)
 })
 
 test("保持暗色单主题：没有浅色/双主题的开关", function () {
@@ -295,15 +318,11 @@ test("公共构件：页头 / 主卡 / 数字块 / 空态 都造得出层次类"
   assert.ok(collectText(hole).indexOf("没有内容") !== -1)
 })
 
-test("页头只有一个：各自渲染都不许出现两个页头", async function () {
+test("页头只有一个：在册的页面各自渲染都不许出现两个页头", async function () {
   stubFetch(COMMON_ROUTES)
-  const A = global.window.AlgoPlan
-  A.state.problemId = "lc-00001"
 
   const views = [
-    { name: "今日", render: PAGES.today.render },
-    { name: "复习", render: PAGES.review.render },
-    { name: "轮次", render: PAGES.rounds.render },
+    { name: "诊断", render: PAGES.diagnose.render },
   ]
 
   for (const item of views) {

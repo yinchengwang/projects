@@ -155,25 +155,34 @@ function topicRowsFor(units, unitMastery, expectedMap) {
     })
   })
 
-  const rows = Object.keys(groups).map(function (key) {
-    const group = groups[key]
-    const value = group.count > 0 ? round9(group.sum / group.count) : 0
-    const info = (expectedMap && expectedMap[key]) || { expected: 0, source: "floor" }
-    const expected = Number(info.expected) || 0
-    const coverage = round9(coverageOfUnits(group.count, expected))
-    const bucket = diagnose(value, coverage)
-    return {
-      id: group.id,
-      track: group.track,
-      topic: group.topic,
-      mastery: value,
-      coverage: coverage,
-      bucket: bucket,
-      label: diagnoseLabel(bucket),
-      action: diagnoseAction(bucket),
-      unitCount: group.count,
-    }
-  })
+  const rows = Object.keys(groups)
+    .map(function (key) {
+      return groups[key]
+    })
+    // 一个练过的单元都没有的知识点不出现在明细里：掌握度与覆盖度都是 0，
+    // 列出来只是噪声（learning 仓 689 道题的知识点全摆上去就是几十行 0）。
+    // 这与 P3-4「从没练过的单元不进 weak」是同一条规矩的另一面。
+    .filter(function (group) {
+      return group.count > 0
+    })
+    .map(function (group) {
+      const value = round9(group.sum / group.count)
+      const info = (expectedMap && expectedMap[group.id]) || { expected: 0, source: "floor" }
+      const expected = Number(info.expected) || 0
+      const coverage = round9(coverageOfUnits(group.count, expected))
+      const bucket = diagnose(value, coverage)
+      return {
+        id: group.id,
+        track: group.track,
+        topic: group.topic,
+        mastery: value,
+        coverage: coverage,
+        bucket: bucket,
+        label: diagnoseLabel(bucket),
+        action: diagnoseAction(bucket),
+        unitCount: group.count,
+      }
+    })
   rows.sort(function (a, b) {
     if (a.mastery !== b.mastery) return a.mastery - b.mastery
     if (a.id === b.id) return 0
