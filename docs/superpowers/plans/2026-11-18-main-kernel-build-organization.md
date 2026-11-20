@@ -221,7 +221,7 @@ engine/db/
 Windows 下 make 的 `$(shell ...)` 走 cmd.exe（见 `Makefile` L4-20 的注释），
 `tr` / `sed` 不可用 ⇒ **大写转换一律手写**。
 
-- [ ] **B1.1 建 `engine/db/tools/mm_profiles.mk`**
+- [x] **B1.1 建 `engine/db/tools/mm_profiles.mk`**（提交 `3cbc4e62c`）
 
   ```make
   # mm_profiles.mk —— MM 编译期裁剪的唯一真相源
@@ -332,7 +332,7 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   MM_PROFILES := full relational blob graph vector ft geo ts doc
   ```
 
-- [ ] **B1.2 自检：这个文件能被 make 正确解析**
+- [x] **B1.2 自检：这个文件能被 make 正确解析**
 
   在 `engine/db/Makefile` 末尾临时加一行（验完删掉）：
 
@@ -358,7 +358,7 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
 ⚠️ `MM_FILES_vector` 应该有 **10 项**（8 个 `modalities/vector/*.c` + `db_vec.c` + `repl_vec.c`）。
   对不上就说明路径写错了。
 
-- [ ] **B1.3 删掉临时目标，提交**
+- [x] **B1.3 删掉临时目标，提交**（已提交 `3cbc4e62c` 并推送）
 
   ```powershell
   cd C:\code\projects
@@ -367,7 +367,7 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   git push origin main 2>&1 | Out-String | Write-Output
   ```
 
-- [ ] **B1.4 写 `engine/db/tools/mm_profiles_test.sh`（先写、跑红）**
+- [x] **B1.4 写 `engine/db/tools/mm_profiles_test.sh`（先写、跑红）**（提交 `3cbc4e62c`）
 
 ⚠️ **（可执行性修正）B1 原来完全没有测试** —— `mm_profiles.mk` 是 8 个 profile 的
 **唯一真相源**，却没有一条断言能验证「某 profile 的文件清单正确」。
@@ -431,13 +431,23 @@ done
 exit $fail
 ```
 
-**TDD 顺序（硬要求）**：
-1. **先写这个脚本**，在 `mm_profiles.mk` 还**没建**的时候跑 → 必须**红**（`make` 报找不到文件）；
-2. 建 `mm_profiles.mk` → 脚本转绿；
-3. 故意把 `MM_FILES_blob` 里的一个文件名改错 → 脚本必须**红**（断言 2 抓到）；
-4. 改回来 → 绿。
+**TDD 顺序（实际执行记录）**：
 
-第 3 步是**反向验证** —— 没有它，你不知道这个测试是真在跑还是空转。
+1. **先写脚本**，`mm_profiles.mk` 当时已存在 → 先跑出 **8 条 FAIL**（`MM_SET_*` 全空）。
+
+   ⚠️ **红灯的原因不是 profile 写错，而是脚本自己有 bug**。最初用
+   `printf '...' | make -f - print` 喂 stdin。两个问题：
+   - Windows 上 `make -f -` 把整个输入当成一个**文件名**；
+   - 改成临时文件后，Git Bash 给的 `/c/...` 路径 MinGW make 不认。
+
+   ⇒ 最终做法：写一个临时 wrapper `.mk`，并用 `cygpath -w` 把根目录转成
+   Windows 路径再 `include`。Linux 上 `cygpath` 不存在，直接走原路径。
+
+2. 修好脚本 → **转绿**。
+3. **反向验证**：把 `MM_FILES_vector` 里的 `src/db_vec.c` 改成
+   `src/__missing_vec.c` ⇒ 报 `FAIL MM_FILES_vector 列了不存在的文件`
+   ⇒ 恢复即绿。**这一步证明断言 2 不是空转。**
+4. `make MM=unknown` ⇒ 解析期直接失败，并列出 9 个合法 profile。
 
 运行方式（Windows 上没有 `sh` 的 PATH 入口）：
 
@@ -446,13 +456,25 @@ cd C:\code\projects\engine\db
 & "C:\Program Files\Git\usr\bin\sh.exe" tools/mm_profiles_test.sh
 ```
 
-⚠️ 这个脚本要加进 `Makefile` 的 `check` 目标，与 `check_deps.sh` 并列：
+已挂进 `Makefile` 的 `check` 目标（与 `check_deps.sh` 并列）：
 
 ```make
-check:
-\tsh tools/check_deps.sh
-\tsh tools/mm_profiles_test.sh
+check: deps
+\t@sh tools/mm_profiles_test.sh
+\t@sh test/run.sh
 ```
+
+**B1 实际踩到的三个坑（回写）**：
+
+| 坑 | 症状 | 修法 |
+|---|---|---|
+| `CFLAGS :=` 立即赋值 | dry-run 里**一个 `-DDB_HAS_*` 都没有**（`MM_FLAGS` 恒为空，因为 MM 块在后面） | 改成递归赋值 `CFLAGS =` |
+| 计划把路径按「W-C 已完成」写 | `src/modalities/blob/` **不存在**，blob 实现全在 L1/L3 | 合成一行直写实际路径 |
+| 计划漏了 `db_ft_txn.c` | W-D 的 D-4b 新增文件，属于 ft 模态 | 补进 `MM_FILES_ft` |
+
+另外 `MM_FILES_vector` 计划里写了 `repl_vec.c`（正确），但 B1.2 的预期只写
+「10 项」—— 实际是 **11 项**（8 个 `modalities/vector/*.c` + `db_vec.c` +
+`repl_vec.c`）。已在测试里按集合断言，不再依赖人眼数字数。
 
 ---
 ---
