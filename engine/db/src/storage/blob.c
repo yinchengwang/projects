@@ -242,6 +242,21 @@ static int blob_commit_page(BlobStore *bs, u32 xid, u32 pid,
 
 /* ---------------- 创建对象 ---------------- */
 
+/*
+ * 一个索引块**实际**能放多少个 4 字节页号。
+ *
+ * 旧代码直接循环 BLOB_FRAMES_PER_INDEX（1024）次、每次写 4 字节 ⇒
+ * 写到 4096 字节，而数据区只有 PAGE_SIZE - HDR_SIZE = 4076 字节 ⇒
+ * **最后 20 字节写出整页之外**（after 是栈上的 u8[PAGE_SIZE]）。
+ *
+ * MinGW 上侥幸没炸，glibc 上 `*** stack smashing detected ***`。
+ * 完整来龙去脉与那个"每块覆盖 1024 帧"的保留理由见 blob.h 的同名宏注释。
+ */
+static u32 blob_index_slots(void)
+{
+    return (PAGE_SIZE - HDR_SIZE) / 4u;
+}
+
 int blob_create(BlobStore *bs, u64 nframes, u32 frame_size, BlobId *blob_id_out)
 {
     if (!bs || !blob_id_out)
@@ -404,7 +419,8 @@ int blob_create(BlobStore *bs, u64 nframes, u32 frame_size, BlobId *blob_id_out)
 
         memcpy(after, before, PAGE_SIZE);
         u8 *idx = after + HDR_SIZE;
-        for (u32 k = 0; k < BLOB_FRAMES_PER_INDEX; k++) {
+        u32 cap = blob_index_slots();
+        for (u32 k = 0; k < cap; k++) {
             u64 frame_no = b * BLOB_FRAMES_PER_INDEX + k;
             u32 v = (frame_no < nframes) ? frame_pids[frame_no] : PAGE_ID_NIL;
             put_u32(idx + 4u * k, v);

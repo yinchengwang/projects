@@ -23,7 +23,17 @@
 #define TRUNCATE_FILE(f, n) _chsize(_fileno(f), (n))
 #else
 #include <unistd.h>
-#define TRUNCATE_FILE(f, n) ((void)ftruncate(fileno(f), (n)))
+/*
+ * ⚠️ glibc 给 ftruncate 标了 warn_unused_result，`(void)ftruncate(...)` **不能**消警告
+ *    （-Wunused-result 看的是"结果有没有被使用"，void 强转不算使用）。
+ *    所以老老实实接返回值再丢掉 —— 这个测试不关心截断是否成功。
+ */
+static int truncate_file(FILE *f, long n)
+{
+    int rc = ftruncate(fileno(f), (off_t)n);
+    return rc;
+}
+#define TRUNCATE_FILE(f, n) ((void)truncate_file((f), (n)))
 #endif
 
 #include "common/error.h"

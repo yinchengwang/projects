@@ -408,7 +408,16 @@ static void t8_checksum(void)
 /* ---- 9) 更新：缩小可以，变长必须拒绝 ---- */
 static void t9_update(void)
 {
-    u8 rec[100];
+    /*
+     * ⚠️ 缓冲必须是 128 而不是 100：下面要构造一条 **120 字节**的记录去试
+     *    "变长必须被拒绝"。原来写的是 `u8 rec[100]` ⇒ fill_rec 往 100 字节的
+     *    栈缓冲里写 120 字节 ⇒ **栈溢出**。
+     *
+     * 这个 bug 在 MinGW 上一直没现形（栈布局宽松、_FORTIFY 不查），
+     * 但在 glibc 上直接 `*** stack smashing detected ***` —— 整个测试进程 abort。
+     * 是 W-B 的 B0（主核第一次在 Linux 上跑）发现的。
+     */
+    u8 rec[128];
     u16 slot, len;
     const u8 *got;
 

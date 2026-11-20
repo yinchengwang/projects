@@ -192,8 +192,24 @@ static void t10_corrupt(void)
 
     /* 结构性破坏（长度 / 计数 / tag）必须报错 */
     {
-        u8 bad[64];
+        /*
+         * ⚠️ 缓冲必须按 len 分配，不能写死 64：
+         *    这条用例的 payload 实测 **77 字节**，`u8 bad[64]` 下
+         *    `memcpy(bad, buf, 77)` 直接越过栈缓冲。
+         *    在 MinGW 上侥幸没炸（栈布局宽松），在 glibc 上被 ASan/栈保护抓到 ——
+         *    由 W-B 的 B0（主核第一次在 Linux 上跑）发现。
+         */
+        u8 *bad = (u8 *)malloc(len);
         JsonbValue *tree = NULL;
+
+        if (!bad) {
+            printf("    FAIL 内存不足\n");
+            failures++;
+            free(buf);
+            jsonb_free(orig);
+            jsonb_free(t);
+            return;
+        }
 
         memcpy(bad, buf, len);
         bad[1] = (u8)(bad[1] + 1u);        /* 对象计数 +1 */
@@ -206,6 +222,8 @@ static void t10_corrupt(void)
         CHECK(jsonb_decode(bad, len, &tree) == E_CORRUPT);
         jsonb_free(tree);
         tree = NULL;
+
+        free(bad);
     }
 
     free(buf);

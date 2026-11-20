@@ -284,7 +284,13 @@ static void t7_default_is_abort(void)
 #if defined(_WIN32)
     int rc = system("set DB_CATLOCK_CRASH=1 && build\\test_catalog_lock.exe >NUL 2>&1");
 #else
-    int rc = system("DB_CATLOCK_CRASH=1 ./build/test_catalog_lock.exe >/dev/null 2>&1");
+    /*
+     * ⚠️ POSIX 上的可执行文件**没有 .exe 后缀** —— 原来这里写了 `.exe`，
+     * 于是 system() 找不到文件、返回非 0 的"命令失败"，
+     * 而 rc != 0 这条断言**照样通过**（假绿），标记文件那条才红。
+     * 两条断言合起来才看得出问题 —— 少一条就变成"看起来在跑，其实没跑"。
+     */
+    int rc = system("DB_CATLOCK_CRASH=1 ./build/test_catalog_lock >/dev/null 2>&1");
 #endif
 
     /* 子进程被 abort 掉 → 退出码非 0 */

@@ -16,6 +16,11 @@
 #include "common/types.h"
 #include "wal/wal.h"
 
+#ifndef _WIN32
+/* ftruncate / fileno 在 POSIX 上要 unistd.h；Windows 走 _chsize（见下）*/
+#include <unistd.h>
+#endif
+
 static int failures = 0;
 
 #define CHECK(cond) do { \
@@ -151,7 +156,11 @@ int main(void)
                 extern int _chsize(int, long);
                 _chsize(_fileno(f), sz - 10);
 #else
-                (void)ftruncate(fileno(f), sz - 10);
+                /* ftruncate 带 warn_unused_result：接返回值再丢，别用 (void) 强转 */
+                {
+                    int trc = ftruncate(fileno(f), (off_t)(sz - 10));
+                    (void)trc;
+                }
 #endif
             }
             fclose(f);

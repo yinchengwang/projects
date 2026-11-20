@@ -70,13 +70,39 @@ bool p_expect_punct(Parser *p, const char *s)
     return false;
 }
 
+/*
+ * 把 token 文本拷进定长的名字缓冲。
+ *
+ * 【为什么不用 snprintf】
+ *
+ * `snprintf(out, SQL_NAME_MAX, "%s", src)` 里 src 是 char[256]、目标是 64 ——
+ * GCC 15 + glibc 的 -Wformat-truncation 能算出"可能截断"，在 -Werror 下直接红。
+ * MinGW 的 GCC 14 不报这个，所以本地一直是绿的：**这是纯 Linux 平台的差异**。
+ *
+ * 用显式的长度运算表达同一个语义（截到 SQL_NAME_MAX-1 字节 + NUL），
+ * 编译器就不替我们"猜"了。截断行为与原来**逐字一致**。
+ *
+ * ⚠️ 截断意味着两个超长标识符会撞成同一个名字。这是**既有行为**（原来就这样），
+ *    本函数不去改它 —— 真要改应该是词法层限制标识符长度并报错，
+ *    那是另一件事，不该混进这处移植修补。
+ */
+static void copy_name(char *out, const char *src)
+{
+    size_t n = strlen(src);
+
+    if (n >= (size_t)SQL_NAME_MAX)
+        n = (size_t)SQL_NAME_MAX - 1u;
+    memcpy(out, src, n);
+    out[n] = '\0';
+}
+
 bool p_expect_ident(Parser *p, char *out)
 {
     if (p->cur.type != TK_IDENT) {
         p_fail(p, "需要一个标识符");
         return false;
     }
-    snprintf(out, SQL_NAME_MAX, "%s", p->cur.text);
+    copy_name(out, p->cur.text);
     p_advance(p);
     return true;
 }
@@ -305,7 +331,7 @@ static Expr *parse_primary(Parser *p)
 
     if (p->cur.type == TK_IDENT) {
         char fname[SQL_NAME_MAX];
-        snprintf(fname, sizeof(fname), "%s", p->cur.text);
+        copy_name(fname, p->cur.text);
         p_advance(p);
 
         /* 后面紧跟 "(" → 函数调用（目前只有聚合函数） */

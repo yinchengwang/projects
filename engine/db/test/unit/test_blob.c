@@ -46,6 +46,24 @@ static int failures = 0;
 
 /* ---------------- WAL 钩子（统计日志条数） ---------------- */
 
+/*
+ * WAL 钩子的计数上下文（**它的地址会被存进 BlobStore**）。
+ *
+ * ⚠️ 所以传给 `blob_store_create` 的必须是**具名变量**，不能写复合字面量：
+ *
+ *     blob_store_create(pg, count_hook, &(WalCount){0}, &bs)   ← 错
+ *     WalCount wc = {0, 0, 0};
+ *     blob_store_create(pg, count_hook, &wc, &bs)             ← 对
+ *
+ * 复合字面量的生命周期是「所在的**块**」。上面那个写法若出现在 CHECK 宏里，
+ * 宏展开成 `do { … } while(0)`，那个块就是 do-while 本身 —— 语句一结束
+ * `WalCount` 就失效了，而 BlobStore 里还留着指向它的指针。
+ * 后续每次写日志都在往一个已经死掉的栈槽里 +1。
+ *
+ * 在 MinGW 上一直没现形（栈槽被复用后刚好还能写），
+ * 在 glibc 上直接 `*** stack smashing detected ***` ——
+ * 由 W-B 的 B0（主核第一次在 Linux 上跑）发现。
+ */
 typedef struct {
     int   n_pagedata;
     int   n_other;
@@ -90,7 +108,8 @@ static void t1_create(void)
     CHECK(pager_open(PATH, 64, &pg) == OK);
 
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     BlobId id = 0;
     CHECK(blob_create(bs, 10, BLOB_FRAME_SIZE, &id) == OK);
@@ -130,7 +149,8 @@ static void t2_write_read(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     const u64 nframes = 8;
     BlobId id = 0;
@@ -167,7 +187,8 @@ static void t3_read_frame(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     const u64 nframes = 5;
     BlobId id = 0;
@@ -200,7 +221,8 @@ static void t4_boundary_frames(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     const u64 nframes = 4;
     BlobId id = 0;
@@ -246,7 +268,8 @@ static void t5_io_amount(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     /*
      * 3001 帧 —— 够大，能体现"深访问"和"浅访问"的区别。
@@ -312,7 +335,8 @@ static void t6_isolation(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     BlobId a = 0, b = 0;
     CHECK(blob_create(bs, 3, BLOB_FRAME_SIZE, &a) == OK);
@@ -352,7 +376,8 @@ static void t7_partial(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     BlobId id = 0;
     CHECK(blob_create(bs, 4, BLOB_FRAME_SIZE, &id) == OK);
@@ -393,7 +418,8 @@ static void t8_out_of_range(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     BlobId id = 0;
     CHECK(blob_create(bs, 3, BLOB_FRAME_SIZE, &id) == OK);
@@ -512,7 +538,8 @@ static void t10_corrupt_header(void)
     Pager *pg = NULL;
     CHECK(pager_open(PATH, 64, &pg) == OK);
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     BlobId id = 0;
     CHECK(blob_create(bs, 3, BLOB_FRAME_SIZE, &id) == OK);
@@ -565,7 +592,8 @@ static void t11_many_objects(void)
     CHECK(pager_open(PATH, 64, &pg) == OK);
 
     BlobStore *bs = NULL;
-    CHECK(blob_store_create(pg, count_hook, &(WalCount){0}, &bs) == OK);
+    WalCount wc = {0, 0, 0};   /* 具名，见 WalCount 定义处的说明 */
+    CHECK(blob_store_create(pg, count_hook, &wc, &bs) == OK);
 
     /* 建 400 个对象 —— 远超 256 帧 */
     int created = 0;
