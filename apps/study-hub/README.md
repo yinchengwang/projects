@@ -59,12 +59,12 @@ STUDY_HUB_LEARNING_ROOT=/path/to/learning node server/main.js
 | `ARK_API_KEY` | 火山方舟密钥（**只从环境变量读**） | 无 |
 | `ARK_BASE_URL` | 方舟地址 | `https://ark.cn-beijing.volces.com/api/v3` |
 | `ANTHROPIC_API_KEY` | Anthropic 密钥（**只从环境变量读**） | 无 |
-| `ALGO_PLAN_LLM_ENABLED` | LLM 总开关，`0`/`false`/`off` = 关 | 未设＝按密钥自动判断 |
-| `ALGO_PLAN_LLM_PROVIDER` | `ark` / `anthropic` / `null` | 未设＝按密钥推断 |
-| `ALGO_PLAN_LLM_MODEL` | 模型名 | 按 provider 取默认 |
-| `ALGO_PLAN_LLM_BASE_URL` | 覆盖地址 | 按 provider 取默认 |
-| `ALGO_PLAN_LLM_SESSION_LIMIT` | 单次会话请求上限 | `20` |
-| `ALGO_PLAN_LLM_DAILY_LIMIT` | 每日请求上限 | `100` |
+| `STUDY_HUB_LLM_ENABLED` | LLM 总开关，`0`/`false`/`off` = 关 | 未设＝按密钥自动判断 |
+| `STUDY_HUB_LLM_PROVIDER` | `ark` / `anthropic` / `null` | 未设＝按密钥推断 |
+| `STUDY_HUB_LLM_MODEL` | 模型名 | 按 provider 取默认 |
+| `STUDY_HUB_LLM_BASE_URL` | 覆盖地址 | 按 provider 取默认 |
+| `STUDY_HUB_LLM_SESSION_LIMIT` | 单次会话请求上限 | `20` |
+| `STUDY_HUB_LLM_DAILY_LIMIT` | 每日请求上限 | `100` |
 
 密钥还可以放在 `apps/study-hub/.env` 里（`projects/.gitignore` 已经忽略它），
 启动时自动读取；**已存在的环境变量优先，`.env` 不覆盖**。
@@ -454,7 +454,7 @@ ARK_API_KEY=xxx node server/main.js
 - 每天最多 **100** 次请求；
 - 超了**直接停**，提示「今天用完了」，不会继续烧钱；
 - 计数落在 `settings` 表，键是 `llm.quota.session.*` 与 `llm.quota.daily.*`；
-- 上限可以用设置页，或用 `ALGO_PLAN_LLM_SESSION_LIMIT` / `ALGO_PLAN_LLM_DAILY_LIMIT` 调。
+- 上限可以用设置页，或用 `STUDY_HUB_LLM_SESSION_LIMIT` / `STUDY_HUB_LLM_DAILY_LIMIT` 调。
 
 ### 离线自检
 

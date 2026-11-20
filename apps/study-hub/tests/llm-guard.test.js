@@ -120,7 +120,7 @@ test("consumeAll：会话与每日两个计数同时扣", function () {
 
 test("seedLimits：环境变量里的配额写进 settings 表，但不覆盖已有的值", function () {
   const store = makeStore({ "llm.quota.session_limit": "7" })
-  seedLimits(store, { ALGO_PLAN_LLM_SESSION_LIMIT: "30", ALGO_PLAN_LLM_DAILY_LIMIT: "200" })
+  seedLimits(store, { STUDY_HUB_LLM_SESSION_LIMIT: "30", STUDY_HUB_LLM_DAILY_LIMIT: "200" })
   assert.equal(store.getSetting("llm.quota.session_limit"), "7", "已有的值不该被环境变量覆盖")
   assert.equal(store.getSetting("llm.quota.daily_limit"), "200", "没有的值应从环境变量写入")
 })

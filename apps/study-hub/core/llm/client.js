@@ -174,9 +174,9 @@ function errorText(payload) {
   return "没有返回错误详情"
 }
 
-/** 总开关：环境变量 ALGO_PLAN_LLM_ENABLED，0/false/off/no 表示关 */
+/** 总开关：环境变量 STUDY_HUB_LLM_ENABLED，0/false/off/no 表示关 */
 function readEnabledFlag(env) {
-  const raw = env.ALGO_PLAN_LLM_ENABLED
+  const raw = env.STUDY_HUB_LLM_ENABLED
   if (raw === undefined || raw === null || String(raw).trim() === "") return true
   const text = String(raw).trim().toLowerCase()
   if (text === "0" || text === "false" || text === "off" || text === "no") return false
@@ -194,19 +194,19 @@ function normalizeProvider(value) {
   return text
 }
 
-/** 地址：显式 > ALGO_PLAN_LLM_BASE_URL > ARK_BASE_URL > 内置默认 */
+/** 地址：显式 > STUDY_HUB_LLM_BASE_URL > ARK_BASE_URL > 内置默认 */
 function resolveBaseUrl(o, env, provider) {
   if (o.baseUrl) return o.baseUrl
-  if (env.ALGO_PLAN_LLM_BASE_URL) return env.ALGO_PLAN_LLM_BASE_URL
+  if (env.STUDY_HUB_LLM_BASE_URL) return env.STUDY_HUB_LLM_BASE_URL
   if (provider === "ark" && env.ARK_BASE_URL) return env.ARK_BASE_URL
   if (provider === "ark") return ARK_DEFAULT_BASE_URL
   return ANTHROPIC_DEFAULT_BASE_URL
 }
 
-/** 模型：显式 > ALGO_PLAN_LLM_MODEL > 内置默认 */
+/** 模型：显式 > STUDY_HUB_LLM_MODEL > 内置默认 */
 function resolveModel(o, env, provider) {
   if (o.model) return o.model
-  if (env.ALGO_PLAN_LLM_MODEL) return env.ALGO_PLAN_LLM_MODEL
+  if (env.STUDY_HUB_LLM_MODEL) return env.STUDY_HUB_LLM_MODEL
   return provider === "ark" ? ARK_DEFAULT_MODEL : ANTHROPIC_DEFAULT_MODEL
 }
 
@@ -241,11 +241,11 @@ function createLlmClient(opts) {
 
   // 1. 总开关
   if (o.enabled === false) return new NullClient("已在设置里关闭 LLM")
-  if (readEnabledFlag(env) === false) return new NullClient("环境变量 ALGO_PLAN_LLM_ENABLED 把 LLM 关了")
+  if (readEnabledFlag(env) === false) return new NullClient("环境变量 STUDY_HUB_LLM_ENABLED 把 LLM 关了")
 
   // 2. provider：显式 > 环境变量 > 按密钥推断
   const providerFromOption = normalizeProvider(o.provider)
-  const providerFromEnv = normalizeProvider(env.ALGO_PLAN_LLM_PROVIDER)
+  const providerFromEnv = normalizeProvider(env.STUDY_HUB_LLM_PROVIDER)
   const providerIsExplicit = Boolean(providerFromOption || providerFromEnv)
   let provider = providerFromOption || providerFromEnv
   if (!provider) {

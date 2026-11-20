@@ -79,8 +79,8 @@ test("createLlmClient：provider 指定了但没有密钥，降级成 null 而�
   assert.ok(client.reason.includes("API Key"), "关闭原因里应提到 API Key")
 })
 
-test("createLlmClient：ALGO_PLAN_LLM_ENABLED=0 强制关闭", function () {
-  const client = createLlmClient({ env: { ARK_API_KEY: "k", ALGO_PLAN_LLM_ENABLED: "0" } })
+test("createLlmClient：STUDY_HUB_LLM_ENABLED=0 强制关闭", function () {
+  const client = createLlmClient({ env: { ARK_API_KEY: "k", STUDY_HUB_LLM_ENABLED: "0" } })
   assert.equal(client.name, "null")
 })
 
@@ -102,7 +102,7 @@ test("createLlmClient：未知 provider 降级成 null 而不是抛错", functio
 
 test("createLlmClient：环境变量可以覆盖地址与模型", function () {
   const client = createLlmClient({
-    env: { ARK_API_KEY: "k", ARK_BASE_URL: "https://ark.test/api/v3", ALGO_PLAN_LLM_MODEL: "my-model" },
+    env: { ARK_API_KEY: "k", ARK_BASE_URL: "https://ark.test/api/v3", STUDY_HUB_LLM_MODEL: "my-model" },
   })
   assert.equal(client.name, "ark")
   assert.equal(client.baseUrl, "https://ark.test/api/v3")

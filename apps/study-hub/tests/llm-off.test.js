@@ -127,13 +127,13 @@ test("没有密钥时降级成 NullClient，返回明确的中文提示", async 
 
 test("三种关法都降级成 NullClient：没密钥、环境变量关、设置页关", function () {
   assert.equal(createLlmClient({ env: {} }).name, "null")
-  assert.equal(createLlmClient({ env: { ARK_API_KEY: "k", ALGO_PLAN_LLM_ENABLED: "0" } }).name, "null")
+  assert.equal(createLlmClient({ env: { ARK_API_KEY: "k", STUDY_HUB_LLM_ENABLED: "0" } }).name, "null")
   assert.equal(createLlmClient({ enabled: false, env: { ARK_API_KEY: "k" } }).name, "null")
 })
 
 test("三种关法分别是三种原因，且都说明其余功能不受影响", async function () {
   const noKey = createLlmClient({ env: {} })
-  const byEnv = createLlmClient({ env: { ARK_API_KEY: "k", ALGO_PLAN_LLM_ENABLED: "0" } })
+  const byEnv = createLlmClient({ env: { ARK_API_KEY: "k", STUDY_HUB_LLM_ENABLED: "0" } })
   const bySetting = createLlmClient({ enabled: false, env: { ARK_API_KEY: "k" } })
   const all = [noKey, byEnv, bySetting]
   all.forEach(function (c) {

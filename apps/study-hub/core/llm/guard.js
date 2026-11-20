@@ -132,11 +132,11 @@ function limits(store) {
  */
 function seedLimits(store, env) {
   const e = env || {}
-  const session = Number(e.ALGO_PLAN_LLM_SESSION_LIMIT)
+  const session = Number(e.STUDY_HUB_LLM_SESSION_LIMIT)
   if (Number.isFinite(session) && session > 0 && !store.getSetting(SESSION_LIMIT_KEY, "")) {
     store.setSetting(SESSION_LIMIT_KEY, String(Math.floor(session)))
   }
-  const daily = Number(e.ALGO_PLAN_LLM_DAILY_LIMIT)
+  const daily = Number(e.STUDY_HUB_LLM_DAILY_LIMIT)
   if (Number.isFinite(daily) && daily > 0 && !store.getSetting(DAILY_LIMIT_KEY, "")) {
     store.setSetting(DAILY_LIMIT_KEY, String(Math.floor(daily)))
   }
