@@ -95,8 +95,9 @@ int exec_explain(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
 
     if (have_plan && plan.pushed) {
         snprintf(lines[n++], sizeof(lines[0]),
-                 "Index Scan on %s  (列 %s)",
-                 st->table, tc.cols[plan.pred.col_idx].name);
+                 "Index Scan on %s  (列 %s%s)",
+                 st->table, tc.cols[plan.conj[0].col_idx].name,
+                 plan.nconj > 1u ? " 等" : "");
     } else {
         snprintf(lines[n++], sizeof(lines[0]), "Seq Scan on %s", st->table);
     }
@@ -104,14 +105,35 @@ int exec_explain(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
     snprintf(lines[n++], sizeof(lines[0]), "  rows_est = %lld",
              (long long)(have_stats ? plan.nrows : 0));
 
-    /* 可下推的谓词（不管最后推没推，都告诉你"找到了什么"） */
-    if (have_plan && plan.pred.col_idx >= 0 &&
-        plan.pred.col_idx < tc.ncols) {
-        char vs[128];
-        val_to_str(&plan.pred.val, vs, (int)sizeof(vs));
-        snprintf(lines[n++], sizeof(lines[0]), "  Index Cond: (%s %s %s)",
-                 tc.cols[plan.pred.col_idx].name,
-                 op_text(plan.pred.op), vs);
+    /*
+     * 可下推的谓词（不管最后推没推，都告诉你"找到了什么"）。
+     *
+     * 【为什么要把整组都打出来】
+     * 下推是个**看不见**的优化。只显示第一条会让人以为"只推了一个"，
+     * 而双边界范围恰恰是**两条一起**才把范围收成一个区间 ——
+     * 那正是这个数组存在的理由，显示上必须能看出来。
+     */
+    if (have_plan && plan.nconj > 0u &&
+        plan.conj[0].col_idx >= 0 && plan.conj[0].col_idx < tc.ncols) {
+        char cond[192];
+        int off = 0;
+
+        cond[0] = '\0';
+        for (u32 i = 0; i < plan.nconj; i++) {
+            char vs[64];
+
+            if (plan.conj[i].col_idx < 0 || plan.conj[i].col_idx >= tc.ncols)
+                continue;
+            val_to_str(&plan.conj[i].val, vs, (int)sizeof(vs));
+            off += snprintf(cond + off, sizeof(cond) - (size_t)off,
+                            "%s%s %s %s",
+                            i ? " AND " : "",
+                            tc.cols[plan.conj[i].col_idx].name,
+                            op_text(plan.conj[i].op), vs);
+            if (off >= (int)sizeof(cond))
+                break;
+        }
+        snprintf(lines[n++], sizeof(lines[0]), "  Index Cond: (%s)", cond);
     } else if (st->where) {
         snprintf(lines[n++], sizeof(lines[0]), "  Index Cond: (无)");
     }

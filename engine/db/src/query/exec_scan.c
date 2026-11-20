@@ -365,43 +365,77 @@ static bool leaf_predicate(Expr *e, int ncols, Predicate *out)
 }
 
 /*
- * 在 AND 树里收集"能下推"的叶子谓词，挑**选择率最小**的那个。
+ * 在 AND 树里收集**所有**能下推的叶子谓词（按出现顺序，最多 PD_CONJ_MAX 条）。
  *
- * 【为什么不再"找到第一个就推"】
- * `WHERE a = 1 AND b > 900` 里两个谓词可能都能下推，
- * 但 `a = 1` 命中 1 行、`b > 900` 命中三分之一 ——
- * 推第一个就是白读 3 万行。挑最窄的那个才是"用索引"的本意。
+ * 【为什么收集成一组，而不是挑一个】
+ *
+ * 第一版只挑选择率最小的**一个**。它对 `WHERE a = 1 AND b > 900` 是对的选择
+ *（`a = 1` 命中 1 行，推 `b > 900` 就是白读 3 万行）。
+ *
+ * 但它在**双边界范围**上是错的：`WHERE t >= a AND t < b` 里两条各占一边，
+ * 挑任何**一条**都只能削掉一半 —— 而两条一起才能把范围收成真正的区间。
+ * 实测（ts，3 个分区）：`>= 第1天` 读 6 页，`>= 第1天 AND < 第2天` **也读 6 页**，
+ * 因为推的是 `>= 第1天`（全覆盖）。两条一起推才读到 4 页。
+ *
+ * ⇒ 所以这里把**全部**能推的叶子收上来，交给模态自己决定吃几条。
+ * 挑最窄的那条退化成"模态只吃一条时"的兜底（见 plan_push）。
  *
  * 【为什么只用 AND 树】
  * OR 的两个分支不能只推一个（推了会漏掉另一边的行）。
  * 所以只沿 AND 往下走，OR 整个不碰。
+ *
+ * 【超过 PD_CONJ_MAX 怎么办】
+ * 只收前 PD_CONJ_MAX 条，剩下的丢掉 —— **丢是安全的**：
+ * 合取取子集得到的是超集，执行器反正会完整求值 WHERE。
+ * （反过来"为了凑数而截断语义"才危险，那会让人以为推了其实没推。）
  */
-static void collect_pushable(Expr *e, TableCtx *tc, i64 nrows,
-                             Predicate *best, bool *have, double *best_sel)
+static u32 collect_pushable(Expr *e, TableCtx *tc, Predicate *out, u32 cap)
 {
+    u32 n = 0;
+
+    /* 用显式栈做中序遍历，避免递归时把 n 传丢 */
+    Expr *stack[32];
+    int sp = 0;
+
     if (!e)
-        return;
+        return 0;
+    stack[sp++] = e;
 
-    if (e->kind == EX_BIN && e->op == EX_OP_AND) {
-        collect_pushable(e->l, tc, nrows, best, have, best_sel);
-        collect_pushable(e->r, tc, nrows, best, have, best_sel);
-        return;
+    while (sp > 0) {
+        Expr *cur = stack[--sp];
+
+        if (!cur)
+            continue;
+
+        if (cur->kind == EX_BIN && cur->op == EX_OP_AND) {
+            /* 先压右再压左 ⇒ 弹出顺序与源码书写顺序一致 */
+            if (sp + 2 <= (int)(sizeof(stack) / sizeof(stack[0]))) {
+                stack[sp++] = cur->r;
+                stack[sp++] = cur->l;
+            }
+            continue;
+        }
+
+        if (n >= cap)
+            continue;               /* 收满了：剩下的丢掉（安全方向） */
+
+        Predicate p;
+        if (!leaf_predicate(cur, tc->ncols, &p))
+            continue;
+
+        /*
+         * 门槛：模态说"能不能"（能力协商，与代价无关）。
+         *
+         * 这里问的是**单条**能不能 —— 用来筛掉本模态完全不认识的列/算子。
+         * 整组能不能吃由 plan_push 再问一次（can_push 的 n 参数）。
+         */
+        if (tc->am->can_push(tc->am, &p, 1u) != OK)
+            continue;
+
+        out[n++] = p;
     }
 
-    Predicate p;
-    if (!leaf_predicate(e, tc->ncols, &p))
-        return;
-
-    /* 门槛：模态说"能不能"（能力协商，与代价无关） */
-    if (tc->am->can_push(tc->am, &p) != OK)
-        return;
-
-    double sel = exec_cost_sel(p.op, nrows);
-    if (!*have || sel < *best_sel) {
-        *best = p;
-        *best_sel = sel;
-        *have = true;
-    }
+    return n;
 }
 
 /*
@@ -438,20 +472,57 @@ int plan_push(Db *db, TableCtx *tc, Expr *where, PushPlan *out)
                       (catalog_nrows(db->cat, tc->tid, &nrows) == OK);
     out->nrows = nrows;
 
-    bool have = false;
-    double best_sel = 2.0;
-    collect_pushable(where, tc, out->have_stats ? nrows : 1,
-                     &out->pred, &have, &best_sel);
+    Predicate cand[PD_CONJ_MAX];
+    i64 sel_rows = out->have_stats ? nrows : 1;
+    u32 ncand = collect_pushable(where, tc, cand, PD_CONJ_MAX);
 
-    if (!have) {
+    if (ncand == 0u) {
         out->why = "没有可下推的谓词";
         return E_NOTSUP;
     }
 
-    out->sel = best_sel;
+    /*
+     * 先问模态：**整组**吃得下吗？
+     *
+     * 吃得下就用整组（双边界范围只有这样才收成一个区间）。
+     * 吃不下就退回老行为：逐条按选择率挑最窄的一条。
+     * 两条路都不会漏行 —— 执行器永远完整求值 WHERE。
+     */
+    if (tc->am->can_push(tc->am, cand, ncand) == OK) {
+        memcpy(out->conj, cand, (size_t)ncand * sizeof(Predicate));
+        out->nconj = ncand;
+
+        /*
+         * 合并选择率：按**独立假设**取连乘（教科书口径）。
+         *
+         * ⚠️ 同一列上的双边界范围会被低估（两个各 1/3 连乘成 1/9，
+         * 而实际常是 1/3）。低估的方向是"更倾向走索引" —— 那是**保守**的
+         * 一侧：可能多走一次索引，不会算错结果。反过来（高估）会让本该
+         * 走索引的查询退回全扫，只是慢；也不会错。两边都不影响正确性，
+         * 所以这里不为了好看去编一个系数。
+         */
+        double sel = 1.0;
+        for (u32 i = 0; i < ncand; i++)
+            sel *= exec_cost_sel(out->conj[i].op, sel_rows);
+        out->sel = sel;
+    } else {
+        u32 best = 0;
+        double best_sel = exec_cost_sel(cand[0].op, sel_rows);
+
+        for (u32 i = 1; i < ncand; i++) {
+            double s = exec_cost_sel(cand[i].op, sel_rows);
+            if (s < best_sel) {
+                best_sel = s;
+                best = i;
+            }
+        }
+        memcpy(&out->conj[0], &cand[best], sizeof(Predicate));
+        out->nconj = 1u;
+        out->sel = best_sel;
+    }
 
     if (out->have_stats) {
-        exec_cost_decide(nrows, best_sel, &out->plan);
+        exec_cost_decide(nrows, out->sel, &out->plan);
         out->pushed = out->plan.use_index;
         out->why = out->plan.why;
     } else {
@@ -474,7 +545,7 @@ static bool try_push(Db *db, Expr *where, TableCtx *tc, AmScan **out)
     if (plan_push(db, tc, where, &plan) != OK || !plan.pushed)
         return false;
 
-    if (tc->am->push(tc->am, &plan.pred, out) != OK)
+    if (tc->am->push(tc->am, plan.conj, plan.nconj, out) != OK)
         return false;
 
     return true;

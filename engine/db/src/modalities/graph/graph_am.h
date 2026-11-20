@@ -205,7 +205,7 @@ int ga_num_to_rid(i64 num, Rid *out);
 int ga_nodeid_to_rid(const DbValue *v, Rid *out);
 
 /* 下推回调（实现见 graph_am_push.c） */
-int graph_am_can_push(StorageAM *am, const Predicate *p);
-int graph_am_push(StorageAM *am, const Predicate *p, AmScan **out);
+int graph_am_can_push(StorageAM *am, const Predicate *ps, u32 n);
+int graph_am_push(StorageAM *am, const Predicate *ps, u32 n, AmScan **out);
 
 #endif /* DB_MODALITIES_GRAPH_GRAPH_AM_H */

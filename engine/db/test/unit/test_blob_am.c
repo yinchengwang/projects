@@ -281,23 +281,23 @@ static void t5_pushdown(Env *e, BlobId id1)
     p.col_idx = 0;
     p.op = PD_EQ;
     val_int(&p.val, (i64)id1);
-    CHECK(e->am_frames.can_push(&e->am_frames, &p) == OK);
+    CHECK(e->am_frames.can_push(&e->am_frames, &p, 1u) == OK);
 
     /* 别的列推不了 */
     p.col_idx = 1;                 /* frame_no */
-    CHECK(e->am_frames.can_push(&e->am_frames, &p) == E_NOTSUP);
+    CHECK(e->am_frames.can_push(&e->am_frames, &p, 1u) == E_NOTSUP);
 
     /* 不支持的算子推不了 */
     p.col_idx = 0;
     p.op = PD_NE;
-    CHECK(e->am_frames.can_push(&e->am_frames, &p) == E_NOTSUP);
+    CHECK(e->am_frames.can_push(&e->am_frames, &p, 1u) == E_NOTSUP);
 
     /* 下推：只枚举那一个对象的帧 */
     p.op = PD_EQ;
     val_int(&p.val, (i64)id1);
 
     AmScan *scan = NULL;
-    CHECK(e->am_frames.push(&e->am_frames, &p, &scan) == OK);
+    CHECK(e->am_frames.push(&e->am_frames, &p, 1u, &scan) == OK);
 
     u8 buf[64];
     u16 len = 0;
@@ -314,7 +314,7 @@ static void t5_pushdown(Env *e, BlobId id1)
     /* 范围下推：两个对象都在范围内 */
     p.op = PD_GE;
     val_int(&p.val, 1);
-    CHECK(e->am_frames.push(&e->am_frames, &p, &scan) == OK);
+    CHECK(e->am_frames.push(&e->am_frames, &p, 1u, &scan) == OK);
     n = 0;
     while (e->am_frames.scan_next(&e->am_frames, scan, &rid,
                                   buf, sizeof(buf), &len) == OK)

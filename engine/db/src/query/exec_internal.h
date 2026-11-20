@@ -113,10 +113,25 @@ typedef struct {
  */
 typedef struct {
     bool      pushed;      /* 决策：下推吗 */
-    Predicate pred;        /* 下推的谓词（pushed = true 时有效） */
+
+    /*
+     * 下推的**合取谓词组**（pushed = true 时 nconj >= 1）。
+     *
+     * 【为什么是数组而不是单个谓词】
+     *
+     * `WHERE time >= a AND time < b` 是两个谓词。第一版只能推一个 ⇒
+     * 双边界范围实际只推一边（实测：`>= 第2天` 与 `>= 第2天 AND < 第3天`
+     * 读的页数**一模一样**）。契约加宽之后一次带走整组。
+     *
+     * ⚠️ nconj 可能小于 WHERE 里的 AND 项数（模态可能只吃得下一部分，
+     *    或者超过 PD_CONJ_MAX）。执行器永远完整求值 WHERE，所以少推是安全的。
+     */
+    Predicate conj[PD_CONJ_MAX];
+    u32       nconj;
+
     bool      have_stats;  /* 有没有行数估算 */
     i64       nrows;       /* 估算行数 */
-    double    sel;         /* 选中谓词的选择率 */
+    double    sel;         /* 这一组的合并选择率 */
     CostPlan  plan;        /* 两个代价与理由 */
     const char *why;       /* 决策理由（静态字符串） */
 } PushPlan;

@@ -468,27 +468,41 @@ static int ts_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
  * 所以这里只认四种算子（>= / > / <= / <）与整数常量，
  * 其余（OR、函数包裹、列比列、浮点比较）都不认。
  */
-static int ts_am_can_push(StorageAM *am, const Predicate *p)
+static int ts_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
 {
     TsAmExt *ext = ts_am_ext((TsAmCtx *)am->impl);
 
-    if (!ext || !p) {
+    if (!ext || !ps || n == 0u) {
         return E_INVAL;
     }
     if (ext->kind != TS_AM_KIND_READINGS) {
         return E_NOTSUP;
     }
-    if (p->col_idx != TS_COL_TIME) {
-        return E_NOTSUP;
-    }
-    if (p->val.is_null) {
-        return E_NOTSUP;
-    }
-    if (p->val.type != T_INT8 && p->val.type != T_INT4) {
-        return E_NOTSUP;
-    }
-    if (p->op != PD_GE && p->op != PD_GT && p->op != PD_LE && p->op != PD_LT) {
-        return E_NOTSUP;
+
+    /*
+     * 合取要求**每一条**都在时间列上、都是整数范围比较。
+     *
+     * 【为什么整组都要能认】
+     * 只要有一条认不了（比如 tag 列），交出去就等于"说好吃整组、其实只吃一半"，
+     * 而 EXPLAIN 会把整组都显示成下推条件 —— 那是骗人。
+     * 退回单条由 plan_push 负责挑最窄的那一条。
+     */
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+
+        if (p->col_idx != TS_COL_TIME) {
+            return E_NOTSUP;
+        }
+        if (p->val.is_null) {
+            return E_NOTSUP;
+        }
+        if (p->val.type != T_INT8 && p->val.type != T_INT4) {
+            return E_NOTSUP;
+        }
+        if (p->op != PD_GE && p->op != PD_GT &&
+            p->op != PD_LE && p->op != PD_LT) {
+            return E_NOTSUP;
+        }
     }
     return OK;
 }
@@ -502,19 +516,42 @@ static int ts_am_can_push(StorageAM *am, const Predicate *p)
  * 所以 >= v 翻译成 [v, +∞)（而不是 [v, v]）——
  * 少给才是 bug，多给只是慢一点。
  */
-static int ts_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+static int ts_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                      AmScan **out)
 {
     i64 lo = INT64_MIN;
     i64 hi = INT64_MAX;
 
-    if (ts_am_can_push(am, p) != OK) {
+    if (ts_am_can_push(am, ps, n) != OK) {
         return E_NOTSUP;
     }
 
-    if (p->op == PD_GE || p->op == PD_GT) {
-        lo = p->val.i;
-    } else {
-        hi = p->val.i;
+    /*
+     * 把同一列（time）上的所有合取条件**收成一个时间区间**。
+     *
+     * 【这是本项目时间谓词真正省 IO 的关键】
+     * 改之前只带一个谓词 ⇒ `time >= a AND time < b` 只能推一边：
+     * 推 `>= a` 覆盖几个分区就按几个分区读（实测 3 个分区读 6 页，
+     * 与"只推左边"完全一样）。两条一起收成 [a, b] 之后，
+     * 分区裁剪才真正只碰相交的那几个（实测 4 页）。
+     *
+     * 【为什么 lo/hi 取 max/min 是安全的】
+     * 合取里每一条都必须成立 ⇒ 收窄后的区间仍是超集。
+     * 而裁剪层本身也是超集语义（ts_prune_window_hits 用闭区间判相交），
+     * 所以一路"宁可多给"，最后一律由执行器完整求值 WHERE 收口。
+     */
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+
+        if (p->op == PD_GE || p->op == PD_GT) {
+            if (p->val.i > lo) {
+                lo = p->val.i;
+            }
+        } else {
+            if (p->val.i < hi) {
+                hi = p->val.i;
+            }
+        }
     }
     return ts_am_open_scan(am, true, lo, hi, out);
 }

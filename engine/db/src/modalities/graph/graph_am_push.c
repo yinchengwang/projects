@@ -169,12 +169,11 @@ static bool ga_is_int_value(const DbValue *v)
     return v && !v->is_null && (v->type == T_INT4 || v->type == T_INT8);
 }
 
-int graph_am_can_push(StorageAM *am, const Predicate *p)
+/*
+ * 单条谓词能不能处理（内部用：整组判定时逐条调它）。
+ */
+static int ga_can_push_one(GraphAmCtx *c, const Predicate *p)
 {
-    GraphAmCtx *c = ga_ctx_of(am);
-    if (!c || !p)
-        return E_NOTSUP;
-
     if (p->col_idx < 0 || p->col_idx >= c->ncols)
         return E_NOTSUP;
 
@@ -209,6 +208,27 @@ int graph_am_can_push(StorageAM *am, const Predicate *p)
     return OK;
 }
 
+int graph_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
+{
+    GraphAmCtx *c = ga_ctx_of(am);
+
+    if (!c || !ps || n == 0u)
+        return E_NOTSUP;
+
+    /*
+     * ⚠️ 整组要求**每一条都能处理**。
+     *
+     * 图模态的下推是"挑一条能真省 IO 的当锚点"（node_id 等值 / 邻接链），
+     * 其余属性条件做自滤。所以只要有一条完全认不了（比如非等值的边表条件），
+     * 整组就退回去 —— 由 plan_push 挑最窄的那一条单独下推。
+     */
+    for (u32 i = 0; i < n; i++) {
+        if (ga_can_push_one(c, &ps[i]) != OK)
+            return E_NOTSUP;
+    }
+    return OK;
+}
+
 /* ---------------- 下推 ---------------- */
 
 /*
@@ -217,11 +237,32 @@ int graph_am_can_push(StorageAM *am, const Predicate *p)
  * 行源和全表扫描同构：scan_next 给 (rid, 字节串)。
  * 于是执行器只有一种取行路径 —— 不需要为下推新增算子类型。
  */
-int graph_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+int graph_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                  AmScan **out)
 {
     GraphAmCtx *c = ga_ctx_of(am);
-    if (!c || !p || !out)
+
+    if (!c || !ps || n == 0u || !out)
         return E_INVAL;
+
+    /*
+     * 从整组里挑**锚点**：优先 node_id 等值（直接定位一个节点），
+     * 否则用第一条（属性列自滤 / 邻接链）。
+     *
+     * 其余同列的条件目前不叠加 —— 自滤只记一条。
+     * 这是**保守**的一侧：多给行（执行器会复检），不漏行。
+     * 真正的收益来自"有锚点"与"没锚点"的差别，不在多叠一条属性条件。
+     */
+    const Predicate *p = &ps[0];
+
+    if (c->is_nodes) {
+        for (u32 i = 1; i < n; i++) {
+            if (ps[i].col_idx == 0 && ps[i].op == PD_EQ) {
+                p = &ps[i];
+                break;
+            }
+        }
+    }
 
     GraphScan *st = calloc(1, sizeof(*st));
     if (!st)

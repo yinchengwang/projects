@@ -471,21 +471,34 @@ static int heap_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
  * 执行器不知道"哪些列有索引"—— 那是表和模态的知识。
  * 它只负责把表达式翻译成 Predicate。
  */
-static int heap_am_can_push(StorageAM *am, const Predicate *p)
+static int heap_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
 {
     HeapAmCtx *c = ctx_of(am);
-    if (!c || !p)
+
+    if (!c || !ps || n == 0u)
         return E_NOTSUP;
 
-    if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
-        p->op != PD_LE && p->op != PD_GE)
-        return E_NOTSUP;
+    /*
+     * 合取要求**每一条**都有索引 —— 一条都不能漏。
+     *
+     * 【为什么不是"有索引的那几条我就吃"】
+     * 吃一部分是安全的（超集），但 EXPLAIN 显示的下推条件就会和实际不符。
+     * 下推本来就是个看不见的优化，说不清就等于没法维护。
+     * ⇒ 严格：整组都能用 B+tree 才接，否则退回单条（plan_push 会挑最窄的那条）。
+     */
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
 
-    if (p->col_idx < 0 || p->col_idx >= c->ncols)
-        return E_NOTSUP;
+        if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
+            p->op != PD_LE && p->op != PD_GE)
+            return E_NOTSUP;
 
-    if (!index_for_col(c, p->col_idx))
-        return E_NOTSUP;
+        if (p->col_idx < 0 || p->col_idx >= c->ncols)
+            return E_NOTSUP;
+
+        if (!index_for_col(c, p->col_idx))
+            return E_NOTSUP;
+    }
 
     return OK;
 }
@@ -498,15 +511,46 @@ static int heap_am_can_push(StorageAM *am, const Predicate *p)
  * 那是**超集**，执行器会重新求值 WHERE 把它滤掉。
  * （多给行 = 慢一点；少给行 = 数据错。）
  */
-static int heap_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+static int heap_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                        AmScan **out)
 {
     HeapAmCtx *c = ctx_of(am);
-    if (!c || !p || !out)
+
+    if (!c || !ps || n == 0u || !out)
         return E_INVAL;
 
-    const IndexInfo *ix = index_for_col(c, p->col_idx);
+    /*
+     * 选一列，把这一列上的所有合取条件**收成一个区间**。
+     *
+     * 【为什么是"一列"而不是"每条各走一次索引"】
+     * 一个 B+tree 游标只能有一个区间。多条不同列的谓词想同时用上，
+     * 得做索引交集（两个游标 + 求交）—— 那是另一个算子，不是下推。
+     * 所以这里只挑一列，其余交给执行器复检 WHERE（本来就要复检）。
+     *
+     * 【为什么偏好等值】
+     * 等值是能收得最紧的一种（区间退化成点），收益最大。
+     * ⚠️ 这里**不**用选择率代价模型 —— 那一层在 query/，
+     * spi/ 不许依赖它（分层纪律）。所以规则只能是这样一条纯结构的启发式：
+     * 有等值优先等值，否则用第一条的列。
+     *
+     * 【为什么"同一列的多条可以叠加"是安全的】
+     * 合取里的**每一条都必须成立** ⇒ 只用其中任意几条去收窄，拿到的
+     * 一定是超集。所以 `t >= a AND t < b` 用 (a, b) 收成一个闭区间，
+     * 不会漏行 —— 而这正是双边界范围能真正少读页的原因。
+     */
+    int col_idx = ps[0].col_idx;
+    for (u32 i = 0; i < n; i++) {
+        if (ps[i].op == PD_EQ) {
+            col_idx = ps[i].col_idx;
+            break;
+        }
+    }
+
+    const IndexInfo *ix = index_for_col(c, col_idx);
     if (!ix)
         return E_NOTSUP;
+
+    const ColDesc *col = &c->cols[col_idx];
 
     /*
      * 边界用复合键的「值部分 + RID 极值」，
@@ -521,27 +565,36 @@ static int heap_am_push(StorageAM *am, const Predicate *p, AmScan **out)
     u16 lolen = 0;
     u16 hilen = 0;
 
-    const ColDesc *col = &c->cols[p->col_idx];
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
 
-    switch (p->op) {
-    case PD_EQ:
-        if (index_key_bound_lo(col, &p->val, lobuf, sizeof(lobuf), &lolen) != OK)
+        if (p->col_idx != col_idx)
+            continue;
+
+        switch (p->op) {
+        case PD_EQ:
+            if (index_key_bound_lo(col, &p->val, lobuf, sizeof(lobuf),
+                                   &lolen) != OK)
+                return E_NOTSUP;
+            if (index_key_bound_hi(col, &p->val, hibuf, sizeof(hibuf),
+                                   &hilen) != OK)
+                return E_NOTSUP;
+            break;
+        case PD_GT:
+        case PD_GE:
+            if (index_key_bound_lo(col, &p->val, lobuf, sizeof(lobuf),
+                                   &lolen) != OK)
+                return E_NOTSUP;
+            break;
+        case PD_LT:
+        case PD_LE:
+            if (index_key_bound_hi(col, &p->val, hibuf, sizeof(hibuf),
+                                   &hilen) != OK)
+                return E_NOTSUP;
+            break;
+        default:
             return E_NOTSUP;
-        if (index_key_bound_hi(col, &p->val, hibuf, sizeof(hibuf), &hilen) != OK)
-            return E_NOTSUP;
-        break;
-    case PD_GT:
-    case PD_GE:
-        if (index_key_bound_lo(col, &p->val, lobuf, sizeof(lobuf), &lolen) != OK)
-            return E_NOTSUP;
-        break;
-    case PD_LT:
-    case PD_LE:
-        if (index_key_bound_hi(col, &p->val, hibuf, sizeof(hibuf), &hilen) != OK)
-            return E_NOTSUP;
-        break;
-    default:
-        return E_NOTSUP;
+        }
     }
 
     const u8 *lo = (lolen > 0) ? lobuf : NULL;
@@ -564,7 +617,6 @@ static int heap_am_push(StorageAM *am, const Predicate *p, AmScan **out)
     *out = (AmScan *)st;
     return OK;
 }
-
 /* ---------------- 构造 ---------------- */
 
 int heap_am_build(Heap *heap, const ColDesc *cols, int ncols,

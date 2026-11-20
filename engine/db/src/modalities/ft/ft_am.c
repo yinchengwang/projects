@@ -550,44 +550,112 @@ static int ft_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
  * 下推错了会静默少数据。所以判据从紧：只推 doc_id 的五种比较，
  * 其余一律 E_NOTSUP。
  */
-static int ft_am_can_push(StorageAM *am, const Predicate *p)
+static int ft_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
 {
     (void)am;
 
-    if (!p) {
+    if (!ps || n == 0u) {
         return E_NOTSUP;
     }
-    if (p->col_idx != FT_DOC_COL_ID) {
-        return E_NOTSUP;
-    }
-    if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
-        p->op != PD_LE && p->op != PD_GE) {
-        return E_NOTSUP;
-    }
-    if (p->val.is_null) {
-        return E_NOTSUP;
-    }
-    if (p->val.type != T_INT4 && p->val.type != T_INT8) {
-        return E_NOTSUP;
+
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+
+        if (p->col_idx != FT_DOC_COL_ID) {
+            return E_NOTSUP;
+        }
+        if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
+            p->op != PD_LE && p->op != PD_GE) {
+            return E_NOTSUP;
+        }
+        if (p->val.is_null) {
+            return E_NOTSUP;
+        }
+        if (p->val.type != T_INT4 && p->val.type != T_INT8) {
+            return E_NOTSUP;
+        }
     }
     return OK;
 }
 
-static int ft_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+/*
+ * 把有符号常量夹到 doc_id 的合法范围 [0, 2^32-1]。
+ *
+ * doc_id 是 u32，但列类型是 INT8（有符号）——
+ * 不夹的话，负常量会变成巨大的无符号数，"doc_id < -1" 反而匹配一堆行。
+ */
+static u32 ft_clamp_doc_id(i64 v)
+{
+    if (v < 0)
+        return 0u;
+    if ((u64)v > 0xFFFFFFFFull)
+        return 0xFFFFFFFFu;
+    return (u32)v;
+}
+
+static int ft_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                      AmScan **out)
 {
     FtAmCtx *c = (FtAmCtx *)am->impl;
     FtDocScan *st;
-    i64 v;
-    u32 uv;
+    bool has_eq = false;
+    u32 eq_id = 0;
+    u32 lo = 0;
+    u32 hi = 0xFFFFFFFFu;
     int rc;
 
-    rc = ft_am_can_push(am, p);
+    rc = ft_am_can_push(am, ps, n);
     if (rc != OK) {
         return rc;
     }
     if (!c || !c->ix || !out) {
         return E_INVAL;
     }
+
+    /*
+     * 把同一列（doc_id）上的所有合取条件**收成一个闭区间**。
+     *
+     * 【为什么可以叠加】合取里每一条都必须成立 ⇒ 交出来的区间仍是超集。
+     * `doc_id >= a AND doc_id < b` 于是收成 [a, b-1]，不再是"推一边"。
+     *
+     * ⚠️ 边界绕回的空区间要显式记成 none：
+     *    `doc_id > 0xFFFFFFFF`（夹成 0xFFFFFFFF 之后 lo 会是 2^32）—— 
+     *    这种情况没有行能匹配，直接给空扫描比让 lo > hi 更清楚。
+     */
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+        u32 uv = ft_clamp_doc_id(p->val.i);
+
+        switch (p->op) {
+        case PD_EQ:
+            has_eq = true;
+            eq_id = uv;
+            break;
+        case PD_GE:
+            if (uv > lo)
+                lo = uv;
+            break;
+        case PD_GT:
+            if (uv == 0xFFFFFFFFu)
+                hi = 0u, lo = 1u;   /* 空区间：交给下面的 lo > hi 判定 */
+            else if (uv + 1u > lo)
+                lo = uv + 1u;
+            break;
+        case PD_LE:
+            if (uv < hi)
+                hi = uv;
+            break;
+        case PD_LT:
+            if (uv == 0u)
+                hi = 0u, lo = 1u;   /* doc_id 无符号，没有比 0 更小的 */
+            else if (uv - 1u < hi)
+                hi = uv - 1u;
+            break;
+        default:
+            return E_NOTSUP;
+        }
+    }
+
     st = (FtDocScan *)calloc(1, sizeof(FtDocScan));
     if (!st) {
         return E_IO;
@@ -598,63 +666,20 @@ static int ft_am_push(StorageAM *am, const Predicate *p, AmScan **out)
         return rc;
     }
 
-    /*
-     * doc_id 是 u32，但列类型是 INT8（有符号）——
-     * 所以常量要**夹到** [0, 2^32-1]，负数一律夹成 0。
-     * 不夹的话，负常量会变成巨大的无符号数，"doc_id < -1" 反而匹配一堆行。
-     */
-    v = p->val.i;
-    if (v < 0) {
-        uv = 0;
-    } else if ((u64)v > 0xFFFFFFFFull) {
-        uv = 0xFFFFFFFFu;
-    } else {
-        uv = (u32)v;
-    }
-
-    switch (p->op) {
-    case PD_EQ:
+    if (has_eq) {
         st->has_eq = true;
-        st->eq_id = uv;
-        break;
-    case PD_GE:
+        st->eq_id = eq_id;
+    } else if (lo > hi) {
+        st->none = true;            /* 区间为空 ⇒ 没有行 */
+    } else {
         st->has_range = true;
-        st->lo_id = uv;
-        st->hi_id = 0xFFFFFFFFu;
-        break;
-    case PD_LE:
-        st->has_range = true;
-        st->lo_id = 0;
-        st->hi_id = uv;
-        break;
-    case PD_GT:
-        if (uv == 0xFFFFFFFFu) {
-            st->none = true;      /* 没有比 2^32-1 更大的 doc_id */
-        } else {
-            st->has_range = true;
-            st->lo_id = uv + 1;
-            st->hi_id = 0xFFFFFFFFu;
-        }
-        break;
-    case PD_LT:
-        if (uv == 0) {
-            st->none = true;      /* doc_id 是无符号的，没有比 0 更小的 */
-        } else {
-            st->has_range = true;
-            st->lo_id = 0;
-            st->hi_id = uv - 1;
-        }
-        break;
-    default:
-        ft_am_rows_release(st->buf);
-        free(st);
-        return E_NOTSUP;
+        st->lo_id = lo;
+        st->hi_id = hi;
     }
 
     *out = (AmScan *)st;
     return OK;
 }
-
 /* ---------------- 构造 ---------------- */
 
 int ft_am_build_docs(FtIndex *ix, StorageAM *out, FtAmCtx *ctx)

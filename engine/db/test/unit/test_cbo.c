@@ -234,30 +234,63 @@ static void test_explain_output(void)
 
 /* ---------------- 5. 多个 AND 谓词：挑最窄的 ---------------- */
 
+/*
+ * ==================== 这一项被契约加宽改写过 ====================
+ *
+ * 原来这条叫「多个 AND 谓词时挑选择率最小的」。那时下推只能带**一个**
+ * Predicate，所以 `WHERE a = 5 AND b >= 5` 必须挑一个（挑 a，窄得多）。
+ *
+ * 现在下推带**一整组合取**：两条都有索引 ⇒ 整组一起推 ⇒
+ * 索引区间同时用上两列不可能（一个游标只有一个区间），
+ * 所以 heap_am 只挑一列收区间 —— 但它挑的是**等值那一列**（a），
+ * 比按选择率挑更准（等值的区间退化成点）。
+ *
+ * ⇒ 于是断言变成两件事：
+ *   ① 「整组都能推」时，Index Cond 显示**整组**（这是新契约的价值）
+ *   ② 「其中一条推不了」时，退回**单选最窄**（老判据仍然要守住）
+ *
+ * ②那半条不能删 —— 它是"契约加宽之后老行为没退化"的证据。
+ */
 static void test_pick_narrowest(void)
 {
-    printf("  [5] 多个 AND 谓词时挑选择率最小的\n");
+    printf("  [5] AND 谓词：整组能推就整组推，不能推就单选最窄\n");
 
+    /* m：两列**都有**索引 ⇒ 整组能推 */
     exec_ok("CREATE TABLE m (a INT, b INT)");
     fill("m", 300, 0);
     exec_ok("CREATE INDEX ix_m_a ON m (a)");
     exec_ok("CREATE INDEX ix_m_b ON m (b)");
 
+    /* n：只有 a 有索引 ⇒ b 那一条推不了，整组吃不掉 */
+    exec_ok("CREATE TABLE n (a INT, b INT)");
+    fill("n", 300, 0);
+    exec_ok("CREATE INDEX ix_n_a ON n (a)");
+
     /*
-     * a = 5   → sel = 1/300 ≈ 0.0033
-     * b >= 5  → sel = 1/3 ≈ 0.3333
-     * 应该挑 a（窄得多）。推 b 会白读 100 行。
+     * ---- ① 两条都有索引：整组都下推 ----
+     *
+     * ⚠️ 别断言完整的 "(a = 5 AND b >= 5)" 字符串 ——
+     * 合取是**按源码书写顺序**收集的（collect_pushable 保序），
+     * 所以 `WHERE b >= 5 AND a = 5` 打出来是 `(b >= 5 AND a = 5)`。
+     * 断言"两条都在"才是这条测试真正关心的性质；顺带钉住"保序"。
      */
     char *s = q("EXPLAIN SELECT a FROM m WHERE a = 5 AND b >= 5");
+    CHECK(strstr(s, "Index Cond: (a = 5 AND b >= 5)") != NULL);
+
+    /* 换个顺序写：整组仍然都推，但**顺序跟着源码走**（保序，不是排序） */
+    s = q("EXPLAIN SELECT a FROM m WHERE b >= 5 AND a = 5");
+    CHECK(strstr(s, "Index Cond: (b >= 5 AND a = 5)") != NULL);
+
+    /* 结果正确：两条都下推 + 执行器复检，行数必须仍然精确 */
+    CHECK(count_rows("SELECT a FROM m WHERE a = 5 AND b >= 5") == 1);
+
+    /* ---- ② 有一条推不了（n.b 没索引）：退回单选最窄的 a ---- */
+    s = q("EXPLAIN SELECT a FROM n WHERE a = 5 AND b >= 5");
     CHECK(strstr(s, "Index Cond: (a = 5)") != NULL);
     CHECK(strstr(s, "sel = 0.0033") != NULL);
 
-    /* 换个顺序写也一样（不依赖谓词在 AND 树里的位置） */
-    s = q("EXPLAIN SELECT a FROM m WHERE b >= 5 AND a = 5");
-    CHECK(strstr(s, "Index Cond: (a = 5)") != NULL);
-
-    /* 结果正确（只推一个谓词，剩下的由执行器复检） */
-    CHECK(count_rows("SELECT a FROM m WHERE a = 5 AND b >= 5") == 1);
+    /* 行数仍然精确（只推了一条，b 的条件由执行器复检） */
+    CHECK(count_rows("SELECT a FROM n WHERE a = 5 AND b >= 5") == 1);
 }
 
 /* ---------------- 6. VACUUM 之后落盘：重启还在 ---------------- */

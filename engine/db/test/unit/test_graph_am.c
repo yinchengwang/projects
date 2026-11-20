@@ -168,7 +168,7 @@ static int count_scan(StorageAM *am)
 static int count_push(StorageAM *am, const Predicate *p)
 {
     AmScan *scan = NULL;
-    if (am->push(am, p, &scan) != OK)
+    if (am->push(am, p, 1u, &scan) != OK)
         return -1;
 
     u8 buf[1024];
@@ -428,7 +428,7 @@ static void t5_pushdown_count_matches(Env *e)
         val_int(&p.val, (i64)get_u64(buf));
         e->am_nodes.scan_end(&e->am_nodes, scan);
 
-        CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == OK);
+        CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_nodes, &p);
         int full = count_fullscan_filtered(&e->am_nodes, &p);
@@ -444,7 +444,7 @@ static void t5_pushdown_count_matches(Env *e)
         p.op = PD_EQ;
         val_int(&p.val, 20);             /* 第 2 号节点的 score */
 
-        CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == OK);
+        CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_nodes, &p);
         int full = count_fullscan_filtered(&e->am_nodes, &p);
@@ -460,7 +460,7 @@ static void t5_pushdown_count_matches(Env *e)
         p.op = PD_GT;
         val_int(&p.val, 10);
 
-        CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == OK);
+        CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_nodes, &p);
         int full = count_fullscan_filtered(&e->am_nodes, &p);
@@ -476,7 +476,7 @@ static void t5_pushdown_count_matches(Env *e)
         p.op = PD_EQ;
         val_text(&p.val, "n2", 2);
 
-        CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == OK);
+        CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_nodes, &p);
         int full = count_fullscan_filtered(&e->am_nodes, &p);
@@ -502,7 +502,7 @@ static void t5_pushdown_count_matches(Env *e)
         val_int(&p.val, (i64)get_u64(buf));
         e->am_edges.scan_end(&e->am_edges, scan);
 
-        CHECK(e->am_edges.can_push(&e->am_edges, &p) == OK);
+        CHECK(e->am_edges.can_push(&e->am_edges, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_edges, &p);
         int full = count_fullscan_filtered(&e->am_edges, &p);
@@ -527,7 +527,7 @@ static void t5_pushdown_count_matches(Env *e)
         val_int(&p.val, (i64)get_u64(buf + 8));
         e->am_edges.scan_end(&e->am_edges, scan);
 
-        CHECK(e->am_edges.can_push(&e->am_edges, &p) == OK);
+        CHECK(e->am_edges.can_push(&e->am_edges, &p, 1u) == OK);
 
         int pushed = count_push(&e->am_edges, &p);
         int full = count_fullscan_filtered(&e->am_edges, &p);
@@ -550,7 +550,7 @@ static void t7_missing_anchor(Env *e)
     p.op = PD_EQ;
     val_int(&p.val, -1);
 
-    CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == OK);
+    CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == OK);
     CHECK(count_push(&e->am_nodes, &p) == 0);
 
     /* 边表：src = 不存在的节点 */
@@ -560,7 +560,7 @@ static void t7_missing_anchor(Env *e)
     p2.op = PD_EQ;
     val_int(&p2.val, (i64)rid_to_u64(rid_make(0xFFFFFF, 0)));
 
-    CHECK(e->am_edges.can_push(&e->am_edges, &p2) == OK);
+    CHECK(e->am_edges.can_push(&e->am_edges, &p2, 1u) == OK);
     CHECK(count_push(&e->am_edges, &p2) == 0);
 
     /* 一个在范围内但页号不存在的 id → 节点不存在 → 0 行 */
@@ -570,7 +570,7 @@ static void t7_missing_anchor(Env *e)
     p3.op = PD_EQ;
     val_int(&p3.val, (i64)rid_to_u64(rid_make(0xFFFFF, 5)));
 
-    CHECK(e->am_nodes.can_push(&e->am_nodes, &p3) == OK);
+    CHECK(e->am_nodes.can_push(&e->am_nodes, &p3, 1u) == OK);
     CHECK(count_push(&e->am_nodes, &p3) == 0);
 }
 
@@ -624,15 +624,15 @@ static void t8_caps_and_visibility(Env *e)
     p.col_idx = 99;
     p.op = PD_EQ;
     val_int(&p.val, 1);
-    CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == E_NOTSUP);
+    CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == E_NOTSUP);
 
     p.col_idx = 0;
     p.op = PD_LT;                       /* node_id 只支持等值 */
-    CHECK(e->am_nodes.can_push(&e->am_nodes, &p) == E_NOTSUP);
+    CHECK(e->am_nodes.can_push(&e->am_nodes, &p, 1u) == E_NOTSUP);
 
     p.col_idx = 0;                      /* 边表：src 只支持等值 */
     p.op = PD_GT;
-    CHECK(e->am_edges.can_push(&e->am_edges, &p) == E_NOTSUP);
+    CHECK(e->am_edges.can_push(&e->am_edges, &p, 1u) == E_NOTSUP);
 }
 
 /* ---------------- 9) insert ---------------- */

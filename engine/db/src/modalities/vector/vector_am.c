@@ -353,33 +353,71 @@ static int vec_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
  * 真正的 IO 优势在** ANN 路径**上（索引 vs 暴力扫）——
  * 那是 A4 量的，不是这里量的。别把两件事混在一起说。
  */
-static int vec_am_can_push(StorageAM *am, const Predicate *p)
+static int vec_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
 {
     (void)am;
 
-    if (!p)
+    if (!ps || n == 0u)
         return E_NOTSUP;
-    if (p->col_idx != VEC_COL_LABEL)
-        return E_NOTSUP;
-    if (p->op != PD_EQ)
-        return E_NOTSUP;
-    if (p->val.is_null)
-        return E_NOTSUP;
-    if (p->val.type != T_INT4 && p->val.type != T_INT8)
-        return E_NOTSUP;
+
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+
+        if (p->col_idx != VEC_COL_LABEL)
+            return E_NOTSUP;
+        if (p->op != PD_EQ)
+            return E_NOTSUP;
+        if (p->val.is_null)
+            return E_NOTSUP;
+        if (p->val.type != T_INT4 && p->val.type != T_INT8)
+            return E_NOTSUP;
+    }
 
     return OK;
 }
 
-static int vec_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+static int vec_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                       AmScan **out)
 {
     VectorAmCtx *c = (VectorAmCtx *)am->impl;
 
-    int rc = vec_am_can_push(am, p);
+    int rc = vec_am_can_push(am, ps, n);
     if (rc != OK)
         return rc;
 
-    i32 want = (i32)p->val.i;
+    /*
+     * 本模态只认 label 的**等值**（见上面的说明）。
+     *
+     * 合取里全是 label = X 时：
+     *   同一个 X 出现多次 ⇒ 一条就够（幂等）；
+     *   不同的 X ⇒ `label = 1 AND label = 2` 永不成立 ⇒ 命中集为空。
+     * 后者很容易被漏掉，而漏了会变成"按第一个 label 过滤"——
+     * 那是**多给行**（慢但不丢数据），所以哪怕不特判也是安全的；
+     * 但给了空集更省事，也更能说明意图。
+     */
+    i32 want = (i32)ps[0].val.i;
+    bool impossible = false;
+
+    for (u32 i = 1; i < n; i++) {
+        if ((i32)ps[i].val.i != want) {
+            impossible = true;
+            break;
+        }
+    }
+
+    if (impossible) {
+        VecScan *est = (VecScan *)calloc(1, sizeof(VecScan));
+
+        if (!est)
+            return E_IO;
+        est->vs = c->st->vs;
+        est->full = false;
+        est->hits = NULL;
+        est->nhit = 0;
+        est->cur = 0;
+        *out = (AmScan *)est;
+        return OK;
+    }
 
     /*
      * 第一遍：数出命中行数。

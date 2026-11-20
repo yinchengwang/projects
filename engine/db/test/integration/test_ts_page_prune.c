@@ -18,23 +18,27 @@
  * ⚠️ 而且 T1–T4 那套判据（bench/ts_bench_io.c）测的是**直调** `ts_prune_scan`，
  * 绕开了真实查询路径 —— 所以它们证明不了这件事。本测试走的是 SQL。
  *
- * ==================== 一个必须如实记录的结构性限制 ====================
+ * ==================== 那个结构性限制后来修掉了 ====================
  *
- * SPI 的下推接口只能带**一个** `Predicate`：
+ * D-6.1 当时记下一条限制：SPI 的下推接口只能带**一个** `Predicate`，
+ * 而 `WHERE time >= a AND time < b` 是**两个** —— 执行器只挑一个推，
+ * 另一边由执行器事后过滤。
  *
- *     typedef int (*PushFn)(StorageAM *am, const Predicate *p, AmScan **out);
+ * 所以那时双边界范围下推之后只是个半平面：`>= a` 覆盖几个分区就按几个读。
+ * 实测证据：`time >= 第2天`（2 个分区）与 `time >= 第2天 AND time < 第3天`
+ * **读的页数完全一样**（都是 4 页）—— 说明右边那个条件在 IO 上根本没起作用。
  *
- * 而 `WHERE time >= a AND time < b` 是**两个**谓词，执行器只挑其中一个下推
- *（`collect_pushable` 挑选择性最好的那一个），另一边由执行器事后过滤。
+ * 后来把契约**加宽成合取**（`PushFn` 带 `(ps, n)`），ts 侧把同一列上的
+ * 所有边界收成一个区间。现在同一个查询读 **2 页**：
  *
- * ⇒ 所以**双边界范围**下推之后只是一个半平面：
- *   - `>= a` 覆盖几个分区就按几个分区算（可能全读）；
- *   - 行数仍然正确（执行器会完整求值 WHERE）。
+ *   无 WHERE                        900 行  6 页
+ *   >= 第2天（单边界）              600 行  4 页
+ *   [第2天, 第3天)（双边界）        300 行  2 页   ← 修好了
+ *   第1天整天（双边界）             300 行  2 页
+ *   第2天内部窄范围（10 行）          5 行  2 页
  *
- * 要真正解决必须让下推带**谓词合取**（扩展 `src/spi/pushdown.h`），
- * 而 `src/spi/` 是本计划 Global Constraint 5 明令不碰的地盘（W-C 的地盘）。
- * ⇒ 所以本测试对**双边界**只断言"行数精确 + 页读不高于不裁剪"，
- *    不假装它做到了"只读 1 个分区"。这条限制记在计划里，不藏着。
+ * ⇒ 所以本测试对**双边界**现在断言"页读真的比单边界更少"，
+ *    而不只是"不高于不裁剪"。第 5 项就是这条。
  *
  * ==================== 判据为什么是"比"而不是"绝对页数" ====================
  *
@@ -196,25 +200,51 @@ int main(void)
            (unsigned long long)n, (unsigned long long)reads);
 
     /*
-     * ---- 5. 双边界范围：行数必须精确；页读不高于不裁剪 ----
+     * ---- 5. 双边界范围：页读必须真的**比单边界更少** ----
      *
-     * ⚠️ 这里**不**断言"只读 1 个分区"：SPI 只能下推一个谓词（见文件头的说明），
-     * 双边界下推之后只是一个半平面。能保证的是：
-     *   - 行数精确（执行器完整求值 WHERE）；
-     *   - 页读不多于不裁剪（下推的那一边至少不会让情况变坏）。
-     * 想要"双边界 ⇒ 只读 1 个分区"，得先扩展 SPI 的谓词下推契约。
+     * 这一项是「契约加宽成合取」的验收。
+     *
+     * 改之前：`time >= 第2天` 与 `time >= 第2天 AND time < 第2天+5s` 读的页数
+     * **完全一样**（都是 4 页）—— 右边那个条件在 IO 上根本没起作用，
+     * 因为它根本没被下推，只是被执行器事后用来过滤行。
+     *
+     * 现在两条边界一起收成区间 ⇒ 只碰相交的那一个分区 ⇒ **2 页**。
+     *
+     * ⇒ 判据用「比单边界那次更少」而不是写死 2：
+     *    写死页数会跟着页容量/分区划分漂（那是"跟着实现调参"）。
+     *
+     * ⚠️ 上界为什么取 `第2天 + 5 秒` 而不是正好 `第3天`：
+     *    分区窗口是**半开**的 [start, end)，而查询范围按闭区间判相交
+     *   （`ts_prune_window_hits`：start <= t_hi && end > t_lo，见坑 M6-48 的
+     *    超集纪律）。所以 `t_hi == 第3天` 会把第 3 个分区也算进来 ——
+     *    那是**刻意的超集**（多读一页无害，少读一行是静默丢数据）。
+     *    想验证"右边那条真的把上界收紧了"，上界必须落在分区**内部**。
      */
-    snprintf(sql, sizeof(sql),
-             "SELECT time, tag, value FROM ts_readings "
-             "WHERE time >= %lld AND time < %lld",
-             (long long)(base + DAY_MS), (long long)(base + 2LL * DAY_MS));
-    n = run_query(db, sql, &reads);
-    CHECK(n == (uint64_t)NROWS);
-    CHECK(reads <= full_reads);
-    printf("  [5] 双边界（第 2 天）：%llu 行、%llu 页"
-           "（行须精确；页读 ≤ %llu。只推一边 ⇒ 不一定最少）\n",
-           (unsigned long long)n, (unsigned long long)reads,
-           (unsigned long long)full_reads);
+    {
+        uint64_t lower_only;
+
+        snprintf(sql, sizeof(sql),
+                 "SELECT time, tag, value FROM ts_readings WHERE time >= %lld",
+                 (long long)(base + DAY_MS));
+        n = run_query(db, sql, &lower_only);
+        CHECK(n == (uint64_t)((NPARTS - 1) * NROWS));
+
+        /* 上界落在第 2 天内部 ⇒ 只碰第 2 个分区；每行间隔 1 秒 ⇒ 命中 5 行 */
+        snprintf(sql, sizeof(sql),
+                 "SELECT time, tag, value FROM ts_readings "
+                 "WHERE time >= %lld AND time < %lld",
+                 (long long)(base + DAY_MS),
+                 (long long)(base + DAY_MS + 5000LL));
+        n = run_query(db, sql, &reads);
+        CHECK(n == 5u);
+
+        /* 双边界真的更少（这是"右边那条被下推了"的唯一证据） */
+        CHECK(reads < lower_only);
+        printf("  [5] 双边界窄范围（第 2 天开头 5 秒）：%llu 行、%llu 页"
+               "（单边界那次 %llu 页 ⇒ 双边界必须更少）\n",
+               (unsigned long long)n, (unsigned long long)reads,
+               (unsigned long long)lower_only);
+    }
 
     /*
      * ---- 6. 裁剪不影响数据完整性：把每天各查一次，拼起来必须等于全量 ----

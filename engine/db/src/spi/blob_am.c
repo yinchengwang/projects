@@ -441,19 +441,24 @@ static int blob_am_reindex(StorageAM *am, u32 index_id, u64 *rows_out)
  * 【宁可不推，不可推错】
  * 下推错了会静默少数据。所以判据从紧。
  */
-static int blob_am_can_push(StorageAM *am, const Predicate *p)
+static int blob_am_can_push(StorageAM *am, const Predicate *ps, u32 n)
 {
     BlobAmCtx *c = ctx_of(am);
-    if (!c || !p)
+
+    if (!c || !ps || n == 0u)
         return E_NOTSUP;
 
-    /* 只有 blob_id（第 0 列）能推 */
-    if (p->col_idx != 0)
-        return E_NOTSUP;
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
 
-    if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
-        p->op != PD_LE && p->op != PD_GE)
-        return E_NOTSUP;
+        /* 只有 blob_id（第 0 列）能推 */
+        if (p->col_idx != 0)
+            return E_NOTSUP;
+
+        if (p->op != PD_EQ && p->op != PD_LT && p->op != PD_GT &&
+            p->op != PD_LE && p->op != PD_GE)
+            return E_NOTSUP;
+    }
 
     return OK;
 }
@@ -466,10 +471,12 @@ static int blob_am_can_push(StorageAM *am, const Predicate *p)
  * 下推后只读匹配的那个对象的头页。
  * 所以 "WHERE blob_id = 3" 的页读次数 << 全表扫。
  */
-static int blob_am_push(StorageAM *am, const Predicate *p, AmScan **out)
+static int blob_am_push(StorageAM *am, const Predicate *ps, u32 n,
+                        AmScan **out)
 {
     BlobAmCtx *c = ctx_of(am);
-    if (!c || !p || !out)
+
+    if (!c || !ps || n == 0u || !out)
         return E_INVAL;
 
     BlobScan *st = calloc(1, sizeof(*st));
@@ -478,49 +485,63 @@ static int blob_am_push(StorageAM *am, const Predicate *p, AmScan **out)
 
     st->bs = c->bs;
     st->is_frames = c->is_frames;
+    st->lo_id = 1;
+    st->hi_id = (BlobId)~0ull;
 
-    u64 v = (u64)p->val.i;
+    /*
+     * 把同一列（blob_id）上的所有合取条件**收成一个闭区间**。
+     *
+     * 【为什么可以叠加】
+     * 合取里的每一条都必须成立 ⇒ 交出来的区间仍是超集。
+     * `blob_id >= a AND blob_id < b` 于是收成 [a, b-1]，
+     * 而不是"推一边、另一边白读"。
+     *
+     * 【为什么 > / < 能精确转成闭区间】
+     * blob_id 是整数，所以 `> v` 等价于 `>= v+1`、`< v` 等价于 `<= v-1`。
+     * 不像浮点数那样只能退化成闭区间的超集。
+     */
+    for (u32 i = 0; i < n; i++) {
+        const Predicate *p = &ps[i];
+        u64 v = (u64)p->val.i;
 
-    switch (p->op) {
-    case PD_EQ:
-        st->has_eq = true;
-        st->eq_id = (BlobId)v;
-        break;
-    case PD_GE:
-        st->has_range = true;
-        st->lo_id = (BlobId)v;
-        st->hi_id = (BlobId)~0ull;
-        break;
-    case PD_LE:
-        st->has_range = true;
-        st->lo_id = 1;
-        st->hi_id = (BlobId)v;
-        break;
-    case PD_GT:
-        /*
-         * 严格大于 → 闭区间 [v+1, ∞)
-         *
-         * blob_id 是整数，所以能精确转换（不像浮点数）。
-         * 转换不了就退化成 [v, ∞)（超集，执行器会重算 WHERE）。
-         */
-        st->has_range = true;
-        st->lo_id = (BlobId)(v + 1);
-        st->hi_id = (BlobId)~0ull;
-        break;
-    case PD_LT:
-        st->has_range = true;
-        st->lo_id = 1;
-        st->hi_id = (BlobId)(v > 0 ? v - 1 : 0);
-        break;
-    default:
-        free(st);
-        return E_NOTSUP;
+        switch (p->op) {
+        case PD_EQ:
+            st->has_eq = true;
+            st->eq_id = (BlobId)v;
+            break;
+        case PD_GE:
+            if ((BlobId)v > st->lo_id)
+                st->lo_id = (BlobId)v;
+            break;
+        case PD_GT:
+            if ((BlobId)(v + 1) > st->lo_id)
+                st->lo_id = (BlobId)(v + 1);
+            break;
+        case PD_LE:
+            if ((BlobId)v < st->hi_id)
+                st->hi_id = (BlobId)v;
+            break;
+        case PD_LT:
+            /* v == 0 ⇒ 上界收到 0 ⇒ 区间空（lo=1 > hi=0），那正是"没有行" */
+            if ((BlobId)(v > 0 ? v - 1 : 0) < st->hi_id)
+                st->hi_id = (BlobId)(v > 0 ? v - 1 : 0);
+            break;
+        default:
+            free(st);
+            return E_NOTSUP;
+        }
     }
+
+    /* 有等值时区间退化成那一个点（等值比范围更紧） */
+    if (st->has_eq) {
+        st->lo_id = st->eq_id;
+        st->hi_id = st->eq_id;
+    }
+    st->has_range = true;
 
     *out = (AmScan *)st;
     return OK;
 }
-
 /* ---------------- 构造 ---------------- */
 
 static int blob_am_build(BlobStore *bs, StorageAM *out, BlobAmCtx *ctx,

@@ -67,7 +67,7 @@ static int count_scan(StorageAM *am)
 static int count_push(StorageAM *am, const Predicate *p)
 {
     AmScan *scan = NULL;
-    if (am->push(am, p, &scan) != OK)
+    if (am->push(am, p, 1u, &scan) != OK)
         return -1;
 
     u8 buf[1024];
@@ -172,7 +172,7 @@ int main(void)
     p.op = PD_EQ;
     val_int(&p.val, (i64)rid_to_u64(ids[0]));
 
-    CHECK(am_e.can_push(&am_e, &p) == OK);
+    CHECK(am_e.can_push(&am_e, &p, 1u) == OK);
 
     /* 【效率断言】下推只读了 1 条边记录，不是全表 39 条 */
     u64 reads_before = gstore_read_count(g->edges);
@@ -213,7 +213,7 @@ int main(void)
     p2d.op = PD_EQ;
     val_int(&p2d.val, (i64)rid_to_u64(ids[0]));
 
-    CHECK(am_e.can_push(&am_e, &p2d) == OK);
+    CHECK(am_e.can_push(&am_e, &p2d, 1u) == OK);
 
     /* 入链下推也只读 1 条 */
     u64 in_before = gstore_read_count(g->edges);
