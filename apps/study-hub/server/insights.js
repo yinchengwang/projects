@@ -16,7 +16,12 @@ const {
   rankTopics,
   sortByUrgency,
 } = require("../core/mastery/mastery.js")
-const { bankTopicCounts, buildExpectedMap, minExpectedFrom } = require("../core/mastery/expected.js")
+const {
+  bankTopicCounts,
+  buildExpectedMap,
+  minExpectedFrom,
+  splitKey,
+} = require("../core/mastery/expected.js")
 const { deriveTopicStats } = require("../core/mastery/topic-stats.js")
 
 /** 曲线的默认天数窗口 */
@@ -141,8 +146,12 @@ function buildSummary(input) {
     practiced[item.topic] = true
   })
   let untouchedTopics = 0
-  Object.keys(bankCounts).forEach(function (topic) {
-    if (!practiced[topic]) untouchedTopics += 1
+  Object.keys(bankCounts).forEach(function (key) {
+    // 题库计数的键从 P3 Task2 起是复合键 <track>:<topic>，而这里的 practiced
+    // 仍是裸知识点名（旧接口的 topic 字段口径没变），所以取复合键的知识点部分来比。
+    // 整条口径的复合键化在 Task 4 做。
+    const bare = splitKey(key).topic
+    if (!practiced[bare]) untouchedTopics += 1
   })
 
   const count = topics.length

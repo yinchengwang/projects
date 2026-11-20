@@ -29,14 +29,16 @@ test("期望题量下限非法时退回默认 5", function () {
   assert.strictEqual(expected.minExpectedFrom({ "insights.expected_min_questions": "-2" }), 5)
 })
 
-test("bankTopicCounts 数出题库里每个 topic 的题数", function () {
+test("bankTopicCounts 数出题库里每个 topic 的题数，键是复合键", function () {
   const counts = expected.bankTopicCounts([
-    { id: "lc-00001", topics: ["数组", "哈希表"] },
-    { id: "lc-00002", topics: ["数组"] },
-    { id: "lc-00003", topics: [] },
+    { id: "algo:lc-00001", topics: ["数组", "哈希表"] },
+    { id: "algo:lc-00002", topics: ["数组"] },
+    { id: "algo:lc-00003", topics: [] },
+    { id: "db:txn", track: "database", topics: ["事务"] },
   ])
-  assert.strictEqual(counts["数组"], 2)
-  assert.strictEqual(counts["哈希表"], 1)
+  assert.strictEqual(counts["algorithm:数组"], 2)
+  assert.strictEqual(counts["algorithm:哈希表"], 1)
+  assert.strictEqual(counts["database:事务"], 1)
 })
 
 test("期望题量取题库题数", function () {
@@ -75,4 +77,56 @@ test("buildExpectedMap 给每个 topic 都算一份", function () {
   assert.strictEqual(map["数组"].source, "bank")
   assert.strictEqual(map["冷门"].expected, 5)
   assert.strictEqual(map["冷门"].source, "floor")
+})
+
+/* ---------------- P3 Task2：复合键基础件 ---------------- */
+
+test("topicKey 拼出复合键，轨缺省按算法轨处理", function () {
+  assert.strictEqual(expected.topicKey("algorithm", "数组"), "algorithm:数组")
+  assert.strictEqual(expected.topicKey("database", "事务"), "database:事务")
+  assert.strictEqual(expected.topicKey("", "数组"), "algorithm:数组")
+  assert.strictEqual(expected.topicKey("algorithm", ""), "")
+})
+
+test("splitKey 拆复合键，裸名按算法轨处理", function () {
+  assert.deepStrictEqual(expected.splitKey("database:MVCC"), { track: "database", topic: "MVCC" })
+  assert.deepStrictEqual(expected.splitKey("数组"), { track: "algorithm", topic: "数组" })
+  assert.deepStrictEqual(expected.splitKey(""), { track: "algorithm", topic: "" })
+})
+
+test("trackOfUnitId 由单元 id 前缀推顶层轨", function () {
+  assert.strictEqual(expected.trackOfUnitId("algo:lc-00001"), "algorithm")
+  assert.strictEqual(expected.trackOfUnitId("db:mvcc"), "database")
+  assert.strictEqual(expected.trackOfUnitId("ai:cnn"), "ai")
+  assert.strictEqual(expected.trackOfUnitId("lc-00001"), "algorithm")
+  assert.strictEqual(expected.trackOfUnitId(""), "algorithm")
+})
+
+test("expectedFor 先读复合键的覆盖值", function () {
+  const r = expected.expectedFor(
+    "algorithm:数组",
+    { "algorithm:数组": 12 },
+    { "insights.expected_override.algorithm:数组": "20", "insights.expected_override.数组": "30" }
+  )
+  assert.strictEqual(r.expected, 20)
+  assert.strictEqual(r.source, "override")
+})
+
+test("expectedFor 复合键没有覆盖值时回退到裸名覆盖值", function () {
+  const r = expected.expectedFor(
+    "algorithm:数组",
+    { "algorithm:数组": 12 },
+    { "insights.expected_override.数组": "30" }
+  )
+  assert.strictEqual(r.expected, 30)
+  assert.strictEqual(r.source, "override")
+})
+
+test("expectedFor 的题库计数先查复合键，再查裸名", function () {
+  const composite = expected.expectedFor("database:事务", { "database:事务": 9, "事务": 3 }, {})
+  assert.strictEqual(composite.expected, 9)
+  assert.strictEqual(composite.source, "bank")
+  const bare = expected.expectedFor("algorithm:数组", { "数组": 7 }, {})
+  assert.strictEqual(bare.expected, 7)
+  assert.strictEqual(bare.source, "bank")
 })
