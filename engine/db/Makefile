@@ -44,14 +44,23 @@ HARDEN  := -fno-strict-aliasing -fno-omit-frame-pointer
 INC     := -Iinclude -Isrc
 SAN     ?=
 
-# 线程库（v0.10 起有并发测试）
-#   MinGW-w64 的 winpthreads 已经在默认库里，不需要显式链接
-#   Linux 上 pthread 是单独的库（glibc 2.34 之后合进了 libc，
-#   但显式写上对所有版本都安全）
+# 线程库 + 数学库（v0.10 起有并发测试）
+#
+#   pthread：MinGW-w64 的 winpthreads 已经在默认库里，不需要显式链接；
+#            Linux 上 pthread 是单独的库（glibc 2.34 之后合进了 libc，
+#            但显式写上对所有版本都安全）。
+#
+#   libm：`src/modalities/ft/bm25.c` 用了 log()，`geo/mbr.c`、`rtree.c`、
+#         `json_scalar.c` 也用了数学函数。**MinGW 把 libm 合进了 CRT**（不需要 -lm），
+#         而 Linux 上 libm 是独立的 ⇒ 少了它在链接期报一堆
+#         `undefined reference to 'log'`。主核第一次在 Linux 上编就撞到这一条。
+#
+#         ⚠️ 顺序有讲究：`-lm` 必须放在**对象文件之后**（GNU ld 单遍扫描），
+#            所以它属于 LDLIBS 而不是 CFLAGS。
 ifeq ($(OS),Windows_NT)
 LDLIBS  :=
 else
-LDLIBS  := -lpthread
+LDLIBS  := -lpthread -lm
 endif
 
 CFLAGS  := $(CSTD) $(WARN) $(OPT) $(HARDEN) $(INC) $(SAN)

@@ -47,14 +47,24 @@ SAN=""
 if [ "${WITH_SAN:-0}" = "1" ]; then
     SAN="-fsanitize=address,undefined"
 fi
-CFLAGS="-std=c11 -Wall -Wextra -Werror -O1 -g -fno-strict-aliasing \
+# ⚠️ `-D_POSIX_C_SOURCE=200809L` 必须与 Makefile 的 CSTD 保持一致。
+#
+# 少了它，`-std=c11` 走的是"严格 ISO C"分支 ⇒ <pthread.h> **不声明**
+# `pthread_barrier_*`（那组 API 是 POSIX 2001 起才有的扩展）。
+# 库代码碰巧没用到，但 test_wal_group_mt 用了 ⇒ 编译期 implicit declaration、
+# 链接期找不到符号。**主核第一次在 Linux 上跑 test/run.sh 时撞到这一条** ——
+# Windows/MinGW 的 winpthreads 头文件不按 _POSIX_C_SOURCE 裁剪，所以本地一直是绿的。
+CFLAGS="-std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O1 -g -fno-strict-aliasing \
 $SAN -Iinclude -Isrc"
 
-# 线程库（v0.10 起有并发测试）
-#   MinGW-w64 的 winpthreads 已经在默认库里；Linux 要显式链接
+# 线程库 + 数学库（v0.10 起有并发测试）
+#
+#   MinGW-w64：winpthreads 与 libm 都已经在默认库里 ⇒ 不需要额外参数
+#   Linux    ：pthread 与 libm 都是独立的库 ⇒ 两个都要显式链接
+#              （libm 是因为 bm25.c / mbr.c / rtree.c / json_scalar.c 用了数学函数）
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) LDFLAGS="" ;;
-    *)                   LDFLAGS="-lpthread" ;;
+    *)                   LDFLAGS="-lpthread -lm" ;;
 esac
 
 mkdir -p build test/tmp build/test-logs
