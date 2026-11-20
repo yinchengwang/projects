@@ -868,6 +868,7 @@ module.exports = {
   updateRoundItem: updateRoundItem,
   writeCorrection: writeCorrection,
   diffLines: diffLines,
+  splitLines: splitLines,
   makeDiff: makeDiff,
   stackForProblem: stackForProblem,
 }
