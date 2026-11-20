@@ -27,6 +27,28 @@ const {
   DIFFICULTIES,
 } = require("../bank/problem.js")
 
+const fs = require("node:fs")
+const path = require("node:path")
+
+const {
+  buildSupplyPrompt,
+  parseSupplyResponse,
+  hasSupplyTemplate,
+} = require("./prompts.js")
+const {
+  checkBatch,
+  consumeBatch,
+} = require("./guard.js")
+const {
+  renderUnitFile,
+  replaceSection,
+  appendToSection,
+  writeFileChecked,
+  unitFilePath,
+  assertFilePath,
+  stemOf,
+} = require("../supply/unit-file.js")
+
 /** 每道题最多留多少条调用记录 */
 const MAX_TRACE_PER_PROBLEM = 20
 
@@ -67,6 +89,27 @@ function dateStr(date) {
   const m = String(d.getMonth() + 1).padStart(2, "0")
   const day = String(d.getDate()).padStart(2, "0")
   return y + "-" + m + "-" + day
+}
+
+/** 读一个文件，读不到就当空串（卡片目录可能缺文件） */
+function readTextOrEmpty(abs) {
+  try {
+    if (!fs.existsSync(abs)) return ""
+    return fs.readFileSync(abs, "utf8")
+  } catch (err) {
+    return ""
+  }
+}
+
+/** 把用例列表写成一张 markdown 表格 */
+function casesTable(cases) {
+  const rows = ["| 输入 | 期望输出 |", "|---|---|"]
+  ;(cases || []).forEach(function (item) {
+    const input = String(item.input || "").replace(/\|/g, "\\|")
+    const expect = String(item.expect || "").replace(/\|/g, "\\|")
+    rows.push("| " + input + " | " + expect + " |")
+  })
+  return rows.join("\n")
 }
 
 /** 读 LLM 设置 */
@@ -119,6 +162,9 @@ function createLlmService(opts) {
     ? o.getClient
     : function () { return fixedClient }
   const now = typeof o.now === "function" ? o.now : function () { return new Date() }
+  const learningRoot = o.learningRoot || null
+  const unitsDir = o.unitsDir || null
+  const stateFile = o.stateFile || null
 
   /** 取当前客户端；没装配就用关闭态客户端兜底 */
   function currentClient() {
@@ -408,6 +454,151 @@ function createLlmService(opts) {
     return { problem: updated, model: client.model, file: file }
   }
 
+  /* ---------------- P4：供给场景（离线批处理） ---------------- */
+
+  function requireUnitsDir() {
+    if (!unitsDir) throw serviceUnavailable("没连上 learning 仓，写入不可用")
+    return unitsDir
+  }
+
+  function ensureBatchQuota(batchId) {
+    const quota = checkBatch(store, batchId, dateStr(now()))
+    if (!quota.ok) throw quotaError(quota.message)
+    return quota
+  }
+
+  function supplyContext(unit, extra) {
+    const ctx = {
+      title: String((unit && unit.title) || ""),
+      difficulty: String((unit && unit.difficulty) || "medium"),
+      topics: Array.isArray(unit && unit.topics) && unit.topics.length ? unit.topics.join("、") : "未标注",
+      statement: String((unit && unit.statement) || ""),
+      demo: "", readme: "", notes: "", question: "",
+    }
+    const demoRel = String((unit && unit.entry && unit.entry.demo) || "")
+    if (learningRoot && demoRel) {
+      const demoAbs = path.join(learningRoot, demoRel)
+      ctx.demo = readTextOrEmpty(demoAbs)
+      const dir = path.dirname(demoAbs)
+      ctx.readme = readTextOrEmpty(path.join(dir, "README.md"))
+      ctx.notes = readTextOrEmpty(path.join(dir, "NOTES.md"))
+    }
+    if (extra) Object.keys(extra).forEach(function (key) {
+      if (extra[key] !== undefined && extra[key] !== null) ctx[key] = String(extra[key])
+    })
+    return ctx
+  }
+
+  function cardUnitFields(unit, patch) {
+    const p = patch || {}
+    const entry = (unit && unit.entry) || {}
+    const stem = stemOf(unit)
+    return {
+      id: unit.id, track: unit.track, kind: "card", title: String(p.title || unit.title || ""),
+      difficulty: String(p.difficulty || unit.difficulty || "medium"),
+      topics: Array.isArray(p.topics) ? p.topics : (Array.isArray(unit.topics) ? unit.topics : []),
+      source: "generated", language: "python", demo: String(entry.demo || ""), reference: "", graded: "script",
+      script: String(entry.script || path.join("units", unit.track, stem + ".assert.py").replace(/\\/g, "/")),
+      status: "draft", reviewed: false, reviewed_at: "", subtracks: Array.isArray(unit.subtracks) ? unit.subtracks : [],
+    }
+  }
+
+  function ensureUnitFile(unit, patch) {
+    const dir = requireUnitsDir()
+    const file = unitFilePath(dir, unit)
+    if (fs.existsSync(file)) return file
+    const fields = cardUnitFields(unit, patch)
+    const demoRel = String(((unit.entry && unit.entry.demo) || ""))
+    const cardDir = demoRel ? path.posix.dirname(demoRel.split(path.sep).join("/")) : ""
+    const content = renderUnitFile(fields, { explain: "", related: cardDir ? ["- 卡片目录：" + cardDir] : [] })
+    const written = writeFileChecked(file, content, { repoRoot: learningRoot, stateFile: stateFile })
+    if (!written.ok) throw serviceUnavailable("写单元文件失败：" + written.reason)
+    return file
+  }
+
+  async function generateAssert(req) {
+    const r = req || {}; const unit = r.unit
+    if (!unit) throw badRequest("缺少单元")
+    if (!hasSupplyTemplate(unit.track, "generate-assert")) throw badRequest("轨道「" + String(unit.track) + "」不生成断言脚本")
+    const client = currentClient(); if (client.name === "null") throw serviceUnavailable(offMessage(client))
+    const batchId = r.batchId || r.sessionId || null; ensureBatchQuota(batchId)
+    const prompt = buildSupplyPrompt("generate-assert", unit.track, supplyContext(unit, r.context))
+    const raw = await client.complete({ system: prompt.system, user: prompt.user, temperature: 0.2 })
+    const parsed = parseSupplyResponse(raw, "generate-assert")
+    if (!parsed.ok) throw new Error("生成断言脚本失败：" + parsed.reason)
+    consumeBatch(store, batchId, dateStr(now())); recordTrace(unit.id, "generate-assert", "", client.model, prompt)
+    const dir = requireUnitsDir(); const unitFile = ensureUnitFile(unit, { topics: parsed.topics }); const scriptFile = assertFilePath(dir, unit)
+    const written = writeFileChecked(scriptFile, parsed.script + "\n", { repoRoot: learningRoot, stateFile: stateFile })
+    if (!written.ok) throw serviceUnavailable("写断言脚本失败：" + written.reason)
+    return { unit: unit, script: parsed.script, topics: parsed.topics, model: client.model, file: scriptFile, unitFile: unitFile }
+  }
+
+  async function writeExplain(req) {
+    const r = req || {}; const unit = r.unit
+    if (!unit) throw badRequest("缺少单元")
+    if (!hasSupplyTemplate(unit.track, "write-explain")) throw badRequest("轨道「" + String(unit.track) + "」没有讲解正文模板")
+    const client = currentClient(); if (client.name === "null") throw serviceUnavailable(offMessage(client))
+    const batchId = r.batchId || r.sessionId || null; ensureBatchQuota(batchId)
+    const prompt = buildSupplyPrompt("write-explain", unit.track, supplyContext(unit, r.context))
+    const raw = await client.complete({ system: prompt.system, user: prompt.user, temperature: 0.4 })
+    const parsed = parseSupplyResponse(raw, "write-explain")
+    if (!parsed.ok) throw new Error("生成讲解正文失败：" + parsed.reason)
+    consumeBatch(store, batchId, dateStr(now())); recordTrace(unit.id, "write-explain", "", client.model, prompt)
+    const dir = requireUnitsDir(); const unitFile = unitFilePath(dir, unit)
+    if (!fs.existsSync(unitFile)) throw badRequest("单元文件还不存在，先跑 generate 生成断言脚本")
+    const after = replaceSection(fs.readFileSync(unitFile, "utf8"), "讲解", parsed.text)
+    const written = writeFileChecked(unitFile, after, { repoRoot: learningRoot, stateFile: stateFile })
+    if (!written.ok) throw serviceUnavailable("写讲解正文失败：" + written.reason)
+    return { unit: unit, explain: parsed.text, model: client.model, file: unitFile }
+  }
+
+  async function deepen(req) {
+    const r = req || {}; const unit = r.unit
+    if (!unit) throw badRequest("缺少单元")
+    if (!hasSupplyTemplate(unit.track, "deepen")) throw badRequest("轨道「" + String(unit.track) + "」没有深挖模板")
+    const client = currentClient(); if (client.name === "null") throw serviceUnavailable(offMessage(client))
+    const batchId = r.batchId || r.sessionId || null; ensureBatchQuota(batchId)
+    const question = String(r.question || "").trim(); const extra = Object.assign({}, r.context || {}); if (question) extra.question = question
+    const prompt = buildSupplyPrompt("deepen", unit.track, supplyContext(unit, extra))
+    const raw = await client.complete({ system: prompt.system, user: prompt.user, temperature: 0.4 })
+    const parsed = parseSupplyResponse(raw, "deepen")
+    if (!parsed.ok) throw new Error("深挖概念失败：" + parsed.reason)
+    consumeBatch(store, batchId, dateStr(now())); recordTrace(unit.id, "deepen", question, client.model, prompt)
+    const dir = requireUnitsDir(); const unitFile = unitFilePath(dir, unit)
+    if (!fs.existsSync(unitFile)) throw badRequest("单元文件还不存在，先跑 generate 生成断言脚本")
+    const heading = "### 深挖 · " + (question || "再挖一层")
+    const after = appendToSection(fs.readFileSync(unitFile, "utf8"), "讲解", heading + "\n\n" + parsed.text)
+    const written = writeFileChecked(unitFile, after, { repoRoot: learningRoot, stateFile: stateFile })
+    if (!written.ok) throw serviceUnavailable("写深挖段落失败：" + written.reason)
+    return { unit: unit, text: parsed.text, model: client.model, file: unitFile }
+  }
+
+  async function generateUnit(req) {
+    const r = req || {}; const unit = r.unit
+    if (!unit) throw badRequest("缺少单元")
+    if (!hasSupplyTemplate(unit.track, "generate-unit")) throw badRequest("轨道「" + String(unit.track) + "」不生成题面")
+    const client = currentClient(); if (client.name === "null") throw serviceUnavailable(offMessage(client))
+    const batchId = r.batchId || r.sessionId || null; ensureBatchQuota(batchId)
+    const prompt = buildSupplyPrompt("generate-unit", unit.track, supplyContext(unit, r.context))
+    const raw = await client.complete({ system: prompt.system, user: prompt.user, temperature: 0.8 })
+    const parsed = parseSupplyResponse(raw, "generate-unit")
+    if (!parsed.ok) throw new Error("生成单元失败：" + parsed.reason)
+    consumeBatch(store, batchId, dateStr(now())); recordTrace(unit.id, "generate-unit", "", client.model, prompt)
+    const dir = requireUnitsDir(); const stem = stemOf(unit); const lang = parsed.unit.solutionLang === "python" ? "py" : "cpp"
+    const referenceFile = path.join(dir, unit.track, stem + ".reference." + lang)
+    const writtenSolution = writeFileChecked(referenceFile, parsed.unit.solution + "\n", { repoRoot: learningRoot, stateFile: stateFile })
+    if (!writtenSolution.ok) throw serviceUnavailable("写参考解法失败：" + writtenSolution.reason)
+    const fields = { id: unit.id, track: unit.track, kind: "problem", title: parsed.unit.title, difficulty: parsed.unit.difficulty,
+      topics: parsed.unit.topics, source: "generated", language: lang === "py" ? "python" : "cpp", demo: "",
+      reference: path.join("units", unit.track, stem + ".reference." + lang).replace(/\\/g, "/"), graded: "user", script: "",
+      status: "draft", reviewed: false, reviewed_at: "", subtracks: Array.isArray(unit.subtracks) ? unit.subtracks : [] }
+    const unitFile = unitFilePath(dir, unit)
+    const content = renderUnitFile(fields, { explain: parsed.unit.statement, related: [] }) + "\n## 用例\n\n" + casesTable(parsed.unit.cases) + "\n"
+    const written = writeFileChecked(unitFile, content, { repoRoot: learningRoot, stateFile: stateFile })
+    if (!written.ok) throw serviceUnavailable("写单元文件失败：" + written.reason)
+    return { unit: unit, generated: parsed.unit, model: client.model, file: unitFile, referenceFile: referenceFile }
+  }
+
   /**
    * 当前 LLM 状态，给设置页与前端看。
    * **只报密钥来自哪个环境变量，绝不回显密钥**（G27）。
@@ -447,6 +638,10 @@ function createLlmService(opts) {
     fill: fill,
     describe: describe,
     currentClient: currentClient,
+    generateUnit: generateUnit,
+    generateAssert: generateAssert,
+    writeExplain: writeExplain,
+    deepen: deepen,
   }
 }
 
