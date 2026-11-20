@@ -124,6 +124,40 @@ function limits(store) {
   }
 }
 
+/* ---------------- P4：离线批处理的配额 ---------------- */
+
+/** 离线批次的默认 id；批处理复用会话桶，每日上限沿用不变。 */
+const DEFAULT_BATCH_ID = "supply"
+
+/** 批次计数键；没给批次 id 就落到默认批次。 */
+function batchKey(batchId) {
+  return sessionKey(batchId || DEFAULT_BATCH_ID)
+}
+
+/** 批次配额用完时给用户看的中文提示 */
+function batchMessage(batch, daily) {
+  if (!daily.ok) {
+    return "今天用完了：LLM 每日请求次数已达上限（" + daily.limit + " 次）。明天再来，或者调高每日配额。"
+  }
+  return "本批次的 LLM 请求次数已用完（上限 " + batch.limit + " 次）。换一个批次 id（--session）再来，或者调高单批次配额。"
+}
+
+/** 查离线批次的配额：批次桶 + 每日桶 */
+function checkBatch(store, batchId, date) {
+  const batch = checkQuota(store, batchKey(batchId))
+  const daily = checkQuota(store, dailyKey(date))
+  const ok = batch.ok && daily.ok
+  return { ok: ok, batch: batch, daily: daily, message: ok ? "" : batchMessage(batch, daily) }
+}
+
+/** 同时扣批次与每日两个计数 */
+function consumeBatch(store, batchId, date) {
+  return {
+    batch: consumeQuota(store, batchKey(batchId), 1),
+    daily: consumeQuota(store, dailyKey(date), 1),
+  }
+}
+
 /**
  * 启动时把环境变量里的配额写进 settings 表。
  * **只在键不存在时写**：设置页里改过的值优先，不被环境变量覆盖。
@@ -151,4 +185,9 @@ module.exports = {
   consumeAll: consumeAll,
   limits: limits,
   seedLimits: seedLimits,
+  DEFAULT_BATCH_ID: DEFAULT_BATCH_ID,
+  batchKey: batchKey,
+  batchMessage: batchMessage,
+  checkBatch: checkBatch,
+  consumeBatch: consumeBatch,
 }
