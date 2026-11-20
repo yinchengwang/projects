@@ -42,6 +42,9 @@
 #include "storage/pager_internal.h"
 
 #include <stdlib.h>
+#include <string.h>
+
+#include "storage/page.h"
 
 /*
  * 空闲栈扩容（调用方必须已持有池级写锁）。
@@ -56,6 +59,40 @@ static int free_stack_grow(Pager *pg)
     pg->free_ids = np;
     pg->free_cap = ncap;
     return OK;
+}
+
+/*
+ * 把"这一页空闲"这件事**写到页里**（W-D 的 D-6.3）。
+ *
+ * 不写日志：标记丢了的两个方向都安全（见 common/config.h 里 PT_FREE 的说明）。
+ *
+ * 【为什么必须走 pager_get / pager_unpin 而不是直接 write_page】
+ *
+ * 这一页可能正躺在缓冲池里（脏的、或被别人 pin 着）。
+ * 绕过缓冲池直接写文件 ⇒ 内存里那份旧内容以后被刷出去时会把标记抹掉，
+ * 或者反过来把新主人的数据盖掉。所以走正常的取帧路径。
+ */
+static int free_mark_page(Pager *pg, u32 page_id)
+{
+    PageFrame *fr = NULL;
+    int rc;
+
+    rc = pager_get(pg, page_id, &fr);
+    if (rc != OK)
+        return rc;
+
+    /*
+     * 直接走 page_init：它做的正是"整页清零 + 置页类型 + 重置槽位区 + 算校验和"。
+     * 空闲页不需要保留任何旧字节（下一个主人拿到的必须是干净页）——
+     * 这比手工逐字段设置更不容易漏，也和 pager_alloc 的交接口径一致。
+     */
+    rc = page_init(fr->data, (u8)PT_FREE);
+    if (rc != OK) {
+        (void)pager_unpin(pg, page_id, false);
+        return rc;
+    }
+
+    return pager_unpin(pg, page_id, true);
 }
 
 /*
@@ -118,6 +155,18 @@ int pager_free(Pager *pg, u32 page_id)
     if (pinned)
         return E_INVAL;
 
+    /*
+     * 先把"空闲"这件事**写进页里**（D-6.3 的落盘）。
+     *
+     * 顺序：标记页 → 进栈。反过来（先进栈、后标记）在崩溃窗口里
+     * 会得到"栈里有它、页上没标记" ⇒ 重开后栈重建不出来 ⇒ 只是空洞（安全）；
+     * 而现在是"页上有标记、栈里还没它" ⇒ 重开后会被扫出来 ⇒ 更好。
+     * 两种顺序都不会"重复发放"，因为发放的前提是页上**没有**标记。
+     */
+    rc = free_mark_page(pg, page_id);
+    if (rc != OK)
+        return rc;
+
     pager_pool_wrlock(pg);
     if (pg->free_count == pg->free_cap) {
         rc = free_stack_grow(pg);
@@ -128,6 +177,75 @@ int pager_free(Pager *pg, u32 page_id)
     }
     pg->free_ids[pg->free_count++] = page_id;
     pager_pool_wrunlock(pg);
+    return OK;
+}
+
+/*
+ * 开库时重建空闲栈（W-D 的 D-6.3）。
+ *
+ * 扫一遍页空间，凡是页类型是 PT_FREE 的都收进栈。
+ *
+ * 【必须在 WAL 重放**之后**调用】
+ *
+ * 重放会把"已提交的页镜像"盖回去 —— 那些页是**有主**的。
+ * 在重放之前扫 ⇒ 会把它们当空闲页收进栈 ⇒ 下次分配发出去 ⇒ 数据互相踩。
+ * 所以唯一正确的调用点是 db_open 里 recovery_run 之后。
+ *
+ * 【为什么可以线性扫】
+ *
+ * 开库时本来就要付这次代价：geo / ts / ft 都在开库时扫页空间找自己的页
+ * （坑 M5-9 / M6-32 已经如实记账"开库代价随库大小线性增长"）。
+ * 这一趟额外扫描与它们同量级，不改变量级。
+ *
+ * 【不重不漏】
+ *
+ * 扫描是幂等的：同一个页扫两遍只会被 push 两次 —— 所以这里先清空栈。
+ * 清空是安全的：调用点在开库时，此前的栈里只可能有
+ * "本次会话回收过的页"，而那些页在盘上**也有标记** ⇒ 扫得到。
+ */
+int pager_free_rebuild(Pager *pg, u32 *found_out)
+{
+    u64 np;
+    u32 pid;
+    u32 n = 0;
+    int rc = OK;
+
+    if (!pg)
+        return E_INVAL;
+    if (found_out)
+        *found_out = 0;
+
+    pager_pool_wrlock(pg);
+    pg->free_count = 0;
+    pager_pool_wrunlock(pg);
+
+    np = atomic_load(&pg->npages);
+    for (pid = 0; (u64)pid < np; pid++) {
+        PageFrame *fr = NULL;
+
+        rc = pager_get(pg, pid, &fr);
+        if (rc != OK)
+            return rc;
+
+        if (fr->data[H_TYPE] == (u8)PT_FREE) {
+            pager_pool_wrlock(pg);
+            if (pg->free_count == pg->free_cap) {
+                rc = free_stack_grow(pg);
+                if (rc != OK) {
+                    pager_pool_wrunlock(pg);
+                    (void)pager_unpin(pg, pid, false);
+                    return rc;
+                }
+            }
+            pg->free_ids[pg->free_count++] = pid;
+            pager_pool_wrunlock(pg);
+            n++;
+        }
+        (void)pager_unpin(pg, pid, false);
+    }
+
+    if (found_out)
+        *found_out = n;
     return OK;
 }
 

@@ -218,7 +218,12 @@ int pager_fetch_frame(Pager *pg, u32 page_id, PageFrame **out);
  * ---------------- 全局空闲页栈（pager_free.c 实现，pager.c 用） ----------------
  *
  * pager_free_pop —— 取一个空闲页号（栈空则返回 false，调用方去文件尾追加）。
+ *
+ * pager_free_rebuild —— 开库时按页上的 PT_FREE 标记重建栈
+ *                       （**必须在 WAL 重放之后**调，见 pager_free.c 的说明）。
  */
 bool pager_free_pop(Pager *pg, u32 *page_id);
+
+int pager_free_rebuild(Pager *pg, u32 *found_out);
 
 #endif /* DB_STORAGE_PAGER_INTERNAL_H */
