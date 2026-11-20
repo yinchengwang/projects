@@ -256,17 +256,17 @@ test("detectNumpy：结果可用且能清缓存", function () {
 })
 
 /**
- * 已知跑不通的 AI 卡 demo（learning 仓 **scaffold/** 的内容 bug，不是 P2 的代码 bug）。
+ * 已知跑不通的 AI 卡 demo 台账。
  *
- * 契约 G32 冻结「scaffold/** 一个字节都不许改」，P2 无权修；这里如实记录，
- * 让「13 张卡里有 3 张跑不动」变成可查的事实而不是模糊印象。
- * 谁哪天修好了，下面那条用例会提醒把这行删掉。
+ * **现在是空的**：2026-11-20 按契约新增的「G32 / G39 唯一例外」条款，
+ * 修掉了原来这 3 张（`dimensionality_reduction` 的 f-string 没闭合、
+ * `nlp` 的 `TextCNN.num_filters`、`rnn` 的 `randn(1, 8)` 解包），全部只改代码缺陷、
+ * 一个讲解文字都没动。修订在 learning 仓的提交里逐条列出了原文与改后。
+ *
+ * 将来再发现坏 demo：先按契约同款流程在契约里登记，再修，修完再清空这里——
+ * 这个表的语义是「已知且容忍的坏」，不是「懒得修的清单」。
  */
-const KNOWN_BROKEN_DEMOS = {
-  dimensionality_reduction: "main.py:192 的 f-string 没闭合：print(f\"  LDA 寻找类间分离方向（监督））",
-  nlp: "main.py 里用了 TextCNN.num_filters，类上没有这个属性",
-  rnn: "main.py 里 np.random.randn(1, 8) 只返回 1 个值，却按 2 个解包",
-}
+const KNOWN_BROKEN_DEMOS = {}
 
 test("AI 卡的 demo 实跑：没有 numpy 时明确 skip 并写明原因", function (t) {
   const learningRoot = resolveLearningRoot()
@@ -306,7 +306,7 @@ test("AI 卡的 demo 实跑：没有 numpy 时明确 skip 并写明原因", func
   }
 })
 
-test("13 张 AI 卡里除已知坏掉的 3 张，其余 demo 都能实跑", function (t) {
+test("13 张 AI 卡的 demo 都能实跑（与 KNOWN_BROKEN_DEMOS 台账一致）", function (t) {
   const learningRoot = resolveLearningRoot()
   if (!learningRoot) {
     skipNoLearning(t, "AI 卡全量实跑验收")
