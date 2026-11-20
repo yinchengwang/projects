@@ -45,6 +45,25 @@ function buildCases(unit) {
 }
 
 /**
+ * 响应里的 `unit`：`kind === "problem"` 时把 `asserts` 裁到前 2 条。
+ *
+ * 为什么必须裁：`unit.asserts` 是全量的（loader A 把每条用例都转成一条 output 断言），
+ * 不裁的话第 3 条用例的 `input`/`expect` 会从这里漏出去，「第 3 个用例不外泄」就是假保护。
+ * 实测：3 条用例的题，响应全文里能搜到 `3,3,0,0,0`。
+ *
+ * 判题链路不受影响：`judgeUnit` 用的是**服务端内存里的单元索引**，不是这份 HTTP 响应。
+ * 需要「一共几条断言」的地方读 `cases.total`，不要读 `unit.asserts.length`。
+ * @param {object} unit
+ * @returns {object} 裁剪后的副本（不改原对象）
+ */
+function trimUnit(unit) {
+  const src = unit || {}
+  if (String(src.kind || "") !== "problem") return src
+  const asserts = Array.isArray(src.asserts) ? src.asserts : []
+  return Object.assign({}, src, { asserts: asserts.slice(0, SAMPLE_CASE_COUNT) })
+}
+
+/**
  * 组装路由表。
  * @param {{store: object, unitSnapshot: object, sendJson: Function}} ctx
  * @returns {Array<{method: string, pattern: string, handler: Function}>}
@@ -102,7 +121,7 @@ function buildUnitRoutes(ctx) {
         return
       }
       const payload = {
-        unit: unit,
+        unit: trimUnit(unit),
         statement_html: toHtml(unit.statement || ""),
       }
       // 契约 §8.1.1：problem 类带 cases（sample 最多 2 条），card 类不带这个字段。
@@ -119,5 +138,6 @@ function buildUnitRoutes(ctx) {
 module.exports = {
   buildUnitRoutes: buildUnitRoutes,
   buildCases: buildCases,
+  trimUnit: trimUnit,
   SAMPLE_CASE_COUNT: SAMPLE_CASE_COUNT,
 }

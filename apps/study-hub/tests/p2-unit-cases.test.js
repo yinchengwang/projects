@@ -98,11 +98,22 @@ test("kind=problem：带 cases，sample 最多 2 条，total 是全量", async f
 test("kind=problem：cases.sample 与 unit.asserts 前 2 条同源同值", async function () {
   await withApp(async function (base) {
     const body = await (await fetch(base + "/api/units/algo:lc-00009")).json()
-    assert.strictEqual(body.unit.asserts.length, 3, "asserts 全量保留（判题链路要用）")
+    assert.strictEqual(body.unit.asserts.length, 2, "asserts 也裁到 2 条（与 sample 一样多）")
     body.cases.sample.forEach(function (item, i) {
       assert.strictEqual(item.input, body.unit.asserts[i].input, "第 " + i + " 条 input 要同源")
       assert.strictEqual(item.expect, body.unit.asserts[i].expect, "第 " + i + " 条 expect 要同源")
     })
+  })
+})
+
+test("kind=problem：第 3 条用例的 input/expect 不在响应里（asserts 也裁了）", async function () {
+  await withApp(async function (base) {
+    const raw = await (await fetch(base + "/api/units/algo:lc-00009")).text()
+    // 夹具第 3 条是 `| 7 8 9 | -1 -1 -1 |`
+    assert.strictEqual(raw.indexOf("7 8 9"), -1, "第 3 条用例的 input 漏出去了")
+    assert.strictEqual(raw.indexOf("-1 -1 -1"), -1, "第 3 条用例的 expect 漏出去了")
+    // total 仍然要说真话：用户知道有 3 条，只是只看得见 2 条
+    assert.strictEqual(JSON.parse(raw).cases.total, 3)
   })
 })
 
