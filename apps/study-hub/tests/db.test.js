@@ -9,7 +9,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
 
-const { openDb, createStore } = require("../server/db.js")
+const { openDb, createStore, migrate } = require("../server/db.js")
 const { tmpDir } = require("./helpers/tmp.js")
 
 function freshStore() {
@@ -133,4 +133,58 @@ test("topics 累加而不是覆盖", function () {
   assert.strictEqual(topics[0].first_pass, 1)
   assert.strictEqual(topics[0].attempts, 2)
   assert.strictEqual(topics[0].lapses, 1)
+})
+
+/* ---------------- P3 Task4：复合键、replaceMastery、migrate 的 P3 段落 ---------------- */
+
+test("replaceTopics 写 track 列，id 是复合键", function () {
+  const { store } = freshStore()
+  store.replaceTopics([
+    { id: "algorithm:数组", track: "algorithm", first_pass: 1, attempts: 3, last_at: null, lapses: 0 },
+    { id: "database:事务", track: "database", first_pass: 0, attempts: 2, last_at: null, lapses: 1 },
+  ])
+  const rows = store.listTopics()
+  assert.strictEqual(rows.length, 2)
+  const array = rows.find(function (r) { return r.id === "algorithm:数组" })
+  assert.strictEqual(array.track, "algorithm")
+  assert.strictEqual(array.attempts, 3)
+  const tx = rows.find(function (r) { return r.id === "database:事务" })
+  assert.strictEqual(tx.track, "database")
+})
+
+test("replaceMastery 整体覆盖 mastery 表，重复调用不累加", function () {
+  const { store } = freshStore()
+  store.replaceMastery([
+    { scope: "track", scope_id: "algorithm", level: 0.5, updated_at: "2026-11-11T00:00:00.000Z" },
+  ])
+  store.replaceMastery([
+    { scope: "track", scope_id: "algorithm", level: 0.8, updated_at: "2026-11-12T00:00:00.000Z" },
+  ])
+  const rows = store.listMastery("track")
+  assert.strictEqual(rows.length, 1)
+  assert.strictEqual(rows[0].level, 0.8)
+})
+
+test("migrate 的 P3 段落把裸知识点 id 复合键化，且幂等", function () {
+  const db = openDb(":memory:")
+  const store = createStore(db)
+  store.upsertTopic({ id: "数组", first_pass: 1, attempts: 1, last_at: null, lapses: 0 })
+  store.upsertMastery("topic", "数组", 0.42, "2026-11-11T00:00:00.000Z")
+
+  migrate(db)
+  const after = store.listTopics()
+  assert.strictEqual(after.length, 1)
+  assert.strictEqual(after[0].id, "algorithm:数组")
+  assert.strictEqual(after[0].track, "algorithm")
+
+  const masteryRows = store.listMastery("topic")
+  assert.strictEqual(masteryRows.length, 1)
+  assert.strictEqual(masteryRows[0].scope_id, "algorithm:数组")
+
+  // 再跑一次不炸、不重复、不变形
+  migrate(db)
+  assert.strictEqual(store.listTopics().length, 1)
+  assert.strictEqual(store.listTopics()[0].id, "algorithm:数组")
+  assert.strictEqual(store.listMastery("topic").length, 1)
+  assert.strictEqual(store.listMastery("topic")[0].scope_id, "algorithm:数组")
 })

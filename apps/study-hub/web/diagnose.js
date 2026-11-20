@@ -174,15 +174,15 @@
       return String(a.topic) < String(b.topic) ? -1 : 1
     })
     return list.slice(0, cap).map(function (item) {
-      const problems = Number(item.problems) || 0
+      const unitCount = Number(item.unitCount) || 0
       const expected = Number(item.expected) || 0
       return {
         topic: String(item.topic),
         coverage: Charts.clamp01(item.coverage),
         expected: expected,
-        problems: problems,
+        unitCount: unitCount,
         display: percent(item.coverage),
-        detail: "练了 " + problems + " / 期望 " + expected + " 题",
+        detail: "练了 " + unitCount + " / 期望 " + expected + " 个单元",
       }
     })
   }

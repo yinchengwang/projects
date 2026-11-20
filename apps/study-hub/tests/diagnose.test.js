@@ -44,7 +44,7 @@ const TOPICS = [
     action: "轮次里优先排这类题——先补量",
     attempts: 6,
     expected: 5,
-    problems: 2,
+    unitCount: 2,
   },
   {
     topic: "哈希表",
@@ -55,7 +55,7 @@ const TOPICS = [
     action: "保持手感",
     attempts: 5,
     expected: 5,
-    problems: 4,
+    unitCount: 4,
   },
   {
     topic: "动态规划",
@@ -66,7 +66,7 @@ const TOPICS = [
     action: "回头复盘错题",
     attempts: 4,
     expected: 5,
-    problems: 1,
+    unitCount: 1,
   },
   {
     topic: "二分查找",
@@ -77,7 +77,7 @@ const TOPICS = [
     action: "多练同类型题",
     attempts: 2,
     expected: 5,
-    problems: 2,
+    unitCount: 2,
   },
 ]
 
@@ -203,7 +203,7 @@ test("coverageRows 按覆盖度从低到高排，并带上「练了几 / 期望�
   assert.strictEqual(rows.length, 4)
   assert.strictEqual(rows[0].topic, "动态规划")
   assert.strictEqual(rows[0].coverage, 0.2)
-  assert.strictEqual(rows[0].detail, "练了 1 / 期望 5 题")
+  assert.strictEqual(rows[0].detail, "练了 1 / 期望 5 个单元")
   assert.strictEqual(rows[3].topic, "哈希表")
 })
 

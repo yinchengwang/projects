@@ -196,6 +196,46 @@ function migrate(db) {
       warnings.push("加列失败：" + item.table + "." + item.column + "：" + String(err && err.message ? err.message : err))
     }
   })
+
+  // P3：知识点复合键化。三条都幂等（跑第二遍 WHERE 条件一条都不匹配）。
+  // 第一条把裸知识点名并入算法轨——历史数据全是算法轨，复合键化后 id 形如 algorithm:数组。
+  // 第二条补齐 P0 加的 track 列（正常情况下默认值就是 'algorithm'，这条是兜底）。
+  // 第三条把知识点级掌握度一并复合键化——mastery.scope='topic' 的 scope_id 与 topics.id 同形，
+  // 不一起改就会出现两套键。
+  //
+  // 只有**真的改了行**才记进 applied：这三条是 DML，不像 ALTER TABLE 那样能靠「列已存在」
+  // 判断做过没做过。第二遍跑时 changes 全是 0，applied 里就什么都不多——`unit-db.test.js`
+  // 靠这个断言幂等（「第二次什么都不做」）。
+  //
+  // `mastery` 表是 P0 的 SCHEMA 建的，migrate 本身不建表。真实调用点（openDb）里 SCHEMA
+  // 先跑，所以表一定在；但单独拿一个 P0 之前的库调 migrate 时它不存在——那种情况静默跳过，
+  // 不记 warning（「旧库还没这张表」不是迁移失败，建表是 SCHEMA 的活）。
+  const tableExists = function (name) {
+    try {
+      return db.prepare("PRAGMA table_info(" + name + ")").all().length > 0
+    } catch (err) {
+      return false
+    }
+  }
+  const p3Statements = [
+    { table: "topics", sql: "UPDATE topics SET id = 'algorithm:' || id WHERE id NOT LIKE '%:%'" },
+    { table: "topics", sql: "UPDATE topics SET track = 'algorithm' WHERE track IS NULL OR track = ''" },
+    {
+      table: "mastery",
+      sql: "UPDATE mastery SET scope_id = 'algorithm:' || scope_id WHERE scope = 'topic' AND scope_id NOT LIKE '%:%'",
+    },
+  ]
+  p3Statements.forEach(function (item) {
+    if (!tableExists(item.table)) return
+    try {
+      const info = db.prepare(item.sql).run()
+      const changes = Number(info && info.changes ? info.changes : 0)
+      if (changes > 0) applied.push(item.sql + "（" + changes + " 行）")
+    } catch (err) {
+      warnings.push("P3 数据迁移失败：" + item.sql + "：" + String(err && err.message ? err.message : err))
+    }
+  })
+
   return { applied: applied, warnings: warnings }
 }
 
@@ -585,8 +625,8 @@ function createStore(db) {
 
     upsertTopic: function (topic) {
       db.prepare(
-        `INSERT INTO topics(id, first_pass, attempts, last_at, lapses)
-         VALUES(?, ?, ?, ?, ?)
+        `INSERT INTO topics(id, track, first_pass, attempts, last_at, lapses)
+         VALUES(?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            first_pass = topics.first_pass + excluded.first_pass,
            attempts = topics.attempts + excluded.attempts,
@@ -594,6 +634,7 @@ function createStore(db) {
            lapses = topics.lapses + excluded.lapses`
       ).run(
         String(topic.id),
+        String(topic.track || "algorithm"),
         Number(topic.first_pass || 0),
         Number(topic.attempts || 0),
         topic.last_at === null || topic.last_at === undefined ? null : String(topic.last_at),
@@ -606,26 +647,52 @@ function createStore(db) {
     },
 
     /**
-     * 整体覆盖 topics 表（M5 追加）。
+     * 整体覆盖 topics 表（M5 追加，P3 起写复合键与轨）。
      *
      * M1 的 upsertTopic 是**累加**写法，M3/M4 可能还在用它往 topics 里写增量；
      * M5 每次算诊断都从原始流水重新派生，所以用这个整体覆盖把口径统一，
      * 两种写法不会互相污染——派生值永远是全量，不是增量。
      *
-     * @param {Array<{id: string, first_pass: number, attempts: number, last_at: string|null, lapses: number}>} rows
+     * P3 起 id 是复合键 <track>:<topic>，并多写一列 track。
+     *
+     * @param {Array<{id: string, track?: string, first_pass: number, attempts: number, last_at: string|null, lapses: number}>} rows
      */
     replaceTopics: function (rows) {
       db.exec("DELETE FROM topics")
       const stmt = db.prepare(
-        "INSERT INTO topics(id, first_pass, attempts, last_at, lapses) VALUES(?, ?, ?, ?, ?)"
+        "INSERT INTO topics(id, track, first_pass, attempts, last_at, lapses) VALUES(?, ?, ?, ?, ?, ?)"
       )
       ;(rows || []).forEach(function (row) {
         stmt.run(
           String(row.id),
+          String(row.track || "algorithm"),
           Number(row.first_pass || 0),
           Number(row.attempts || 0),
           row.last_at === null || row.last_at === undefined ? null : String(row.last_at),
           Number(row.lapses || 0)
+        )
+      })
+    },
+
+    /**
+     * 整体覆盖 mastery 表（P3 新增）。
+     *
+     * 与 replaceTopics 同一个语义：物化视图是全量快照，不是增量。
+     * 三层掌握度（unit / topic / track）一次写全，重复调用不累加。
+     *
+     * @param {Array<{scope: "unit"|"topic"|"track", scope_id: string, level: number, updated_at: string}>} rows
+     */
+    replaceMastery: function (rows) {
+      db.exec("DELETE FROM mastery")
+      const stmt = db.prepare(
+        "INSERT INTO mastery(scope, scope_id, level, updated_at) VALUES(?, ?, ?, ?)"
+      )
+      ;(rows || []).forEach(function (row) {
+        stmt.run(
+          String(row.scope),
+          String(row.scope_id),
+          Number(row.level || 0),
+          String(row.updated_at || "")
         )
       })
     },

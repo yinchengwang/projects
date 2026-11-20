@@ -3,7 +3,7 @@
  * insights.js —— 诊断数据装配
  *
  * 数据来源（口径见 M5 计划「统计口径」一节）：
- *   - 知识点统计：attempts 表 + 题库 → 派生 → 幂等覆盖 topics 表 → 从 topics 表读
+ *   - 知识点统计：attempts 表 + 单元清单 → 派生 → 幂等覆盖 topics 表（id 是复合键 <track>:<topic>）→ 从 topics 表读
  *   - 覆盖度分母：core/mastery/expected.js 的期望题量口径
  *   - 每日题量曲线：attempts 表按 substr(ts,1,10) 分组
  *
@@ -12,9 +12,12 @@
 
 const {
   MASTERY_THRESHOLD,
+  URGENCY_ORDER,
+  diagnose,
+  diagnoseLabel,
   diagnoseAction,
-  rankTopics,
-  sortByUrgency,
+  masteryOfUnit,
+  coverageOfUnits,
 } = require("../core/mastery/mastery.js")
 const {
   bankTopicCounts,
@@ -141,17 +144,14 @@ function buildSummary(input) {
     windowAttempts += Number(row.count || 0)
   })
 
+  // 练过的知识点用复合键记（与 bankCounts 的键同形，两边才能对上）
   const practiced = {}
   topics.forEach(function (item) {
-    practiced[item.topic] = true
+    practiced[item.id] = true
   })
   let untouchedTopics = 0
   Object.keys(bankCounts).forEach(function (key) {
-    // 题库计数的键从 P3 Task2 起是复合键 <track>:<topic>，而这里的 practiced
-    // 仍是裸知识点名（旧接口的 topic 字段口径没变），所以取复合键的知识点部分来比。
-    // 整条口径的复合键化在 Task 4 做。
-    const bare = splitKey(key).topic
-    if (!practiced[bare]) untouchedTopics += 1
+    if (!practiced[key]) untouchedTopics += 1
   })
 
   const count = topics.length
@@ -172,6 +172,27 @@ function buildSummary(input) {
 }
 
 /**
+ * 处置优先级排序：档位 → 掌握度 → 复合键。
+ *
+ * 规则与 core/mastery/mastery.js 的 sortByUrgency 一致（档位 → 掌握度 → 名字），
+ * 只是末级换成复合键——两轨都有「索引」时不会打架。不改原数组。
+ * @param {Array<object>} rows
+ * @returns {Array<object>}
+ */
+function sortRows(rows) {
+  return (rows || []).slice().sort(function (a, b) {
+    const ia = URGENCY_ORDER.indexOf(a.bucket)
+    const ib = URGENCY_ORDER.indexOf(b.bucket)
+    const pa = ia === -1 ? URGENCY_ORDER.length : ia
+    const pb = ib === -1 ? URGENCY_ORDER.length : ib
+    if (pa !== pb) return pa - pb
+    if (a.mastery !== b.mastery) return a.mastery - b.mastery
+    if (a.id === b.id) return 0
+    return a.id < b.id ? -1 : 1
+  })
+}
+
+/**
  * 装配诊断数据。
  * @param {{store: object, provider: object, nowIso?: string, days?: number}} ctx
  * @returns {Promise<{topics: object[], summary: object, series: object[]}>}
@@ -181,15 +202,18 @@ async function buildInsights(ctx) {
   const nowIso = context.nowIso || new Date().toISOString()
   const days = normalizeDays(context.days)
 
-  const problems = context.provider && context.provider.list ? await context.provider.list() : []
+  // 单元清单。P2 起 provider 返回的是 Unit（带 track 与 topics）；旧 provider 也照样能用——
+  // 没有 track 就按 id 前缀归轨，没有前缀归算法轨（core/mastery/expected.js 的 trackOfUnit）。
+  const units = context.provider && context.provider.list ? await context.provider.list() : []
   const attempts = context.store.listAttemptSummaries()
-  const derived = deriveTopicStats(attempts, problems)
+  const derived = deriveTopicStats(attempts, units)
 
-  // topics 表是物化视图：整体覆盖，幂等
+  // topics 表是物化视图：整体覆盖，幂等。P3 起 id 写复合键 <track>:<topic>。
   context.store.replaceTopics(
     derived.map(function (row) {
       return {
-        id: row.topic,
+        id: row.id,
+        track: row.track,
         first_pass: row.firstPass,
         attempts: row.attempts,
         last_at: row.lastAt,
@@ -200,63 +224,62 @@ async function buildInsights(ctx) {
 
   // 掌握度只从 topics 表读
   const topicRows = context.store.listTopics()
-  const problemsOfTopic = {}
+  const unitCountOf = {}
   derived.forEach(function (row) {
-    problemsOfTopic[row.topic] = row.problems
+    unitCountOf[row.id] = row.unitCount
   })
 
+  // 裸知识点名与轨都从复合键拆出来（topics 表只存复合键）
   const stats = topicRows.map(function (row) {
+    const parts = splitKey(row.id)
     return {
-      topic: row.id,
+      id: row.id,
+      track: row.track || parts.track,
+      topic: parts.topic,
       attempts: row.attempts,
       firstPass: row.first_pass,
       lapses: row.lapses,
       lastAt: row.last_at,
-      problems: problemsOfTopic[row.id] === undefined ? 0 : problemsOfTopic[row.id],
+      unitCount: unitCountOf[row.id] === undefined ? 0 : unitCountOf[row.id],
     }
   })
 
   const settings = context.store.allSettings()
-  const bankCounts = bankTopicCounts(problems)
+  const bankCounts = bankTopicCounts(units)
   const expectedMap = buildExpectedMap(
     stats.map(function (stat) {
-      return stat.topic
+      return stat.id
     }),
     bankCounts,
     settings
   )
-  const expectedCounts = {}
-  Object.keys(expectedMap).forEach(function (topic) {
-    expectedCounts[topic] = expectedMap[topic].expected
-  })
 
-  // rankTopics 给掌握度升序；sortByUrgency 改成「该先治哪个」的顺序
-  const ranked = sortByUrgency(rankTopics(stats, nowIso, expectedCounts))
-
-  const statOf = {}
-  stats.forEach(function (stat) {
-    statOf[stat.topic] = stat
-  })
-
-  const topics = ranked.map(function (item) {
-    const stat = statOf[item.topic]
-    const expected = expectedMap[item.topic]
+  // 掌握度与覆盖度：数值口径一个字不改（masteryOfUnit ≡ masteryOf，coverageOfUnits ≡ coverageOf）
+  const rows = stats.map(function (stat) {
+    const expected = expectedMap[stat.id]
+    const mastery = masteryOfUnit(stat.id, stat, nowIso)
+    const coverage = coverageOfUnits(stat.unitCount, expected.expected)
+    const bucket = diagnose(mastery, coverage)
     return {
-      topic: item.topic,
-      mastery: item.mastery,
-      coverage: item.coverage,
-      bucket: item.bucket,
-      label: item.label,
-      action: diagnoseAction(item.bucket),
+      id: stat.id,
+      track: stat.track,
+      topic: stat.topic,
+      mastery: mastery,
+      coverage: coverage,
+      bucket: bucket,
+      label: diagnoseLabel(bucket),
+      action: diagnoseAction(bucket),
       attempts: stat.attempts,
       firstPass: stat.firstPass,
       lapses: stat.lapses,
       lastAt: stat.lastAt,
       expected: expected.expected,
       expectedSource: expected.source,
-      problems: stat.problems,
+      unitCount: stat.unitCount,
     }
   })
+
+  const topics = sortRows(rows)
 
   const endDate = String(nowIso).slice(0, 10)
   const series = buildSeries(context.store.countAttemptsByDay(), endDate, days)

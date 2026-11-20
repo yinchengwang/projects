@@ -79,7 +79,7 @@ test("buildInsights 把派生统计物化回 topics 表", async function () {
 
   const rows = store.listTopics()
   assert.strictEqual(rows.length, 2)
-  const array = rows.find(function (r) { return r.id === "数组" })
+  const array = rows.find(function (r) { return r.id === "algorithm:数组" })
   assert.strictEqual(array.attempts, 4)
   assert.strictEqual(array.first_pass, 1)
   assert.strictEqual(array.lapses, 2)
@@ -115,7 +115,7 @@ test("buildInsights 返回的每个知识点带齐契约要求的字段", async 
   assert.strictEqual(item.attempts, 4)
   assert.strictEqual(item.firstPass, 1)
   assert.strictEqual(item.lapses, 2)
-  assert.strictEqual(item.problems, 2)
+  assert.strictEqual(item.unitCount, 2)
 })
 
 test("掌握度按公式算：首次通过率 + 遗忘因子", async function () {
@@ -423,11 +423,49 @@ test("GET /api/insights 在有流水时给出真实的知识点统计", async fu
     const hash = body.topics.find(function (t) { return t.topic === "哈希表" })
     assert.strictEqual(array.attempts, 1)
     assert.strictEqual(array.firstPass, 1)
-    assert.strictEqual(array.problems, 1)
+    assert.strictEqual(array.unitCount, 1)
     assert.strictEqual(hash.attempts, 1)
     assert.strictEqual(body.summary.totalAttempts, 1, "一次提交不能按知识点数两遍")
     assert.strictEqual(body.summary.totalProblems, 1)
   } finally {
     await app.close()
   }
+})
+
+/* ---------------- P3 Task4：复合键写到 topics 表与响应里 ---------------- */
+
+test("topics 表写复合键：id 是 <track>:<topic>，track 列单独存", async function () {
+  const store = freshStore()
+  seedAttempts(store)
+  await buildInsights({ store: store, provider: fakeProvider(), nowIso: NOW })
+
+  const rows = store.listTopics()
+  assert.strictEqual(rows.length, 2)
+  const array = rows.find(function (r) { return r.id === "algorithm:数组" })
+  assert.ok(array, "topics 表的 id 是复合键")
+  assert.strictEqual(array.track, "algorithm")
+})
+
+test("响应里的 topics 行带 id / track / unitCount 三个新字段", async function () {
+  const store = freshStore()
+  seedAttempts(store)
+  const insights = await buildInsights({ store: store, provider: fakeProvider(), nowIso: NOW })
+
+  const array = insights.topics.find(function (t) { return t.topic === "数组" })
+  assert.strictEqual(array.id, "algorithm:数组")
+  assert.strictEqual(array.track, "algorithm")
+  assert.strictEqual(array.unitCount, 2)
+  assert.strictEqual(array.problems, undefined, "旧字段 problems 不留双份")
+})
+
+test("复合键覆盖值优先于裸名覆盖值", async function () {
+  const store = freshStore()
+  seedAttempts(store)
+  store.setSetting("insights.expected_override.数组", "10")
+  store.setSetting("insights.expected_override.algorithm:数组", "7")
+  const insights = await buildInsights({ store: store, provider: fakeProvider(), nowIso: NOW })
+
+  const array = insights.topics.find(function (t) { return t.topic === "数组" })
+  assert.strictEqual(array.expected, 7)
+  assert.strictEqual(array.expectedSource, "override")
 })
