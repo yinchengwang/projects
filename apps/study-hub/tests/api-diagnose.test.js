@@ -357,3 +357,30 @@ test("heatmap 视图给出按时间升序的会话与每个队列项的格子", 
   assert.strictEqual(res.body.cells[1].state, "pending", "没作答过的单元是 pending")
   assert.strictEqual(res.body.cells[2].state, "wrong_answer")
 })
+
+/* ---------------- 单元清单的两种形状 ---------------- */
+
+test("ctx.units 传快照对象（loadUnits 的返回值）也认，不静默退回旧题库", async function () {
+  const store = freshStore()
+  seed(store)
+
+  // server/app.js 传进来的是 loadUnitsIndex() 的产物：{units, warnings, byId}
+  const routes = buildDiagnoseRoutes({
+    store: store,
+    provider: null,
+    sendJson: sendJson,
+    units: { units: UNITS, warnings: [], byId: {} },
+    nowIso: NOW,
+  })
+  const res = fakeRes()
+  await routes[0].handler({}, res, {}, new URLSearchParams("view=mastery"))
+
+  assert.strictEqual(res.status, 200)
+  // 三条轨迹的 unitCount 来自完整 Unit 清单；退回 provider.list() 的话这里会是 0
+  assert.strictEqual(res.body.tracks[0].unitCount, 3, "算法轨全部单元数")
+  const array = res.body.topics.filter(function (t) {
+    return t.topic === "数组"
+  })[0]
+  assert.ok(array, "快照对象里的 topics 数组要用上，否则知识点明细全空")
+  assert.ok(Math.abs(array.mastery - M_TRACK_ALGO) < 1e-9)
+})

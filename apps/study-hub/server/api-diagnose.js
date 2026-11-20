@@ -34,14 +34,22 @@ const VERDICTS = ["pass", "wrong_answer", "timeout", "compile_error", "runtime_e
  * 取单元清单。
  *
  * 优先用 ctx.units——那是 server/app.js 启动时 loadUnits 出来的那一份，
- * 带 entry.language（六轴的 c / python 两轴要看它），而 units 表只存摘要字段（契约 §4.2）。
+ * 带 entry.language（六轴的 c / python 两轴要看它）与 topics 数组，
+ * 而 units 表只存摘要字段（契约 §4.2）。
+ *
+ * 注意两种形状：`loadUnitsIndex()` 返回的是**快照对象** `{units, warnings, byId}`，
+ * 而测试里可以直接注数组。两种都认——只认数组的话会静默退回 provider.list()，
+ * 那份旧题库清单没有 topics 数组（是 "[数组, 哈希表]" 这种字符串），
+ * 知识点明细就会全空，而且不报错（真机上撞过这个坑）。
+ *
  * 没有就退回 ctx.provider.list()（旧题库清单，没有 entry → c / python 两轴为 0，
  * 属于 G17 的优雅降级，不是错误）。
- * @param {{units?: object[], provider?: object}} ctx
+ * @param {{units?: object[]|{units?: object[]}, provider?: object}} ctx
  * @returns {Promise<object[]>}
  */
 async function unitsOf(ctx) {
   if (Array.isArray(ctx.units)) return ctx.units
+  if (ctx.units && Array.isArray(ctx.units.units)) return ctx.units.units
   if (ctx.provider && typeof ctx.provider.list === "function") {
     try {
       const list = await ctx.provider.list()
