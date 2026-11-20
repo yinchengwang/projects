@@ -98,18 +98,11 @@ test("applyHash：页没注册就不动，注册了就切过去", function () {
   assert.ok(A.pages)
 })
 
-test("标签清单：P2 起含单元库（session / library / diagnose / settings）", function () {
+test("标签清单：P4 起含供给（session / library / diagnose / supply / settings）", function () {
   const keys = app.TABS.map(function (tab) {
     return tab.key
   })
-  assert.deepStrictEqual(keys, ["session", "library", "diagnose", "settings"])
-})
-
-test("标签栏里还没有 P4 才交付的页", function () {
-  const keys = app.TABS.map(function (tab) {
-    return tab.key
-  })
-  assert.strictEqual(keys.indexOf("supply"), -1, "供给是 P4 交付的")
+  assert.deepStrictEqual(keys, ["session", "library", "diagnose", "supply", "settings"])
 })
 
 test("旧页按契约 §9.1 分批退役：answer 在 P2，today / review / rounds 在 P3", function () {

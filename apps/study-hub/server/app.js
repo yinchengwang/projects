@@ -316,6 +316,9 @@ function createApp(opts) {
   const { createLlmClient } = require("../core/llm/client.js")
   const { createLlmService, readLlmSettings } = require("../core/llm/service.js")
   const { seedLimits } = require("../core/llm/guard.js")
+  // P4：供给页 / 供给接口依赖的单元列表与「自己写过」清单
+  const { stateFilePath } = require("../core/supply/unit-file.js")
+  const stateFile = options.stateFile || stateFilePath(ROOT)
 
   const db = openDb(options.dbPath || path.join(ROOT, "data", "app.db"))
   const store = createStore(db)
@@ -347,6 +350,12 @@ function createApp(opts) {
   }
   const unitSnapshot = loadUnits(unitOpts)
   refreshUnitIndex(store, unitOpts, unitSnapshot)
+
+  // P4：供给接口要看到「单元现在长什么样」。复用上面那份启动快照——
+  // 契约 §3.4 允许，也不再重复扫一遍盘（P3 的教训：多扫一次就是多一处不一致）。
+  const supplyUnits = unitSnapshot.units || []
+  const supplyUnitsById = unitSnapshot.byId || {}
+  const supplyUnitsDir = learning.ok ? unitsDir(learning.root) : null
 
   // M6：配额上限。环境变量只在 settings 表里没有这一项时才写入，不覆盖已有设置。
   seedLimits(store, env)
@@ -435,6 +444,23 @@ function createApp(opts) {
       llm: llm,
       sendJson: sendJson,
       env: env,
+    })
+  )
+
+  // P4：供给接口（status / review），独立路由文件。
+  routes.push.apply(
+    routes,
+    require("./api-supply.js").buildSupplyRoutes({
+      store: store,
+      provider: provider,
+      learning: learning,
+      units: supplyUnits,
+      unitsById: supplyUnitsById,
+      unitsDir: supplyUnitsDir,
+      stateFile: stateFile,
+      contentRoots: bankRoots,
+      env: env,
+      sendJson: sendJson,
     })
   )
 

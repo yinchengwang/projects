@@ -222,6 +222,7 @@ const TABS = [
   { key: "session", label: "本次学习" },
   { key: "library", label: "单元库" },
   { key: "diagnose", label: "诊断" },
+  { key: "supply", label: "供给" },
   { key: "settings", label: "设置" },
 ]
 
