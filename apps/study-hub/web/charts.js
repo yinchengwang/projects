@@ -1,8 +1,11 @@
-;(function (root, factory) {
+; (function (root, factory) {
   if (typeof module === "object" && module.exports) {
     module.exports = factory()
   } else {
+    // P1 把前端全局 AlgoPlan 改名成 StudyHub（契约 §13）。图表的全局名两个都挂，
+    // 旧页面（web/diagnose.js 之外的引用）不至于因为改名而找不到。
     root.AlgoPlanCharts = factory()
+    root.StudyHubCharts = root.AlgoPlanCharts
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict"
@@ -13,7 +16,8 @@
    * 零第三方依赖（契约 G22）：雷达图、折线 + 面积图、水平条形图全部手写 SVG。
    * 同一份文件既能被 node:test 直接 require，也能在浏览器里挂到 window.AlgoPlanCharts。
    *
-   * 配色：dataviz 暗色分类色 slot 1 蓝 #3987e5（掌握度）、slot 2 橙 #d95926（覆盖度），
+   * 配色：dataviz 暗色分类色 slot 1 蓝 #3987e5（掌握度）、slot 2 橙 #d95926（覆盖度）、
+   * slot 3 绿 #199e70（P3 新增：热力图的「通过」），
    * 在应用面板色 #1d2026 上跑过 validate_palette.js，六项检查全部 PASS。
    * 文字一律用文本色，不穿数据色；状态（弱/强）用文字徽章表达，不靠颜色单独承载。
    */
@@ -28,6 +32,7 @@
     muted: "#898781",
     series1: "#3987e5",
     series2: "#d95926",
+    series3: "#199e70",
   }
 
   /** 转义 XML 特殊字符 */
@@ -597,6 +602,7 @@
         display: String(
           row && row.display !== null && row.display !== undefined ? row.display : num(safe)
         ),
+        color: String(row && row.color !== null && row.color !== undefined ? row.color : ""),
         x: labelWidth,
         y: Math.round((index * rowHeight + (rowHeight - barHeight) / 2) * 100) / 100,
         width: Math.round(w * 100) / 100,
@@ -697,11 +703,12 @@
       )
       // 数据条
       if (row.width > 0) {
+        // 行上给了颜色就用行上的（逐行配色）；没给就走整张图的单色
         parts.push(
           '<path class="chart-bar" d="' +
             barPath(row.x, row.y, row.width, row.height, 4) +
             '" fill="' +
-            color +
+            escapeXml(row.color || color) +
             '"/>'
         )
       }
@@ -735,6 +742,264 @@
     return parts.join("")
   }
 
+  /**
+   * 热力图的六种格子状态。
+   *
+   * 颜色只做分组（通过 / 没通过 / 没作答），**状态本身由格子里的汉字承载**——
+   * 色觉障碍与黑白打印都还能读。每个状态另带一个中文全称，写进格子的 tooltip。
+   */
+  const HEATMAP_STATES = {
+    pass: { mark: "通", label: "通过", text: "#0d1512" },
+    wrong_answer: { mark: "错", label: "答错", text: "#1a0d06" },
+    timeout: { mark: "超", label: "超时", text: "#1a0d06" },
+    compile_error: { mark: "编", label: "编译错误", text: "#1a0d06" },
+    runtime_error: { mark: "崩", label: "运行时错误", text: "#1a0d06" },
+    pending: { mark: "待", label: "未作答", text: "#e8e8e6" },
+  }
+
+  /** 图例的固定顺序 */
+  const HEATMAP_STATE_ORDER = [
+    "pass",
+    "wrong_answer",
+    "timeout",
+    "compile_error",
+    "runtime_error",
+    "pending",
+  ]
+
+  /**
+   * 状态 → 颜色。四种失败共用一种颜色：颜色只分组，状态看汉字。
+   * @param {string} state
+   * @param {object} [theme]
+   * @returns {string}
+   */
+  function heatmapStateColor(state, theme) {
+    const t = Object.assign({}, DEFAULT_THEME, theme || {})
+    const key = String(state === null || state === undefined ? "" : state)
+    if (key === "pass") return t.series3
+    if (key === "pending") return t.track
+    if (HEATMAP_STATES[key]) return t.series2
+    return t.track
+  }
+
+  /**
+   * 会话热力图。
+   *
+   * 横轴 = 会话序号（用 sessions 里的 index，从 1 开始；没给就按数组下标 +1）；
+   * 纵轴 = 三轨（tracks 的顺序）；
+   * 格子 = 那次作答的结果（cells 每项一格）。
+   * 同一会话同一轨有多个单元时横向排开，列宽按全表最多的那一格数定。
+   *
+   * @param {{sessions: Array<{id: string, index?: number, started_at?: string}>,
+   *          cells: Array<{session_id: string, track: string, state: string, seq?: number, title?: string}>,
+   *          tracks?: string[], trackLabels?: Object<string, string>,
+   *          width?: number, height?: number, cellSize?: number, title?: string, theme?: object}} options
+   * @returns {string}
+   */
+  function heatmapSvg(options) {
+    const opts = options || {}
+    const theme = Object.assign({}, DEFAULT_THEME, opts.theme || {})
+    const sessions = Array.isArray(opts.sessions) ? opts.sessions : []
+    const cells = Array.isArray(opts.cells) ? opts.cells : []
+    const tracks =
+      Array.isArray(opts.tracks) && opts.tracks.length > 0
+        ? opts.tracks
+        : ["algorithm", "database", "ai"]
+    const trackLabels =
+      opts.trackLabels && typeof opts.trackLabels === "object" ? opts.trackLabels : {}
+    const title = String(opts.title || "会话热力图")
+    const cellSize = Number(opts.cellSize) > 0 ? Number(opts.cellSize) : 16
+    const gap = 3
+    const padLeft = 64
+    const padTop = 30
+    const padRight = 16
+    const padBottom = 28
+    const parts = []
+
+    // 一个会话都没有：给中文占位文案，别画一张空图
+    if (sessions.length === 0) {
+      const width = Number(opts.width) > 0 ? Number(opts.width) : 320
+      const height = Number(opts.height) > 0 ? Number(opts.height) : 120
+      parts.push(
+        '<svg class="chart chart-heatmap" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' +
+          num(width) +
+          " " +
+          num(height) +
+          '" role="img" aria-label="' +
+          escapeXml(title) +
+          '">'
+      )
+      parts.push("<title>" + escapeXml(title) + "</title>")
+      parts.push(
+        '<text class="chart-empty" x="' +
+          num(width / 2) +
+          '" y="' +
+          num(height / 2) +
+          '" text-anchor="middle" dominant-baseline="middle" fill="' +
+          theme.muted +
+          '" font-size="13">还没有会话记录</text>'
+      )
+      parts.push("</svg>")
+      return parts.join("")
+    }
+
+    // 会话 → 列下标
+    const columnOf = {}
+    sessions.forEach(function (session, index) {
+      columnOf[String(session.id)] = index
+    })
+
+    // 每一列每一轨最多几个格子——定列宽
+    const slotCount = {}
+    cells.forEach(function (cell) {
+      const key = String(cell.session_id) + "|" + String(cell.track)
+      slotCount[key] = (slotCount[key] || 0) + 1
+    })
+    let maxSlots = 1
+    Object.keys(slotCount).forEach(function (key) {
+      if (slotCount[key] > maxSlots) maxSlots = slotCount[key]
+    })
+
+    const colWidth = maxSlots * (cellSize + gap)
+    const rowHeight = cellSize + gap + 10
+    const width =
+      Number(opts.width) > 0 ? Number(opts.width) : padLeft + sessions.length * colWidth + padRight
+    const height =
+      Number(opts.height) > 0
+        ? Number(opts.height)
+        : padTop + tracks.length * rowHeight + padBottom
+
+    parts.push(
+      '<svg class="chart chart-heatmap" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' +
+        num(width) +
+        " " +
+        num(height) +
+        '" role="img" aria-label="' +
+        escapeXml(title) +
+        '">'
+    )
+    parts.push("<title>" + escapeXml(title) + "</title>")
+
+    // 图例：一行中文。颜色只分组，状态看汉字
+    const legend = HEATMAP_STATE_ORDER.map(function (key) {
+      return HEATMAP_STATES[key].mark + " " + HEATMAP_STATES[key].label
+    }).join("　")
+    parts.push(
+      '<text class="chart-legend" x="' +
+        num(padLeft) +
+        '" y="' +
+        num(14) +
+        '" fill="' +
+        theme.muted +
+        '" font-size="11">' +
+        escapeXml(legend) +
+        "</text>"
+    )
+
+    // 纵轴：三轨的名字
+    tracks.forEach(function (track, rowIndex) {
+      const y = padTop + rowIndex * rowHeight + cellSize / 2
+      const name = String(trackLabels[track] || track)
+      parts.push(
+        '<text class="chart-axis-label" x="' +
+          num(padLeft - 8) +
+          '" y="' +
+          num(y) +
+          '" text-anchor="end" dominant-baseline="middle" fill="' +
+          theme.muted +
+          '" font-size="12">' +
+          escapeXml(name) +
+          "</text>"
+      )
+    })
+
+    // 横轴：会话序号
+    sessions.forEach(function (session, index) {
+      const label = Number.isFinite(Number(session.index)) ? Number(session.index) : index + 1
+      const x = padLeft + index * colWidth + colWidth / 2
+      parts.push(
+        '<text class="chart-axis-label" x="' +
+          num(x) +
+          '" y="' +
+          num(padTop + tracks.length * rowHeight + 12) +
+          '" text-anchor="middle" fill="' +
+          theme.muted +
+          '" font-size="10">' +
+          num(label) +
+          "</text>"
+      )
+    })
+
+    // 格子：先按（会话、轨、seq）定序，同会话同轨横向排开
+    const placed = []
+    cells.forEach(function (cell) {
+      const column = columnOf[String(cell.session_id)]
+      if (column === undefined) return
+      const row = tracks.indexOf(String(cell.track))
+      if (row === -1) return
+      placed.push({ cell: cell, column: column, row: row })
+    })
+    placed.sort(function (a, b) {
+      if (a.column !== b.column) return a.column - b.column
+      if (a.row !== b.row) return a.row - b.row
+      return Number(a.cell.seq || 0) - Number(b.cell.seq || 0)
+    })
+
+    const used = {}
+    placed.forEach(function (item) {
+      const cell = item.cell
+      const key = String(cell.session_id) + "|" + String(cell.track)
+      const slot = used[key] || 0
+      used[key] = slot + 1
+      const state = HEATMAP_STATES[cell.state] ? String(cell.state) : "pending"
+      const meta = HEATMAP_STATES[state]
+      const x = padLeft + item.column * colWidth + slot * (cellSize + gap)
+      const y = padTop + item.row * rowHeight
+      const session = sessions[item.column]
+      const sessionLabel = Number.isFinite(Number(session.index)) ? Number(session.index) : item.column + 1
+      const trackName = String(trackLabels[cell.track] || cell.track)
+      const tip =
+        "第 " +
+        sessionLabel +
+        " 次会话 · " +
+        trackName +
+        " · " +
+        meta.label +
+        (cell.title ? " · " + String(cell.title) : "")
+
+      parts.push('<g class="heatmap-cell" data-state="' + escapeXml(state) + '">')
+      parts.push("<title>" + escapeXml(tip) + "</title>")
+      parts.push(
+        '<rect x="' +
+          num(x) +
+          '" y="' +
+          num(y) +
+          '" width="' +
+          num(cellSize) +
+          '" height="' +
+          num(cellSize) +
+          '" rx="3" fill="' +
+          heatmapStateColor(state, theme) +
+          '"/>'
+      )
+      parts.push(
+        '<text x="' +
+          num(x + cellSize / 2) +
+          '" y="' +
+          num(y + cellSize / 2 + 0.5) +
+          '" text-anchor="middle" dominant-baseline="middle" fill="' +
+          meta.text +
+          '" font-size="11">' +
+          escapeXml(meta.mark) +
+          "</text>"
+      )
+      parts.push("</g>")
+    })
+
+    parts.push("</svg>")
+    return parts.join("")
+  }
+
   return {
     DEFAULT_THEME: DEFAULT_THEME,
     escapeXml: escapeXml,
@@ -757,5 +1022,10 @@
     barRows: barRows,
     barPath: barPath,
     barSvg: barSvg,
+    // P3 新增（Task 6）
+    HEATMAP_STATES: HEATMAP_STATES,
+    HEATMAP_STATE_ORDER: HEATMAP_STATE_ORDER,
+    heatmapStateColor: heatmapStateColor,
+    heatmapSvg: heatmapSvg,
   }
 })

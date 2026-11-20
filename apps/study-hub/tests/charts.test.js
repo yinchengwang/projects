@@ -252,3 +252,92 @@ test("barSvg 数据为空时给占位文案", function () {
   assertClean(svg)
   assert.ok(svg.indexOf("暂无数据") !== -1)
 })
+
+/* ---------------- 热力图（P3） ---------------- */
+
+test("heatmapSvg 画出每个格子的状态汉字", function () {
+  const svg = Charts.heatmapSvg({
+    sessions: [{ id: "s1", index: 1 }, { id: "s2", index: 2 }],
+    cells: [
+      { session_id: "s1", track: "algorithm", state: "pass", seq: 1 },
+      { session_id: "s1", track: "database", state: "pending", seq: 1 },
+      { session_id: "s2", track: "algorithm", state: "wrong_answer", seq: 1 },
+    ],
+    trackLabels: { algorithm: "算法", database: "数据库", ai: "AI" },
+  })
+  assertClean(svg)
+  const cells = svg.match(/class="heatmap-cell"/g) || []
+  assert.strictEqual(cells.length, 3)
+  assert.ok(svg.indexOf("通") !== -1, "格子里要有状态汉字")
+  assert.ok(svg.indexOf("待") !== -1)
+  assert.ok(svg.indexOf("错") !== -1)
+  assert.ok(svg.indexOf("算法") !== -1, "纵轴要有中文轨名")
+})
+
+test("heatmapSvg 六种状态都有中文标记与 tooltip", function () {
+  const states = ["pass", "wrong_answer", "timeout", "compile_error", "runtime_error", "pending"]
+  states.forEach(function (state) {
+    const meta = Charts.HEATMAP_STATES[state]
+    assert.ok(meta, "状态 " + state + " 要有中文标记")
+    assert.strictEqual(meta.mark.length, 1, "标记是一个汉字")
+    assert.ok(meta.label.length > 0, "要有中文全称")
+  })
+  assert.deepStrictEqual(Charts.HEATMAP_STATE_ORDER, states)
+
+  const svg = Charts.heatmapSvg({
+    sessions: [{ id: "s1", index: 1 }],
+    cells: states.map(function (state, i) {
+      return { session_id: "s1", track: "algorithm", state: state, seq: i + 1 }
+    }),
+  })
+  assertClean(svg)
+  assert.ok(svg.indexOf("编译错误") !== -1, "tooltip 里要写中文全称")
+  assert.ok(svg.indexOf("<title>") !== -1, "每个格子都要有 tooltip")
+})
+
+test("heatmapSvg 同一会话同一轨的多个格子横向排开", function () {
+  const svg = Charts.heatmapSvg({
+    sessions: [{ id: "s1", index: 1 }],
+    cells: [
+      { session_id: "s1", track: "algorithm", state: "pass", seq: 1 },
+      { session_id: "s1", track: "algorithm", state: "wrong_answer", seq: 2 },
+    ],
+  })
+  assertClean(svg)
+  const rects = svg.match(/<rect x="[^"]+" y="[^"]+" width="16" height="16"/g) || []
+  assert.strictEqual(rects.length, 2)
+  assert.notStrictEqual(rects[0], rects[1], "两个格子不能重叠")
+})
+
+test("heatmapSvg 没有会话时给中文占位文案", function () {
+  const svg = Charts.heatmapSvg({ sessions: [], cells: [] })
+  assertClean(svg)
+  assert.ok(svg.indexOf("还没有会话记录") !== -1)
+})
+
+test("heatmapSvg 的颜色只分组：通过绿、失败橙、没作答深色", function () {
+  const theme = Charts.DEFAULT_THEME
+  assert.strictEqual(theme.series3, "#199e70")
+  assert.strictEqual(Charts.heatmapStateColor("pass", theme), theme.series3)
+  assert.strictEqual(Charts.heatmapStateColor("wrong_answer", theme), theme.series2)
+  assert.strictEqual(Charts.heatmapStateColor("timeout", theme), theme.series2)
+  assert.strictEqual(Charts.heatmapStateColor("compile_error", theme), theme.series2)
+  assert.strictEqual(Charts.heatmapStateColor("runtime_error", theme), theme.series2)
+  assert.strictEqual(Charts.heatmapStateColor("pending", theme), theme.track)
+  assert.strictEqual(Charts.heatmapStateColor("不存在的状态", theme), theme.track)
+})
+
+test("barSvg 逐行配色：行上给了 color 就用行上的", function () {
+  const rows = Charts.barRows([{ label: "算法", value: 1, color: "#199e70" }])
+  assert.strictEqual(rows[0].color, "#199e70")
+
+  const svg = Charts.barSvg({
+    rows: [
+      { label: "算法", value: 0.6, display: "60%", color: "#199e70" },
+      { label: "数据库", value: 0.3, display: "30%" },
+    ],
+  })
+  assertClean(svg)
+  assert.ok(svg.indexOf("#199e70") !== -1, "行色要用上")
+  assert.ok(svg.indexOf(Charts.DEFAULT_THEME.series1) !== -1, "没给颜色的行走默认色")
+})
