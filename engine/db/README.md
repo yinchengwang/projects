@@ -48,7 +48,9 @@ db/
 │   │   ├── value.c/h           运行期值 + 外部值（大值不进值层）
 │   │   └── blob.c/h            blob 模态：对象 → 帧 → 随机访问
 │   ├── wal/                  L1  只依赖 common
-│   │   ├── wal.c/h             日志记录、group commit
+│   │   ├── wal.c/h             日志记录、append / 截断 / 扫描
+│   │   ├── wal_group.c         group commit：多事务共享一次 fsync
+│   │   ├── wal_internal.h      struct Wal（wal/ 内部可见）
 │   │   └── recovery.c/h        分析 / 重放 / 回滚
 │   ├── index/                L2
 │   │   ├── btree.c/h           B+tree 骨架 + 公共入口

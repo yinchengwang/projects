@@ -6,145 +6,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <io.h>
-#define WAL_FSYNC(f) _commit(_fileno(f))
-#define FSEEK _fseeki64
-#define FTELL _ftelli64
-/* 把文件截到指定长度（Windows 用 _chsize_s，POSIX 用 ftruncate） */
-#define WAL_TRUNCATE(f, len) _chsize_s(_fileno(f), (long)(len))
-#else
-#include <unistd.h>
-#define WAL_FSYNC(f) fsync(fileno(f))
-#define FSEEK fseeko
-#define FTELL ftello
-#define WAL_TRUNCATE(f, len) ftruncate(fileno(f), (off_t)(len))
-#endif
-
 #include "common/crc.h"
 #include "common/latch.h"
 #include "common/lockstat.h"
 #include "wal/wal_hdr.h"
-
-
-/*
- * 每个事务的 undo 链尾。
- *
- * prev_lsn 记录"同一事务的上一条日志"，恢复阶段靠它倒序回滚。
- * 多连接下它是**按 xid 分别维护**的 —— 共享一个变量会让事务串链，
- * 回滚时会把别的事务的记录也回滚掉。
- */
-#define WAL_PREV_SLOTS 64
-
-typedef struct {
-    u32 xid;
-    u32 prev_lsn;
-} PrevSlot;
-
-/*
- * ==================== v1.2 步骤 4b：wal 域的锁 ====================
- *
- * wal 域保护的东西：LSN 计数器、undo 链表、日志文件本身、扫描游标。
- *
- * 【为什么 WAL 域必须有锁 —— 它保护的不是内存，是"日志文件本身"】
- *
- * wal_append_xid 里做的是：
- *
- *     lsn = last_lsn + 1;      ← 取号
- *     FSEEK(f, 0, SEEK_END);   ← 定位到文件尾
- *     fwrite(b, 1, n, f);      ← 写一条记录
- *
- * 这三步**必须是一个整体**。两个线程同时进来会怎样？
- *
- *   线程 A 取到 lsn=100，线程 B 取到 lsn=100  ← **两条记录同一个 LSN**
- *   A 和 B 都 fseek 到文件尾，各自 fwrite        ← **记录字节交错**
- *
- * 后者尤其致命：日志文件里出现半条 A、半条 B 的记录，
- * CRC 校验失败 → 恢复阶段在这里**截断** → 后面所有记录全丢。
- * 这是**静默的数据丢失**，比"已提交的数据消失"更难查。
- *
- * 【读路径：无锁】
- *
- * wal_last_lsn / wal_nrecords / wal_max_xid / wal_flushed_lsn
- * 是纯读接口，走**原子读**（_Atomic u32）。它们在热路径上被频繁调用
- * （每条语句结束都要查 flushed_lsn），加锁会拖慢语句级吞吐。
- *
- * 【写路径：域锁】
- *
- * append / fsync / reset 一律在域锁里。fsync 尤其要独占：
- * 两个线程同时 fsync 同一个 FILE*，标准库不保证行为。
- *
- * 【扫描路径：同一把域锁】
- *
- * scan 与 append 争的是**同一个 FILE\*** 和**同一个 scratch 缓冲**：
- *   - FILE* 的 fseek/fread 与 fwrite 交错 → 读到半条记录
- *   - scratch 是共享缓冲 → 扫描读到的字节被 append 覆盖
- *
- * 所以扫描也用同一把锁。恢复是低频路径，每条记录一次加解锁，
- * 开销可以忽略；换来的是"扫描期间绝不读到撕裂的记录"。
- *
- * 【为什么是"每实例一把锁"，而不是进程级】
- *
- * txn 域用的是进程级互斥量（txn.c 里的 g_txn_lock）。
- * 这里不一样，理由有三：
- *   1. WAL 是**实例级**资源 —— 一个库一个日志文件。不同库之间
- *      没有任何共享状态，用进程级锁会让不相关的库互相阻塞。
- *   2. Wal 的生命周期完全由 wal_open / wal_close 管住，
- *      加锁不需要改任何调用点（不像 txn_table_init 有 ~20 处调用）。
- *   3. 撤销（wal_reset）会重开文件 —— 进程级锁下这个"重开"
- *      会牵扯到别的实例，语义反而更糊。
- *
- * 【域锁与 latch 框架】
- *
- * wal 域在全序里排第 3（catalog → txn → wal → freelist → frame）。
- * 取锁时向 latch 框架记账，顺序违规会立刻 abort。
- *
- * ⚠️ **给步骤 4c 的约束**（frame 域落地时必须遵守）：
- *   pager 刷页前要调 WAL flush 钩子（wal_fsync）。
- *   如果那时候手里已经握着 frame 域的锁，就是
- *   "frame(5) → wal(3)" 的**逆序** → 断言 abort。
- *   所以刷页路径必须**先落日志、再取 frame 锁**。
- */
-struct Wal {
-    FILE *f;
-    char *path;        /* wal_reset 要重开文件，得记住路径 */
-    _Atomic u32 last_lsn;
-    _Atomic u32 flushed_lsn; /* 已经 fsync 落盘的最大 LSN */
-    _Atomic u32 nrecords;
-    _Atomic u32 max_xid;
-    /*
-     * 日志文件当前占用的字节数（v1.2 步骤 7 / A3）。
-     *
-     * 【为什么自己记，而不是每次去问文件】
-     *
-     * 原来 wal_bytes() 是 fseek 到文件尾 + ftell —— 要动 FILE* 的位置，
-     * 所以必须取域锁。而 wal_bytes() 在**每条语句结束**时都会被调一次
-     * （db_checkpoint_maybe 拿它和 checkpoint 阈值比），
-     * 于是**每条只读语句也要抢 WAL 的全局锁**。
-     *
-     * 而 COMMIT 的 fsync 是**持着这把锁**做的 ——
-     * 于是每条 SELECT 都要排在别的线程的 fsync 后面。
-     * 实测（bench/probe_lockstat.sh，4 线程）：
-     * WAL 锁累计等待 1048 ms / 18561 次 = **56.5 us/次**，
-     * 而池级锁只有 0.06 us/次 —— 瓶颈根本不在缓冲池，在 WAL。
-     *
-     * 记一个字节数就绕开了整件事：append 时加、truncate/reset 时重置，
-     * 读的时候原子读一下就行，**一把锁都不用碰** ✓
-     */
-    _Atomic u64 bytes;
-    long  scan_pos;
-    u8   *scratch;      /* 一条完整记录的临时缓冲 */
-    PrevSlot prev[WAL_PREV_SLOTS];   /* 按 xid 维护的 undo 链 */
-    pthread_mutex_t mu; /* wal 域锁 */
-};
-
+#include "wal/wal_internal.h"
 /*
  * 取域锁 + 向 latch 框架记账。
  *
  * 记账让"catalog → txn → wal → freelist → frame"这条全序
  * 从步骤 2 起就是**机器检查**的。
+ *
+ * 【为什么不再是 static】
+ *
+ * W-D 的 D-7 把 group commit 的逻辑拆到了 wal_group.c（wal.c 已经 793 行，
+ * 硬上限 800）。那一层也要取同一把域锁 —— 锁的定义留在本文件（它依赖
+ * 本文件里的 latch 记账），只是可见性放开到 wal/ 目录内部（见 wal_internal.h）。
  */
-static void wal_lock(Wal *w)
+void wal_lock(Wal *w)
 {
     LS_ENTER(LS_WAL);
 #ifdef DB_LOCKSTAT
@@ -159,7 +38,7 @@ static void wal_lock(Wal *w)
     latch_order_acquire(LATCH_WAL);
 }
 
-static void wal_unlock(Wal *w)
+void wal_unlock(Wal *w)
 {
     latch_order_release(LATCH_WAL);
     pthread_mutex_unlock(&w->mu);
@@ -269,6 +148,9 @@ int wal_open(const char *path, Wal **out)
         return E_IO;
     }
 
+    /* group commit 的等待队列（W-D 的 D-7） */
+    wal_group_init(w);
+
     /*
      * 扫一遍确定 last_lsn、记录数、出现过的最大 xid。
      *
@@ -337,13 +219,27 @@ void wal_close(Wal *w)
 {
     if (!w)
         return;
+
+    /*
+     * 关库前先把等待者喊醒（W-D 的 D-7）。
+     *
+     * 【为什么必须喊醒，而不是让它们继续睡】
+     *
+     * 等待者等的是"本代 fsync 结束"。关库之后再也不会有哪一代结束 ——
+     * 不唤醒就是**永久挂死**。而且它们醒来必须拿到**失败**：
+     * 日志文件马上就关了，它们的数据并没有落盘，当成功就是假成功。
+     */
     wal_lock(w);
+    w->closing = true;
+    pthread_cond_broadcast(&w->cond);
     if (w->f) {
         WAL_FSYNC(w->f);
         fclose(w->f);
         w->f = NULL;
     }
     wal_unlock(w);
+
+    wal_group_destroy(w);
     pthread_mutex_destroy(&w->mu);
     free(w->path);
     free(w->scratch);
@@ -461,66 +357,49 @@ u32 wal_append_xid(Wal *w, u8 type, u32 xid, u32 page_id, u16 slot, u16 slot_off
     wal_unlock(w);
     return lsn;
 }
-
 /*
- * 把 WAL 刷到磁盘。
+ * 把 WAL 刷到磁盘（group commit，W-D 的 D-7）。
  *
- * ==================== 为什么 fsync 不在域锁里做 ====================
+ * ==================== 改之前是什么样的 ====================
  *
- * 原来 fsync 是**持着 WAL 域锁**做的。后果：
- *   - 一个线程在 fsync（毫秒级）时，所有别的线程 —— 连只读语句 ——
- *     都得排在后面（连 append 都得等）。
- *   - 实测（bench/probe_lockstat.sh，4 线程）：WAL 锁累计等待 765 ms，
- *     而其余各域锁全是 0.05 us/次 —— 瓶颈全在 WAL 域锁上。
+ * 每次调用都做**一次真实 fsync**。单线程下这没问题；多线程并发提交时
+ * 它变成纯粹的浪费：磁盘一次 fsync 的代价主要由"等介质确认"决定，
+ * 而"刷多少字节"影响很小 ⇒ N 个线程同时提交，共享一次就够了。
  *
- * 现在拆成两段：
+ * ==================== 改之后 ====================
  *
- *   ① **域锁内**：fflush（把 stdio 缓冲推给内核）+ 记下 target LSN
- *   ② **域锁外**：fsync（真正落盘）
+ * 真正的协议在 `wal_group.c`（本文件不能无限膨胀：硬上限 800 行），
+ * 这里只是入口：把"我要保证到 target 落盘"这件事交给那一层。
  *
- * ② 之所以能挪出来，靠的是三个前提：
+ * target 取**调用时刻的 last_lsn**：
+ *   - 它之前的记录此刻都已经写进内核（`setvbuf(_IONBF)`，见 wal_open）；
+ *   - 它之后的记录是别人并发 append 的，**不该**由我的 fsync 负责。
+ *     推进过头 = 谎报落盘 = 静默丢数据。
  *
- *   - fflush 必须在锁内：**两个线程同时 fflush 同一个 FILE* 是未定义行为**
- *     （stdio 的缓冲状态会被搅乱）。write(2) 本身是原子的。
- *   - fsync(fileno(f)) 是 **fd 级**调用，不依赖文件位置，
- *     和别的线程的 write(2) 并发是安全的。
- *   - 并发的 fsync 允许"各刷各的"：A 的 fsync 至少保证 A 自己那批字节落盘。
+ * 【为什么 target 在这里取，而不是在 group 里取】
  *
- * 于是多个线程的 fsync 可以**重叠** —— 磁盘队列能流水，
- * 而原来它们是排成一队的。
+ * group 那边还要做一次 fflush 再选发起者。若在那边取 target，
+ * 取到的是"fflush 之后"的值 —— 而那一批字节是否真被**这一次** fsync
+ * 覆盖，取决于内核怎么排序。取小的那个是安全方向。
  *
- * ==================== flushed_lsn 只能前进 ====================
+ * 【返回值】
  *
- * 两个线程的 fsync 完成的先后是随机的，所以落盘水位只能用 **max** 更新，
- * 不能用 store —— 否则慢的那个线程会把水位**倒退**，
- * 而恢复逻辑拿 flushed_lsn 判断"这条日志落盘了没有"，
- * 倒退会导致已落盘的日志被当成没落盘（重放两次）或反之。
+ * E_IO 时调用方**必须**让事务失败。攒批之后一个事务的成败可能取决于
+ * 另一个线程的 fsync 结果 —— 这正是"不许假成功"最容易被破坏的地方，
+ * wal_group.c 里对那件事有专门的说明。
  */
 int wal_fsync(Wal *w)
 {
+    u32 target;
+
     if (!w || !w->f)
         return E_INVAL;
 
-    /* ① 域锁内：把缓冲推给内核，并记住"我要保证这些落盘" */
-    wal_lock(w);
-    if (fflush(w->f) != 0) {
-        wal_unlock(w);
-        return E_IO;
-    }
-    u32 target = atomic_load(&w->last_lsn);
-    wal_unlock(w);
+    target = atomic_load(&w->last_lsn);
+    if (target == 0u)
+        return OK;              /* 日志还空着，没有要落盘的东西 */
 
-    /* ② 域锁外：真正落盘（可以和别的线程的 fsync 重叠） */
-    if (WAL_FSYNC(w->f) != 0)
-        return E_IO;
-
-    /* 水位只前进，不后退 */
-    u32 cur = atomic_load(&w->flushed_lsn);
-    while (target > cur &&
-           !atomic_compare_exchange_weak(&w->flushed_lsn, &cur, target)) {
-        /* cur 已被刷新为当前值，重试 */
-    }
-    return OK;
+    return wal_group_durable(w, target);
 }
 
 /*
