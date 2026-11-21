@@ -312,8 +312,74 @@ $(LATCH_BENCH_EXE): $(OBJ_DIR)/bench/latch_bench.o $(LIB_OBJS)
 $(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-# 基准 + 参照工具
+# ---------------------------------------------------------------------
+# smoke：每个模态一个独立可执行文件
+# ---------------------------------------------------------------------
+# 【它证明什么】
+#   smoke_<m> 的链接集合 = 底座 + 恒常驻的 relational + 模态 <m>（+ 它的依赖）。
+#   链接能过 ⇒ 模态 <m> **没有**引用任何别的模态的符号
+#   ⇒ "模态之间零耦合"是**机器可验证**的事实，不是文档里的承诺。
 #
+# 【为什么整个集合都按单模态宏重编，而不是「底座用 full 的 .o」】
+#   `DbInstance` / `DB` 的**字段集合**本身被 `#if DB_HAS_*` 守卫
+#   （B3.2 的成果）⇒ 用不同宏编出来的是**两个布局不同的结构体**。
+#   若底座用 full 的 .o、根用单模态的宏编，
+#   两边对 `inst->ts` / `inst->geo` 的偏移理解不一致 ⇒
+#   一写一读就踩到别人的字段 ⇒ **进程直接崩**
+#   （实测：-1073741819 / -1073740940，即 STATUS_ACCESS_VIOLATION / STACK_BUFFER_OVERRUN）。
+#
+#   ⇒ 做法：每个 smoke 把**它需要的那一批源文件**在自己的目录里完整重编一遍
+#     （`$(OBJ_DIR)/smoke_<m>/`）。多花一次编译时间，换掉整类 ODR 事故。
+#
+# 【为什么不能把 full 的 .o 和单模态的 .o 混着链】
+#   同一份源码被编两次、两边符号重叠 ⇒ multiple definition
+#   （实测：`heap_am_batch_scan` / `btree_am_build` 撞在一起）。
+#   ⇒ 每个 smoke 的链接行**只用自己目录里的 .o**，一个 full 的都不碰。
+#
+# 【main.c 不进 smoke 集合】
+#   smoke 自己带 main，重复定义。
+SMOKE_MODS := relational $(MM_CROPPABLE)
+
+# 只开模态 $(1) 的宏组合（**relational 恒为 1**：它是底座型模态，
+# 每个 profile 都含它。少了它 catalog 都编不过 —— 见 mm_profiles.mk 的说明）。
+$(foreach m,$(SMOKE_MODS),\
+  $(eval MM_FLAGS_ONLY_$(m) := $(foreach x,$(MM_ALL),\
+    -DDB_HAS_$(MM_UP_$(x))=$(if $(or $(filter relational,$(x)),$(filter $(x),$(m))),1,0))))
+
+# smoke $(1) 要裁掉的源文件 = 闭包之外的可裁剪模态（relational 永不裁）
+$(foreach m,$(SMOKE_MODS),\
+  $(eval MM_SMOKE_DROP_$(m) := $(foreach x,$(MM_CROPPABLE),\
+    $(if $(or $(filter relational,$(x)),$(filter $(x),$(m)),$(foreach d,$(MM_DEP_$(m)),$(filter $(d),$(x)))),,\
+      $(MM_FILES_$(x))))))
+
+# smoke $(1) 实际要编的源文件：全量 − 裁掉的 − main.c
+$(foreach m,$(SMOKE_MODS),\
+  $(eval MM_SMOKE_SRCS_$(m) := $(filter-out $(MM_SMOKE_DROP_$(m)) $(SRC_DIR)/main.c,$(SRCS_ALL))))
+
+# 全部落到各自的 smoke 目录，与 full 的 .o 彻底隔离
+$(foreach m,$(SMOKE_MODS),\
+  $(eval MM_SMOKE_OBJS_$(m) := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/smoke_$(m)/%.o,$(MM_SMOKE_SRCS_$(m)))))
+
+CFLAGS_BASE = $(CSTD) $(WARN) $(OPT) $(HARDEN) $(INC) $(SAN)
+
+define MM_SMOKE_RULE
+# 该 profile 的全部库对象：统一用 $(MM_FLAGS_ONLY_$(1)) 编，杜绝布局不一致
+$(OBJ_DIR)/smoke_$(1)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $$(@D)
+	$(CC) $(CFLAGS_BASE) $(MM_FLAGS_ONLY_$(1)) -MMD -MP -c $$< -o $$@
+# smoke 自己的 main（不需要模态宏）
+$(OBJ_DIR)/smoke_$(1).o: test/smoke/smoke_$(1).c
+	@mkdir -p $$(@D)
+	$(CC) $(CFLAGS_BASE) -c $$< -o $$@
+# 链接：只用本 smoke 目录里的 .o
+$(OBJ_DIR)/smoke_$(1).exe: $(OBJ_DIR)/smoke_$(1).o $(MM_SMOKE_OBJS_$(1))
+	$(CC) $(CFLAGS_BASE) -o $$@ $$^ $(LDLIBS)
+endef
+
+$(foreach m,$(SMOKE_MODS),$(eval $(call MM_SMOKE_RULE,$(m))))
+
+smoke: $(foreach m,$(SMOKE_MODS),$(OBJ_DIR)/smoke_$(m).exe)
+
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
@@ -384,4 +450,4 @@ clean:
 -include $(BENCH_DEPS)
 -include $(BIGLOCK_DEPS)
 
-.PHONY: all san deps test check clean bench
+.PHONY: all san deps test check clean bench smoke
