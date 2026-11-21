@@ -271,6 +271,12 @@ async function runAlgorithmCommand(params) {
         return { code: 1, output: lines.join("\n") }
       }
       const res = await verifyAlgorithmUnit({ unitPath: unitPath, learningRoot: learningRoot })
+      // 结论也要写回 status 那一行：否则单题复核完 status 还是 draft，
+      // 下一轮 --resume 会把它当成没办过，重复花钱（与批量路径同一口径）。
+      if (res.status === "verified" || res.status === "rejected") {
+        const text = fs.readFileSync(unitPath, "utf8")
+        fs.writeFileSync(unitPath, fill.patchStatusLine(text, res.status), "utf8")
+      }
       say(options.unit + " → " + res.status + "：" + res.reason)
       return { code: 0, output: lines.join("\n") }
     }

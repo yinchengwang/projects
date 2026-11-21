@@ -13,6 +13,37 @@ const os = require("node:os")
 const path = require("node:path")
 
 const cli = require("../core/supply/algorithm-cli.js")
+const fill = require("../core/supply/algorithm-fill.js")
+const { detectCompiler } = require("../judge/sandbox.js")
+
+/** 没有 g++ 就 skip 并说清原因 */
+const SKIP = detectCompiler() ? false : "本机没有 g++，无法做真实编译执行"
+
+/** 正确的参考解法：把输入反转后输出 */
+const REF_CODE = [
+  "#include <iostream>",
+  "#include <string>",
+  "#include <algorithm>",
+  "int main() {",
+  "  std::string s;",
+  "  if (!(std::cin >> s)) return 0;",
+  "  std::reverse(s.begin(), s.end());",
+  '  std::cout << s << "\\n";',
+  "  return 0;",
+  "}",
+].join("\n")
+
+/** 负例：原样输出 */
+const NEG_CODE = [
+  "#include <iostream>",
+  "#include <string>",
+  "int main() {",
+  "  std::string s;",
+  "  if (!(std::cin >> s)) return 0;",
+  '  std::cout << s << "\\n";',
+  "  return 0;",
+  "}",
+].join("\n")
 
 /** 内存里的 settings 仓储 */
 function fakeStore() {
@@ -214,6 +245,40 @@ test("generate --dry-run 不调 LLM、不写单元", async function () {
     assert.equal(res.code, 0, res.output)
     assert.equal(client.calls, 0, "dry-run 不能调 LLM")
     assert.equal(fs.existsSync(path.join(root, "units", "algorithm", "lc-00001.md")), false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("verify --unit 把结论写回 status 那一行（否则续跑会重复花钱）", { skip: SKIP }, async function () {
+  const root = fakeLearningRoot()
+  try {
+    const unitsDir = path.join(root, "units", "algorithm")
+    fill.writeTriplet({
+      unitsDir: unitsDir,
+      stem: "lc-00001",
+      draft: {
+        stem: "lc-00001",
+        title: "反转字符串",
+        difficulty: "easy",
+        topics: ["字符串"],
+        subtracks: ["fundamentals"],
+        source: "leetcode",
+        unitSource: "leetcode",
+        sourceId: "7",
+        statement: "给你一个字符串，把它反过来输出。",
+        cases: [{ input: "123", expect: "321" }],
+        solution: REF_CODE,
+        negative: NEG_CODE,
+        status: "draft",
+      },
+    })
+    const res = await cli.runAlgorithmCommand(
+      base(root, { argv: ["verify", "--track", "algorithm", "--unit", "algo:lc-00001"] })
+    )
+    assert.equal(res.code, 0, res.output)
+    const md = fs.readFileSync(path.join(unitsDir, "lc-00001.md"), "utf8")
+    assert.ok(md.indexOf("status: verified") !== -1, md.slice(0, 200))
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
