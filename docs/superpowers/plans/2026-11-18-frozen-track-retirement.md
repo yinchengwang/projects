@@ -141,7 +141,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
 **Why 单独一个 Task**：删轨之后没法回看删了什么。基线是后面每个 Task 的验收依据。
 
-- [ ] **1.0 开工前：先把与本计划无关的脏文件处理掉**（⚠️ **（可执行性修正）新增的一步，必须最先做**）
+- [x] **1.0 开工前：先把与本计划无关的脏文件处理掉**（计划原列的 4 个文件已由独立提交 `1168c4284` 处理）
 
   ⚠️ **工作区当前有 4 个与本计划无关的未提交改动**：
   `engine/db/src/db_ft.c`、`engine/db/src/modalities/ft/ft_index.c`、
@@ -174,7 +174,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
      之类的未跟踪目录也卷进去）。
 
 
-- [ ] **1.1 重建 `build/engine`（CMakeCache 已过期 2 周，必须先重建）**
+- [x] **1.1 重建 `build/engine`（CMakeCache 已过期 2 周，必须先重建）**
 
   ```powershell
   cd C:\code\projects
@@ -184,7 +184,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
 
   预期：`-- Build files have been written to: C:\code\projects\build/engine` + 编译无 error。
 
-- [ ] **1.1b 打回滚 tag `pre-frozen-track-removal`**
+- [x] **1.1b 打回滚 tag `pre-frozen-track-removal`**（已创建并推送）
 
   ⚠️ **（复审修正）删除前必须留一个能回退的点** ——
   这次要删掉 **524 个文件 / 209,905 行**，是不可逆的大动作。
@@ -207,7 +207,7 @@ D-9  engine/src/db/ 下被 SDK 引用的**三个** CMake 目标：sql_engine / f
   git push --force origin main     # ⚠️ 危险：只在确认要放弃后续提交时用
   ```
 
-- [ ] **1.2 采 ctest 基线**
+- [x] **1.2 采 ctest 基线**（配置期 81 条；失败集合首轮 14 条）
   ⚠️ **（复审修正）只采「用例总数 N」不够** ——
   设计 §7 的风险表明令：**必须采改造前基线（失败用例名集合，跑两次取交集），
   只比「集合不新增」而非绝对值**。原计划只记了总数 N，
@@ -249,7 +249,7 @@ ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-ba
 把 N 一并记进基线文件。
 ⚠️ **判据方向**：验收时**不比「用例数 == N」**（删轨本来就该让数变少），
 只比「**失败集合 ⊆ 基线失败集合**」+「**用例数减少量 == 预期删除量**」。
-- [ ] **1.3 采"若打开冻结轨测试"的用例总数（用于核对删除量）**
+- [x] **1.3 采"若打开冻结轨测试"的用例总数（用于核对删除量）**（实测完成构建后 618 条，差值 D=537）
 
   ```powershell
   cmake -B build/engine-frozen -S engine -DBUILD_TESTING=ON -DENABLE_FROZEN_SRC_DB_TESTS=ON
@@ -284,7 +284,7 @@ ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-ba
      判据改为「**消失的条目集合 ⊆ 冻结轨测试来源**」—— 而不是「数量差 == D」。
   3. **不要**为了让冻结轨编过而去改冻结轨源码（那是本计划要删的东西）。
 
-- [ ] **1.4 采主核测试基线（证明本计划没碰主核）**
+- [x] **1.4 采主核测试基线**（105/105 通过）
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -295,7 +295,7 @@ ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-ba
 
   预期：`95 个测试：95 通过`（64 unit + 31 integration），0 失败。
 
-- [ ] **1.5 写基线文件**
+- [x] **1.5 写基线文件**（`docs/superpowers/plans/2026-11-18-frozen-track-retirement-baseline.md`）
 
   `docs/superpowers/plans/2026-11-18-frozen-track-retirement-baseline.md` 内容：
 
@@ -331,7 +331,7 @@ ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-ba
   **删除后验收**：工程轨 ctest 用例数 == N；主核结果与上表一致。
   ```
 
-- [ ] **1.6 提交**
+- [x] **1.6 提交**（提交 `f5695181a`）
 
   ```powershell
   cd C:\code\projects
@@ -342,7 +342,18 @@ ctest --test-dir build/engine -N | Out-File -Encoding utf8 build/engine/ctest-ba
 
   ⚠️ `build/engine-frozen/` 是临时构建目录，**不进版本库**（`.gitignore` 已覆盖 `build/`）。
 
----
+**Task 1 实际执行回写**：
+
+- 计划原列的 4 个 ft 回收引导脏文件已经在独立提交 `ace3a31d7` / `1168c4284` 处理中，当前工作区干净，未卷入 W-A。
+- 旧 `build/engine` 的 CMakeCache 指向 `C:/code/StillEvolving/projects`，已删除后从 `C:/code/projects` 全新配置；构建成功。
+- 已创建并推送回滚 tag `pre-frozen-track-removal`（对象 `c1dd9789572683168864e02c3bbdc2bbb63ad071`）。
+- 工程轨配置期 ctest 条目：**81**。
+- 启用冻结轨后完成构建，ctest 条目：**618**，实测差值 **D=537**；不是计划预估的约 587，以构建后实测为准。
+- 冻结轨测试树虽然很大，但本次配置与构建均成功；无需走「冻结轨基线不可得」fallback。
+- 首轮 ctest 失败集合 14 条，已写入 `failed-baseline.txt`。`staircase_benchmark` 是长时间性能基准，首轮超过合理时限后停止，按失败项记入基线；验收只要求失败集合不新增。
+- 主核重新 clean build，`test/run.sh`：**105 个测试 105 通过**。
+
+⚠️ **计划里的旧数字需要以本次实测替代**：本计划早期按 95 个主核测试、约 587 个冻结轨增量书写；W-B 已将主核扩展到 105 个测试，本次冻结轨完整构建后的 ctest 差值为 537。基线文件已记录真实值，后续 Task 4/6 以基线文件为准。---
 
 ### Task 2：memctx 移植进 SDK（冻结轨的第一条依赖线）
 
