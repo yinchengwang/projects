@@ -209,7 +209,7 @@ int mmdb_collection_load_all(mmdb_t* db) {
     for (size_t i = 0; i < db->collection_count; i++) {
         mmdb_collection_t* c = db->collections[i];
         if (c->has_vector) {
-            mmdb_vectors_hnsw_ensure(c);
+            mmdb_vectors_index_ensure(c);
         }
     }
 
@@ -225,7 +225,7 @@ void mmdb_collection_dispose(mmdb_t* db) {
     for (size_t i = 0; i < db->collection_count; i++) {
         mmdb_collection_t* c = db->collections[i];
         /* Phase 2: 释放 HNSW 索引内存 */
-        mmdb_vectors_hnsw_free(c);
+        mmdb_vectors_index_free(c);
         schema_free(&c->schema);
         /* Task 11：c 与 c->name 均由 memory_context 分配，关闭时由 ctx 统一回收 */
     }

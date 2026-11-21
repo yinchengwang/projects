@@ -17,13 +17,13 @@ extern "C" {
 int mmdb_vectors_ensure_table(mmdb_collection_t* coll);
 
 /* 懒创建 HNSW 索引：N >= 阈值时自动构建（启动时 / 首次写入后调用） */
-int mmdb_vectors_hnsw_ensure(mmdb_collection_t* coll);
+int mmdb_vectors_index_ensure(mmdb_collection_t* coll);
 
 /* 从 SQLite 全表扫描重建 HNSW 索引（启动时调用，coll_lock 已持有） */
-int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* coll, int32_t hnsw_m, int32_t hnsw_ef_c);
+int mmdb_vectors_index_rebuild(mmdb_collection_t* coll);
 
 /* 释放 collection 的 HNSW 索引内存 */
-void mmdb_vectors_hnsw_free(mmdb_collection_t* coll);
+void mmdb_vectors_index_free(mmdb_collection_t* coll);
 
 #ifdef __cplusplus
 }

@@ -102,7 +102,6 @@ add_library(mmsdk STATIC
 target_include_directories(mmsdk PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/..  # Task 3 完成前仍需 HNSW 头文件
 )
 # P5-2: 添加 third_part 路径，用于 roaring_bitmap.h
 # 注：原先路径上溯三级指向仓库根目录，已改用 engine/third_part/croaring（内部副本），
@@ -111,9 +110,8 @@ target_include_directories(mmsdk PRIVATE
     ${ENGINEERING_SOURCE_DIR}/third_part/croaring
 )
 
-# Task 2 只摘 sql_engine（它提供的 memctx 符号已由 core/memctx.c 本地提供）。
-# faiss_hnsw / mm_vector_index 属于 Task 3 的向量后端替换范围，本 Task 先留着。
-target_link_libraries(mmsdk PUBLIC sqlite3 faiss_hnsw mm_vector_index)
+# SDK 只需 SQLite 一个外部依赖 —— 内存上下文、读写锁、向量索引都已自持。
+target_link_libraries(mmsdk PUBLIC sqlite3 algo-prod)
 
 # 编译选项
 if(MSVC)

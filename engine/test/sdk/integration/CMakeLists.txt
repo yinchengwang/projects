@@ -12,16 +12,9 @@ set_target_properties(cross_lang_consistency_test PROPERTIES
 )
 add_test(NAME cross_lang_consistency_test COMMAND cross_lang_consistency_test)
 
-# 向量索引选择器集成测试
-add_executable(selector_integration_test selector_integration_test.cpp)
-target_link_libraries(selector_integration_test PRIVATE mmsdk gtest_main)
-target_include_directories(selector_integration_test PRIVATE
-    ${ENGINEERING_SOURCE_DIR}/include
-)
-set_target_properties(selector_integration_test PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/sdk_integration_tests
-)
-add_test(NAME selector_integration_test COMMAND selector_integration_test)
+# 向量索引选择器集成测试 —— 随冻结轨一起退役。
+# 它测的 vector_index_selector_choose() 属于冻结内核；SDK 现在只有一种
+# 精确扁平索引，决策退化成"建不建"，等价覆盖见 test/sdk/vectors/index_flat_test。
 
 # 向量 KNN 阶梯基准测试（T5.8）
 add_executable(staircase_benchmark staircase_benchmark.cpp)

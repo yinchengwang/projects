@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # 引入子目录（Task 7：SDK 兼容层 mmdb_mem_* API 测试）
 add_subdirectory(memory)
+add_subdirectory(vectors)  # SDK 自持精确扁平向量索引测试
 
 # 测试用例列表
 set(SDK_TESTS
@@ -26,7 +27,6 @@ set(SDK_TESTS
     rag_embedding_test   # P4-T4.1：RAG embedding 配置入口测试，源码位于 rag/ 子目录
     hybrid_dual_channel_test   # P4-T4.2：双通道真正融合测试，源码位于 hybrid/ 子目录
     hybrid_dual_channel_enabled_test   # P5-6：双模同集合 SDK 架构测试，源码位于 hybrid/ 子目录
-    hnsw_filter_test   # P4-T4.5：HNSW + filter 公开 API 测试，源码位于 hnsw/ 子目录
 )
 
 # 为每个测试源文件创建可执行文件
@@ -43,12 +43,6 @@ foreach(test_name IN LISTS SDK_TESTS)
         add_executable(${test_name} xquery/${test_name}.cpp)
     elseif(test_name STREQUAL "rag_test" OR test_name STREQUAL "rerank_test" OR test_name STREQUAL "rag_embedding_test")
         add_executable(${test_name} rag/${test_name}.cpp)
-    elseif(test_name STREQUAL "hnsw_filter_test")
-        add_executable(${test_name} hnsw/${test_name}.cpp)
-        target_link_libraries(${test_name} PRIVATE faiss_hnsw)
-        target_include_directories(${test_name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../src
-        )
     else()
         add_executable(${test_name} ${test_name}.cpp)
     endif()

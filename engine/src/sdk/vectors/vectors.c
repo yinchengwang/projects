@@ -3,7 +3,7 @@
  * @brief 向量模型公共 API（add/search/get/delete）
  *
  * 距离度量：L2（欧氏距离平方）。后续可在 P2 引入余弦/内积。
- * 索引：Flat（暴力扫描），N >= 10000 自动启用 HNSW。
+ * 索引：内存精确扁平索引（N >= 阈值时构建），小数据量直接扫 SQLite。
  */
 #include "sdk/mmdb_vectors.h"
 #include "sdk/impl/mmdb_internal.h"
@@ -12,10 +12,8 @@
 #include "sdk/impl/filter_parser.h"
 #include "sdk/impl/metrics_internal.h"  /* P6-M1.2：监控埋点 */
 
-/* Phase 2: HNSW 索引集成 */
-#include <db/index/vector_index/faiss_hnsw/faiss_hnsw.h>
-/* Phase 5: 向量索引选择器 */
-#include <db/index/vector_index/vector_index_selector.h>
+/* SDK 自持的精确扁平向量索引（原为冻结内核的 HNSW） */
+#include "sdk/impl/index_flat.h"
 /* P5-2: CRoaring bitmap 兼容层 */
 #include "roaring_bitmap.h"
 
@@ -138,14 +136,21 @@ static void apply_pagination(mmdb_result_t* out, const mmdb_query_t* q) {
 }
 
 /* ================================================================== */
-/* Phase 2: HNSW 集成                                                  */
+/* 内存向量索引集成                                                     */
 /* ================================================================== */
 
-/* HNSW 启用阈值：向量数量 >= 此值时自动构建 HNSW 索引 */
-#define HNSW_BUILD_THRESHOLD  10000
-#define HNSW_DEFAULT_M        16
-#define HNSW_DEFAULT_EF_C     128
-#define HNSW_DEFAULT_EF_S     128
+/*
+ * 内存索引的构建门槛：向量数低于此值时直接扫 SQLite，不建内存副本。
+ *
+ * 【为什么有这个门槛】
+ * 内存索引 = 全部向量的一份连续内存副本。向量少时，
+ * 复制一遍再扫一遍比直接扫 SQLite 更慢（多了一次拷贝）。
+ *
+ * 【门槛为什么从 10000 降到 1000】
+ * 原来用近似索引（构建成本高），门槛定得高；
+ * 换成精确扁平索引后构建只是 memcpy，成本低一个数量级。
+ */
+#define VEC_INDEX_BUILD_THRESHOLD 1000
 
 /* ================================================================== */
 /* P5-1：sdk_id → vec_id 哈希表                                        */
@@ -172,7 +177,7 @@ typedef struct {
     uint64_t*  hashes;     /* sdk_id 的 FNV-1a 哈希值 */
     uint8_t**  sdk_id_keys;/* sdk_id 原始字节（碰撞校验用） */
     size_t*    sdk_id_lens;/* sdk_id 字节长度 */
-    int32_t*   vec_ids;    /* 对应的 HNSW vec_id */
+    int32_t*   vec_ids;    /* 对应的索引内 vec_id */
     uint8_t*   states;     /* 空/已用/已删除 */
     size_t     capacity;   /* 槽数（2 的幂） */
     size_t     count;      /* 已用槽数 */
@@ -320,9 +325,9 @@ static int32_t sdk_id_hash_lookup(const sdk_id_hash_t* h, const uint8_t* sdk_id,
     return -1;
 }
 
-/* HNSW ID 映射表：int32_t HNSW ID ↔ 可变长 SDK ID (BLOB) */
+/* ID 映射表：int32_t 索引内 ID ↔ 可变长 SDK ID (BLOB) */
 typedef struct {
-    uint8_t**  sdk_ids;      /* sdk_ids[i] = 对应 HNSW ID i 的 SDK 字节数组 ID */
+    uint8_t**  sdk_ids;      /* sdk_ids[i] = 对应索引内 ID i 的 SDK 字节数组 ID */
     size_t*    sdk_id_lens;  /* sdk_id_lens[i] = sdk_ids[i] 的字节长度 */
     size_t     count;        /* 当前条目数 */
     size_t     capacity;     /* 已分配容量 */
@@ -353,7 +358,7 @@ static void hnsw_id_map_free(hnsw_id_map_t* m) {
     free(m);
 }
 
-/* 追加一条映射，返回 HNSW ID（从 0 开始递增） */
+/* 追加一条映射，返回索引内 ID（从 0 开始递增） */
 static int32_t hnsw_id_map_add(hnsw_id_map_t* m, const uint8_t* id, size_t id_len) {
     if (m->count >= m->capacity) {
         size_t new_cap = m->capacity * 2;
@@ -375,7 +380,7 @@ static int32_t hnsw_id_map_add(hnsw_id_map_t* m, const uint8_t* id, size_t id_le
     return hnsw_id;
 }
 
-/* 标记某 HNSW ID 为已删除（释放其 SDK ID 内存，设为 NULL） */
+/* 标记某索引内 ID 为已删除（释放其 SDK ID 内存，设为 NULL） */
 static void hnsw_id_map_mark_deleted(hnsw_id_map_t* m, int32_t hnsw_id) {
     if (hnsw_id < 0 || (size_t)hnsw_id >= m->count) return;
     free(m->sdk_ids[hnsw_id]);
@@ -383,24 +388,24 @@ static void hnsw_id_map_mark_deleted(hnsw_id_map_t* m, int32_t hnsw_id) {
     m->sdk_id_lens[hnsw_id] = 0;
 }
 
-/* 将当前 ID 映射表和已删除计数存储在 collection 的 hnsw 字段中 */
+/* 内存索引包装：索引实例 + ID 映射表，挂在 collection 的 vec_index 字段上 */
 typedef struct {
-    faiss_hnsw_t*   index;          /* HNSW 索引实例 */
+    mmdb_flat_index_t* index;       /* 精确扁平索引实例 */
     hnsw_id_map_t*  id_map;         /* int32_t ↔ SDK ID 映射 */
     sdk_id_hash_t*  sdk_id_hash;    /* P5-1：sdk_id → vec_id 哈希表 */
     size_t          deleted_count;   /* 已标记删除的条目数 */
-} hnsw_wrapper_t;
+} index_wrapper_t;
 
-/* P4-T4.5：HNSW filter 谓词上下文。
- * bitmap[i] = 1 表示 HNSW vec_id i 通过 metadata filter；0 表示被过滤。
+/* P4-T4.5：metadata filter 谓词上下文。
+ * bitmap[i] = 1 表示索引内 vec_id i 通过 metadata filter；0 表示被过滤。
  * 通过一次性 SQLite 查询构建，避免每个候选单独查询 metadata。 */
 typedef struct {
     int8_t* bitmap;         /* 兼容：小数据集仍用原始 bitmap */
-    size_t  bitmap_size;    /* bitmap 元素数（与 HNSW 当前向量数一致） */
+    size_t  bitmap_size;    /* bitmap 元素数（与索引内当前向量数一致） */
     void*   roaring;        /* P5-2：roaring bitmap 句柄（NULL 表示未启用） */
 } hnsw_filter_ctx_t;
 
-/* P4-T4.5：HNSW filter 谓词回调（faiss_hnsw_filter_fn 类型） */
+/* P4-T4.5：metadata filter 谓词回调（mmdb_flat_filter_fn 类型） */
 static int hnsw_filter_predicate(int32_t vec_id, void* user_data) {
     hnsw_filter_ctx_t* ctx = (hnsw_filter_ctx_t*)user_data;
     if (!ctx) return 1;  /* 无 filter ctx 时全部通过 */
@@ -417,21 +422,21 @@ static int hnsw_filter_predicate(int32_t vec_id, void* user_data) {
     return ctx->bitmap[vec_id];
 }
 
-static hnsw_wrapper_t* hnsw_wrapper_create(void) {
-    hnsw_wrapper_t* w = (hnsw_wrapper_t*)calloc(1, sizeof(hnsw_wrapper_t));
+static index_wrapper_t* index_wrapper_create(void) {
+    index_wrapper_t* w = (index_wrapper_t*)calloc(1, sizeof(index_wrapper_t));
     return w;
 }
 
-static void hnsw_wrapper_free(hnsw_wrapper_t* w) {
+static void index_wrapper_free(index_wrapper_t* w) {
     if (!w) return;
-    if (w->index) faiss_hnsw_index_drop(w->index);
+    if (w->index) mmdb_flat_index_drop(w->index);
     hnsw_id_map_free(w->id_map);
     sdk_id_hash_free(w->sdk_id_hash);
     free(w);
 }
 
-/* P4-T4.5：从 SQLite 查询符合 filter 的 SDK ID，写入 bitmap（按 HNSW vec_id 索引）。
- * 用于 HNSW 加速路径下的 metadata 过滤：bitmap[i] = 1 表示 HNSW vec_id i 通过 filter。
+/* P4-T4.5：从 SQLite 查询符合 filter 的 SDK ID，写入 bitmap（按索引内 vec_id 索引）。
+ * 用于内存索引加速路径下的 metadata 过滤：bitmap[i] = 1 表示索引内 vec_id i 通过 filter。
  *
  * 注意：此函数必须在已持有 coll_lock 读锁的情况下调用（SQLite 操作需要稳定快照）。
  *
@@ -450,7 +455,7 @@ static int build_table_name(char* out, size_t out_cap, const char* coll);
 static int build_filter_ctx(mmdb_collection_t* c, const char* where,
                              mmdb_filter_params_t* fp,
                              hnsw_filter_ctx_t* ctx) {
-    hnsw_wrapper_t* w = (hnsw_wrapper_t*)c->hnsw;
+    index_wrapper_t* w = (index_wrapper_t*)c->vec_index;
     memset(ctx, 0, sizeof(*ctx));
     ctx->bitmap_size = w->id_map->count;
     if (ctx->bitmap_size == 0) return MMDB_OK;
@@ -492,7 +497,7 @@ static int build_filter_ctx(mmdb_collection_t* c, const char* where,
         return MMDB_ERR_INVALID;
     }
 
-    /* 对每个匹配的 SDK ID，通过哈希表 O(1) 查找对应 HNSW vec_id 并置位 */
+    /* 对每个匹配的 SDK ID，通过哈希表 O(1) 查找对应 vec_id 并置位 */
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const void* id_blob = sqlite3_column_blob(stmt, 0);
         int id_bytes = sqlite3_column_bytes(stmt, 0);
@@ -527,19 +532,19 @@ static void free_filter_ctx(hnsw_filter_ctx_t* ctx) {
     ctx->bitmap_size = 0;
 }
 
-/* 释放 collection 的 HNSW 索引内存 */
-void mmdb_vectors_hnsw_free(mmdb_collection_t* c) {
-    if (!c || !c->hnsw) return;
-    hnsw_wrapper_free((hnsw_wrapper_t*)c->hnsw);
-    c->hnsw = NULL;
+/* 释放 collection 的内存索引 */
+void mmdb_vectors_index_free(mmdb_collection_t* c) {
+    if (!c || !c->vec_index) return;
+    index_wrapper_free((index_wrapper_t*)c->vec_index);
+    c->vec_index = NULL;
 }
 
 /* ------------------------------------------------------------------ */
-/* HNSW 重建：从 SQLite 全表扫描 bulk-load                             */
+/* 内存索引重建：从 SQLite 全表扫描 bulk-load                          */
 /* ------------------------------------------------------------------ */
 
 /* 获取表中向量数量 */
-static size_t hnsw_count_vectors(mmdb_collection_t* c, const char* tname) {
+static size_t vec_count_vectors(mmdb_collection_t* c, const char* tname) {
     char sql[128];
     snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s;", tname);
     sqlite3_stmt* stmt = mmdb_sqlite_prepare(c->sdb, sql, NULL, 0);
@@ -555,9 +560,9 @@ static size_t hnsw_count_vectors(mmdb_collection_t* c, const char* tname) {
 /* build_table_name 前向声明（定义在文件后半部分） */
 static int build_table_name(char* out, size_t out_cap, const char* coll);
 
-/* 从 SQLite 重建 HNSW 索引（在 coll_lock 已持有的情况下调用） */
-int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* c, int32_t hnsw_m, int32_t hnsw_ef_c) {
-    hnsw_wrapper_t* w = (hnsw_wrapper_t*)c->hnsw;
+/* 从 SQLite 重建内存索引（在 coll_lock 已持有的情况下调用） */
+int mmdb_vectors_index_rebuild(mmdb_collection_t* c) {
+    index_wrapper_t* w = (index_wrapper_t*)c->vec_index;
     if (!w) return MMDB_ERR_INVALID;
 
     char tname[128];
@@ -570,17 +575,17 @@ int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* c, int32_t hnsw_m, int32_t hnsw
     if (!stmt) return MMDB_ERR_IO;
 
     size_t dim = c->schema.vector_dim;
-    size_t total = hnsw_count_vectors(c, tname);
+    size_t total = vec_count_vectors(c, tname);
     if (total == 0) {
         sqlite3_finalize(stmt);
         return MMDB_OK;
     }
 
-    /* P6-M1.2：记录 HNSW 构建耗时 */
+    /* P6-M1.2：记录内存索引构建耗时 */
     struct timespec t_start, t_end;
     clock_gettime(CLOCK_MONOTONIC, &t_start);
 
-    /* 一次性分配所有向量数据（连续内存，faiss_hnsw_index_add 要求） */
+    /* 一次性分配所有向量数据（连续内存，mmdb_flat_index_add 要求） */
     float* all_vectors = (float*)calloc(total * dim, sizeof(float));
     if (!all_vectors) {
         sqlite3_finalize(stmt);
@@ -605,9 +610,9 @@ int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* c, int32_t hnsw_m, int32_t hnsw
         return MMDB_ERR_NOMEM;
     }
 
-    /* 释放旧 HNSW 索引，准备创建新的 */
+    /* 释放旧索引，准备创建新的 */
     if (w->index) {
-        faiss_hnsw_index_drop(w->index);
+        mmdb_flat_index_drop(w->index);
         w->index = NULL;
     }
 
@@ -641,43 +646,38 @@ int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* c, int32_t hnsw_m, int32_t hnsw
         return MMDB_OK;
     }
 
-    /* 创建新的 HNSW 索引并批量插入 */
-    int32_t use_m = (hnsw_m > 0) ? hnsw_m : HNSW_DEFAULT_M;
-    int32_t use_ef = (hnsw_ef_c > 0) ? hnsw_ef_c : HNSW_DEFAULT_EF_C;
-    w->index = faiss_hnsw_index_create(
-        use_m, (int32_t)dim, use_ef,
-        DISTANCE_METRIC_L2_SQUARED, QUANTIZATION_TYPE_NONE);
+    /* 创建扁平索引并批量插入 */
+    w->index = mmdb_flat_index_create((int32_t)dim);
     if (!w->index) {
         free(all_vectors);
         return MMDB_ERR_NOMEM;
     }
 
     /*
-     * 性能关键：bulk-load 前预分配索引容量
-     * faiss_hnsw 默认每 add 一个向量就 realloc 5 个数组，百万级场景总拷贝量
-     * O(N²)≈256TB，会无限卡死。reserve() 把开销降到 O(N) 一次性分配。
+     * 批量导入前先一次性预分配容量。
+     * 逐条 add 会让容量反复翻倍 realloc，额外搬运总量是 O(N)；
+     * 预分配把这一步压成一次分配。
      */
-    if (faiss_hnsw_index_reserve(w->index, (int32_t)row_idx) != 0) {
+    if (mmdb_flat_index_reserve(w->index, (int32_t)row_idx) != 0) {
         free(all_vectors);
-        faiss_hnsw_index_drop(w->index);
+        mmdb_flat_index_drop(w->index);
         w->index = NULL;
         return MMDB_ERR_NOMEM;
     }
 
-    int32_t add_rc = faiss_hnsw_index_add(w->index, (int32_t)row_idx, all_vectors);
+    int32_t add_rc = mmdb_flat_index_add(w->index, (int32_t)row_idx, all_vectors);
     free(all_vectors);
 
-    /* faiss_hnsw_index_add 返回成功添加的向量数；正常情况下等于 row_idx。
-     * 仅在 add_rc != row_idx（部分或全部失败）时降级到 flat 模式。
-     * 原代码误用 `add_rc != 0` 检查，导致所有成功构建也被丢弃。 */
+    /* mmdb_flat_index_add 返回成功添加的向量数；正常情况下等于 row_idx。
+     * 万一不等（内存不足等），降级为直扫模式。
+     * 原代码误用 `add_rc != 0` 检查，导致所有成功构建也被丢弃 —— 那个错别再犯。 */
     if (add_rc != (int32_t)row_idx) {
-        /* HNSW 构建失败，降级为 flat 模式（保持 w->index = NULL） */
-        faiss_hnsw_index_drop(w->index);
+        mmdb_flat_index_drop(w->index);
         w->index = NULL;
-        return MMDB_OK;  /* 不报错，降级到 flat */
+        return MMDB_OK;  /* 不报错，降级到直扫 */
     }
 
-    /* 记录 HNSW 构建耗时 */
+    /* 记录内存索引构建耗时（公开指标名沿用 hnsw_build_*，保 API 稳定） */
     clock_gettime(CLOCK_MONOTONIC, &t_end);
     double build_time_ms =
         (double)(t_end.tv_sec - t_start.tv_sec) * 1000.0 +
@@ -689,14 +689,14 @@ int mmdb_vectors_hnsw_rebuild(mmdb_collection_t* c, int32_t hnsw_m, int32_t hnsw
 }
 
 /* ------------------------------------------------------------------ */
-/* HNSW 懒创建：N >= 阈值时自动构建                                     */
+/* 内存索引懒创建：N >= 阈值时才建                                       */
 /* ------------------------------------------------------------------ */
 
-int mmdb_vectors_hnsw_ensure(mmdb_collection_t* c) {
+int mmdb_vectors_index_ensure(mmdb_collection_t* c) {
     if (!c || !c->has_vector) return MMDB_ERR_INVALID;
 
-    /* 已有 HNSW 索引，直接返回 */
-    if (c->hnsw) return MMDB_OK;
+    /* 已有内存索引，直接返回 */
+    if (c->vec_index) return MMDB_OK;
 
     /* 确保表存在 */
     if (mmdb_vectors_ensure_table(c) != MMDB_OK) return MMDB_ERR_IO;
@@ -705,50 +705,27 @@ int mmdb_vectors_hnsw_ensure(mmdb_collection_t* c) {
     build_table_name(tname, sizeof(tname), c->name);
 
     /* 检查当前行数 */
-    size_t count = hnsw_count_vectors(c, tname);
-    if (count < HNSW_BUILD_THRESHOLD) return MMDB_OK;  /* 未达阈值，保持 flat */
+    size_t count = vec_count_vectors(c, tname);
+    if (count < VEC_INDEX_BUILD_THRESHOLD) return MMDB_OK;  /* 不值得建 */
 
-    /* 使用索引选择器自动选择最优索引类型 */
-    vector_data_info_t info = {
-        .num_vectors = count,
-        .dimension = (int32_t)c->schema.vector_dim,
-        .available_memory_mb = 4096,  /* 默认可用内存估算 */
-        .target_qps = 0.0f,
-        .target_recall = 0.95f,      /* 默认高召回率 */
-        .is_static = false
-    };
+    /*
+     * 【原来的决策从哪来】
+     * 冻结内核的索引选择器会按规模/维度/内存/QPS/召回率
+     * 在 HNSW / IVF-PQ / DiskANN / 暴力之间选。SDK 现在只有一种索引，
+     * 决策退化成"建不建" —— 上面那个门槛就是全部决策逻辑。
+     */
+    index_wrapper_t* w = index_wrapper_create();
+    if (!w) return MMDB_ERR_NOMEM;
+    c->vec_index = w;
 
-    vector_index_decision_t decision;
-    if (vector_index_selector_choose(&info, &decision) != 0) {
-        /* 选择器失败，回退到默认 HNSW */
-        decision.index_type = VECTOR_INDEX_HNSW;
-        decision.param1 = HNSW_DEFAULT_M;
-        decision.param2 = HNSW_DEFAULT_EF_C;
-    }
-
-    /* 根据选择器决策创建索引 */
-    if (decision.index_type == VECTOR_INDEX_HNSW) {
-        /* 创建 wrapper 并使用选择器推荐的参数重建 */
-        hnsw_wrapper_t* w = hnsw_wrapper_create();
-        if (!w) return MMDB_ERR_NOMEM;
-        c->hnsw = w;
-
-        int rc = mmdb_vectors_hnsw_rebuild(c, decision.param1, decision.param2);
-        if (rc != MMDB_OK) {
-            /* HNSW 创建失败，降级到 flat 模式 */
-            hnsw_wrapper_free(w);
-            c->hnsw = NULL;
-            return MMDB_OK;  /* 不报错，降级到 flat */
-        }
-
-        return MMDB_OK;
-    } else if (decision.index_type == VECTOR_INDEX_BRUTE_FORCE) {
-        /* 选择器推荐暴力搜索，保持 flat 模式 */
-        return MMDB_OK;
-    } else {
-        /* 其他索引类型（IVF-PQ/DiskANN）暂不支持，保持 flat 模式 */
+    int rc = mmdb_vectors_index_rebuild(c);
+    if (rc != MMDB_OK) {
+        /* 构建失败，降级为直扫模式（不报错 —— 查询仍可用，只是慢一点） */
+        index_wrapper_free(w);
+        c->vec_index = NULL;
         return MMDB_OK;
     }
+    return MMDB_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -968,24 +945,24 @@ int mmdb_vectors_delete(mmdb_collection_t* c, const uint8_t* id, size_t id_len) 
         mmdb_metrics_dec_vectors_total(1);
     }
 
-    /* Phase 2: HNSW 同步 — 在 ID 映射表中标记删除，后续 rebuild 自然过滤 */
-    if (rc == MMDB_OK && c->hnsw) {
-        hnsw_wrapper_t* w = (hnsw_wrapper_t*)c->hnsw;
+    /* 内存索引同步 — 在 ID 映射表中标记删除，后续 rebuild 自然过滤 */
+    if (rc == MMDB_OK && c->vec_index) {
+        index_wrapper_t* w = (index_wrapper_t*)c->vec_index;
         /* P5-1：从 sdk_id 哈希表中删除映射（O(1)），再标记 id_map */
         if (w->sdk_id_hash) {
             sdk_id_hash_delete(w->sdk_id_hash, id, id_len);
         }
-        /* 遍历映射表找到匹配的 HNSW ID 并标记删除 */
+        /* 遍历映射表找到匹配的索引内 ID 并标记删除 */
         for (size_t i = 0; i < w->id_map->count; i++) {
             if (w->id_map->sdk_ids[i] != NULL &&
                 w->id_map->sdk_id_lens[i] == id_len &&
                 memcmp(w->id_map->sdk_ids[i], id, id_len) == 0) {
                 hnsw_id_map_mark_deleted(w->id_map, (int32_t)i);
-                /* 标记 HNSW 内部 bitmap（如果 faiss_hnsw 支持） */
-                if (w->index) {
-                    /* faiss_hnsw 不直接暴露 delete API，通过 bitmap 字段标记 */
-                    /* 搜索时会跳过已删除的向量（由 faiss_hnsw 内部处理） */
-                }
+                /*
+                 * 扁平索引没有"删除"这个概念：向量按位置固定存放，
+                 * 删除靠上面的 id_map 置空来表达 —— 搜索时按 id_map 跳过。
+                 * （HNSW 时代还有一层内部 bitmap，扁平索引没有这回事。）
+                 */
                 w->deleted_count++;
                 break;
             }
@@ -1096,8 +1073,8 @@ int mmdb_vectors_search(mmdb_collection_t* c, const mmdb_query_t* q,
     struct timespec q_start, q_end;
     clock_gettime(CLOCK_MONOTONIC, &q_start);
 
-    /* selector：自动决策是否启用 HNSW 索引 */
-    mmdb_vectors_hnsw_ensure(c);
+    /* 自动决策是否建内存索引（门槛见 VEC_INDEX_BUILD_THRESHOLD） */
+    mmdb_vectors_index_ensure(c);
 
     /* 编译 filter */
     mmdb_filter_params_t fp;
@@ -1109,12 +1086,12 @@ int mmdb_vectors_search(mmdb_collection_t* c, const mmdb_query_t* q,
 
     size_t top_k = q->top_k > 0 ? q->top_k : 10;
 
-    /* Phase 2: HNSW 加速搜索路径（P4-T4.5：支持 metadata filter）
-     * 当 HNSW 可用且 N >= 阈值时，filter 为空走原路径，filter 非空走 filter 路径。
-     * 两者最终都使用 faiss_hnsw_search_filtered()：filter 为空时传 NULL 谓词。 */
-    if (c->hnsw) {
-        hnsw_wrapper_t* w = (hnsw_wrapper_t*)c->hnsw;
-        if (w->index && faiss_hnsw_index_size(w->index) > 0) {
+    /* 内存索引加速搜索路径（P4-T4.5：支持 metadata filter）
+     * 当内存索引可用时，filter 为空走原路径，filter 非空走 filter 路径。
+     * 两者最终都使用 mmdb_flat_search_filtered()：filter 为空时传 NULL 谓词。 */
+    if (c->vec_index) {
+        index_wrapper_t* w = (index_wrapper_t*)c->vec_index;
+        if (w->index && mmdb_flat_index_size(w->index) > 0) {
             /* P4-T4.5：filter 非空 → 构建 bitmap 谓词；filter 为空 → NULL 谓词 */
             hnsw_filter_ctx_t filter_ctx;
             memset(&filter_ctx, 0, sizeof(filter_ctx));  /* P6-M1.3：未初始化指针 free 会段错误 */
@@ -1131,7 +1108,7 @@ int mmdb_vectors_search(mmdb_collection_t* c, const mmdb_query_t* q,
                 }
             }
 
-            /* HNSW 搜索：获取候选 ID 和距离 */
+            /* 索引搜索：获取候选 ID 和距离 */
             int32_t search_k = (int32_t)(top_k * 2);  /* 多取一些候选以补偿删除标记 */
             float* distances = (float*)calloc(search_k, sizeof(float));
             int32_t* hnsw_ids = (int32_t*)calloc(search_k, sizeof(int32_t));
@@ -1146,7 +1123,7 @@ int mmdb_vectors_search(mmdb_collection_t* c, const mmdb_query_t* q,
 
             /* 读操作：获取读锁（支持并发读） */
             mmdb_rwlock_rdlock(c->coll_lock);
-            int32_t found = faiss_hnsw_search_filtered(
+            int32_t found = mmdb_flat_search_filtered(
                 w->index, (const float*)q->query_vector,
                 search_k,
                 has_filter ? hnsw_filter_predicate : NULL,
@@ -1312,7 +1289,7 @@ int mmdb_vectors_search(mmdb_collection_t* c, const mmdb_query_t* q,
         }
     }
 
-    free(where);  /* 释放 filter（HNSW 路径已提前释放） */
+    free(where);  /* 释放 filter（内存索引路径已提前释放） */
 
     /* Flat 暴力扫描路径 */
     char tname[128];

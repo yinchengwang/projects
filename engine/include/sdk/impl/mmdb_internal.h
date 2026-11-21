@@ -43,7 +43,7 @@ struct mmdb_collection_s {
     mmdb_schema_t           schema;         /* Schema 拷贝（含 vector_dim） */
     sqlite3*                sdb;            /* SQLite 句柄（db->db 的别名，加速访问） */
     mmdb_rwlock_t*        coll_lock;      /* 指向 db->lock（读写锁，支持并发读） */
-    void*                   hnsw;           /* HNSW 索引指针（Phase 2，内存索引） */
+    void*                   vec_index;      /* 内存向量索引指针（精确扁平索引） */
     mmdb_embedding_t*       embedding;      /* P4-T4.1 新增：collection-level embedding；
                                             *   非 NULL 时 mmdb_rag_retrieve 默认用它。
                                             *   所有权归调用方，collection 不接管释放。 */
