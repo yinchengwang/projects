@@ -76,6 +76,7 @@ study-hub/
 ├── core/            纯函数层：Problem 模型、markdown 解析、provider、路径解析
 │   ├── bank/        legacy.js：死脚本内联清单的静态解析
 │   │                solutions-scan.js：存量题解的静态扫描
+│   ├── supply/      P4 供给流水线 + P5 算法轨批量补题（缺口 / 四件套 / 批处理 / 真实编译校验）
 │   ├── review/      SM-2 间隔重复与判题结果映射
 │   ├── scheduler/   推下一题：候选动作优先级 + 单日配额
 │   ├── sync/        learning 仓同步：轮次解析、勾选写回、错题订正、查脏
@@ -89,7 +90,7 @@ study-hub/
 │                    ui.js 是公共界面构件（页头 / 主卡 / 数字块 / 药丸 / 空态），
 │                    charts.js 是手绘 SVG 的纯函数层（零第三方图表库）
 ├── tools/           seed-bank.js / import-catalog.js / import-solutions.js / import-bank.js
-│                    import-codeforces.js / sync-links.js
+│                    import-codeforces.js / sync-links.js / supply.js（供给流水线 CLI）
 ├── fixtures/        样板题 + 判题 fixture（题面、用例、正例与三类负例）
 └── tests/           node:test 套件，一个命令跑全部
 ```
@@ -465,6 +466,69 @@ node tools/llm-check.js
 只读不写：**不发任何网络请求**，只打印当前 provider、模型名、密钥来源、配额，
 并对五个提示词做纯函数自检（同样输入两次构造必须一致）。
 
+## 供给流水线（P4 / P5）
+
+`node tools/supply.js` 是离线批处理 CLI，**不进 HTTP 服务**。五个子命令：
+
+| 子命令 | 做什么 | 要不要 LLM |
+|---|---|---|
+| `plan` | 扫三轨缺口，写 `learning/units/<轨>/plan.json` | 不要 |
+| `generate` | 补断言脚本 / 讲解 / 参考解法 / 负例 | **要** |
+| `verify` | 真跑执行器反向校验（DB/AI 跑断言脚本 + 变异测试；算法轨真 `g++` 编译） | 不要 |
+| `review` | 人工抽检，写回 `reviewed` / `reviewed_at` | 不要 |
+| `report` | 打印每轨计数与欠账 | 不要 |
+
+```bash
+cd projects/apps/study-hub
+node tools/supply.js plan            # DB/AI/算法三轨缺口
+node tools/supply.js verify --all     # 全部校验，只打印 diff，不自动提交
+node tools/supply.js report
+```
+
+**LLM 关掉时只有 `generate` 受影响**：退出码 `2` + 中文提示；`plan` / `verify` /
+`review` / `report` 照常可用（这是 P4 验收线，`tests/supply-cli.test.js` 与
+`tests/supply-algorithm-cli.test.js` 都钉着这一条）。
+
+**密钥纪律**：CLI **不接受** `--api-key` / `--token` / `--secret` 这类参数，
+解析到直接报错退出（退出码 1）。密钥只从环境变量或 `.env` 读。
+
+**退出码**：`0` 正常（含「跑完了但有单元被打回」，结果打在输出里）；
+`1` 参数错 / learning 仓路径解析不出来；`2` LLM 关掉。
+
+**绝不自动提交**：写回 learning 仓只打印 diff，不执行 `git add` / `git commit`。
+
+### 算法轨批量补题（P5）
+
+```bash
+node tools/supply.js plan    --track algorithm [--limit <n>]
+node tools/supply.js generate --track algorithm [--batch] [--limit <n>] [--resume] \
+                             [--retry-rejected] [--dry-run] [--session <批次号>]
+node tools/supply.js verify  --track algorithm [--unit <id>]
+node tools/supply.js report  --track algorithm
+```
+
+一道题一次 LLM 调用产**四件套**（题面 / 测试用例 / 参考解法 / 负例），落三件文件：
+
+```text
+learning/units/algorithm/
+├── <stem>.md              单元文件（loader C 读它）
+├── <stem>.reference.cpp   参考解法（判题器编译它）
+└── <stem>.negative.cpp    负例（质检专用，学习者看不到）
+```
+
+**校验的是执行结果，不是字符串**：参考解法必须**全部用例 AC**，负例必须被拒
+（`wrong_answer` / `runtime_error` / `timeout` 三者之一）。负例**全过**说明用例太弱，
+负例**编译失败**说明负例本身没写对——两种情况都判 `rejected`。存量题库
+`learning/bank/**` 一个字节都不动，缺口靠 `units/algorithm/` 下多出来的
+`status: verified` 单元来抵。
+
+`--dry-run` **不需要 LLM**：只扫题库、算计划、打清单，不调模型、不写文件、不花配额。
+
+批处理护栏：单批次 `supply.batch.session_limit`、当日 `supply.batch.daily_limit`、
+两次调用最小间隔 `supply.batch.rate_ms`、每题最多 1 + `supply.batch.max_retries` 次尝试；
+到顶**立刻停**并提示「用 `--resume` 接着跑」。单题进度落
+`supply.batch.item.algo.<stem>`，批次汇总落 `supply.batch.run.<批次号>`（不新建数据表）。
+
 ## 测试
 
 ```bash
@@ -516,6 +580,25 @@ node tests/run-all.js
 | `llm-web.test.js` | 前端纯逻辑：求助四档逐级解锁、请求体形状 |
 | `llm-web-bank.test.js` | 题库页与设置页：needs-fill 挑题、设置体只留白名单字段 |
 | `llm-e2e.test.js` | 端到端：五个场景跑通、造题落盘、讲解留痕、护栏拦住第 21 次 |
+| `llm-env-rename.test.js` | `ALGO_PLAN_LLM_*` → `STUDY_HUB_LLM_*`：只读新名，旧名一个都不读 |
+| `llm-supply-prompt.test.js` | 按轨模板表（三轨 × 四场景）、渲染不残留占位符、源码无按轨硬分支 |
+| `llm-supply-guard.test.js` | 离线批处理配额：批次桶 + 每日桶，一批用满就停 |
+| `llm-supply-service.test.js` | 供给四场景：断言脚本 / 讲解 / 深挖 / 生成单元，落盘与查询配额 |
+| `supply-contract.test.js` | 跨计划契约回归闸门：负例口径、小节名、settings 键、CLI 选项 |
+| `supply-unit-file.test.js` | 单元文件读写、只改目标行、CRLF 保留、写回前查脏 |
+| `supply-plan.test.js` | 缺口扫描：卡缺断言 / 缺讲解，题缺题面 / 用例 / 解法，plan.json 落盘 |
+| `supply-verify.test.js` | 三种变异手法、真跑断言脚本、变异未捕获判 rejected、numpy 缺失跳过 |
+| `supply-cli.test.js` | 五个子命令、LLM 关掉只影响 generate、纯本地模式、不自动提交 |
+| `supply-api.test.js` | `GET /api/supply/status` 与 `POST /api/supply/review/:id` 五类错误码 |
+| `supply-web.test.js` | 供给页四层信息层次、缺口清单两个入口、纯本地不白屏 |
+| `supply-e2e.test.js` | 端到端：draft → verified / draft → rejected、题库零改动 |
+| `supply-algorithm-fill.test.js` | 算法轨生成侧：四种形态、渲染三件套、代码块与 cpp 逐字节一致 |
+| `supply-algorithm-prompt.test.js` | 四件套提示词、skeleton 解析、老的两参调用行为不变 |
+| `supply-algorithm-verify.test.js` | 算法轨校验侧：真实 g++ 编译执行、参考解法全 AC、负例必须被拒 |
+| `supply-algorithm-batch.test.js` | 批处理：dry-run 不花钱、配额到顶就停、resume 跳过已办、记账 |
+| `supply-algorithm-cli.test.js` | 算法轨 CLI：六个选项、退出码、LLM 关掉只影响 generate |
+| `supply-algorithm-report.test.js` | 覆盖报告：欠账口径、四项分组、批次汇总、中文渲染 |
+| `supply-algorithm-e2e.test.js` | 端到端：存量题库零改动、真 git 查脏、全程不联网 |
 
 ## 写回 learning 仓的规矩
 
