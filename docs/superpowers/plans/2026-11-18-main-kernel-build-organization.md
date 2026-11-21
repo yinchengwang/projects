@@ -747,7 +747,7 @@ check: deps
 （`repl_*.c` 里）与 `handle_blob` / `handle_graph`（**定义在 main.c 自己里**）。
 不裁它，裁剪出来的二进制链接不过。本 Task 把它作为**第 5 处**。
 
-- [ ] **B3.1 `src/db_internal.h`：include 守卫**
+- [x] **B3.1 `src/db_internal.h`：include 守卫**
 
   把 L17–L38 的 include 块改成：
 
@@ -794,7 +794,7 @@ check: deps
   所以在 include 之前不需要额外处理；但**所有不经 Makefile 的编译路径**
   （比如 `test/run.sh` 自己编测试）也必须带上这些宏 —— 见 B3.6。
 
-- [ ] **B3.1b `src/db_internal.h`：模态函数的**声明**也要守卫（原位包上，不是新增）**
+- [x] **B3.1b `src/db_internal.h`：模态函数的**声明**也要守卫（原位包上，不是新增）**
 
   ⚠️ **（可执行性修正）这一步原来写的是「**新增**这些声明」—— 方向写反了** ——
   `db_internal.h` 里这些声明**本来就存在**（实测：`L233-L371` 连续一段 +
@@ -889,7 +889,7 @@ check: deps
   ⚠️ **`db_wal_hook` 不守卫** —— 它是 `db.c` 实现的、被多个模态共用，
   且 blob/graph/geo/ts/vector 都要它。留在公共区。
 
-- [ ] **B3.2 `src/db_internal.h`：`DbInstance` 字段守卫**
+- [x] **B3.2 `src/db_internal.h`：`DbInstance` 字段守卫**
 
   把 `DbInstance` 里各模态的字段块逐个包起来：
 
@@ -992,7 +992,7 @@ check: deps
     `modalities/geo/geo_state.h` / `modalities/ts/ts_am_ext.h` / `tsstore.h`，
     已在 B3.1 里按 `DB_HAS_*` 守 include ⇒ 字段被裁掉时类型也跟着没了，**不会**留下未用类型。
 
-- [ ] **B3.3 `src/db.c`：open 路径守卫**
+- [x] **B3.3 `src/db.c`：open 路径守卫**
 
   实测的触点，逐个包（⚠️ **行号以当前 `db.c` 为准**）：
 
@@ -1043,7 +1043,7 @@ check: deps
   ⇒ **按「函数 + 语句内容」定位**（用 `Select-String` 找那一行），
   再把 `#if` / `#endif` 插在它前后。
 
-- [ ] **B3.4 `src/db.c`：close 路径守卫**
+- [x] **B3.4 `src/db.c`：close 路径守卫**
 
   ⚠️ **（可执行性修正）原来写的是「L200–L205」，实际是「L200–L206」** ——
   `open_fail_cleanup()` 里连续 7 行（L200-L206），中间夹着
@@ -1088,7 +1088,7 @@ check: deps
   ⚠️ **不要按行号区间整体替换** —— 行号会随前面的改动漂移。
   ⇒ 按 `open_fail_cleanup()` 这个**函数**定位，往里逐行加守卫。
 
-- [ ] **B3.5 `src/db_instance.c`：两处关闭路径守卫**
+- [x] **B3.5 `src/db_instance.c`：两处关闭路径守卫**
 
   `instance_close()`（L55 / L67 / L78 / L90 / L125 / L126）与
   `db_abandon()`（L186 / L187 / L196-198 / L207 / L213 / L219）：
@@ -1130,7 +1130,7 @@ check: deps
   #endif
   ```
 
-- [ ] **B3.6 `src/main.c`：第 5 处裁剪点**
+- [x] **B3.6 `src/main.c`：第 5 处裁剪点**
 
   - include 守卫（L62–L65）：
 
@@ -1169,7 +1169,7 @@ check: deps
 
     其余 5 处同理。
 
-- [ ] **B3.7 让 `test/run.sh` 也带上 `-DDB_HAS_*`**
+- [x] **B3.7 让 `test/run.sh` 也带上 `-DDB_HAS_*`**
 
   ⚠️ **`test/run.sh` 自己编测试**（不走 Makefile），所以它必须也传这些宏 ——
   否则测试文件编译时会因为 `DB_HAS_FT` 未定义而报错
@@ -1206,7 +1206,7 @@ check: deps
   done
   ```
 
-- [ ] **B3.7b `test/run.sh`：对象目录也不能写死 `build`**
+- [x] **B3.7b `test/run.sh`：对象目录也不能写死 `build`**
 
   ⚠️ `run.sh` 里现在**硬编码**了 `build`：
 
@@ -1259,7 +1259,7 @@ check: deps
   （`tr` 在 Git Bash 与 Linux 上都有；`run.sh` 只在 sh 环境跑，不受 Makefile 的
   `$(shell)` 限制。）
 
-- [ ] **B3.8 逐个 profile 编译验证**
+- [x] **B3.8 逐个 profile 编译验证**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -1274,7 +1274,7 @@ check: deps
 
   ⚠️ **少一处 `#if` 就会在这里报 undefined reference** —— 这正是这个 Task 的验证点。
 
-- [ ] **B3.9 全量测试 + 符号验证**
+- [x] **B3.9 全量测试 + 符号验证**
 
   ```powershell
   mingw32-make clean
@@ -1300,7 +1300,7 @@ check: deps
 
   预期：**有命中**（关系模态恒常驻）。
 
-- [ ] **B3.10 提交**
+- [x] **B3.10 提交**（提交 `31bca9669`）
 
   ```powershell
   cd C:\code\projects
@@ -1310,6 +1310,21 @@ check: deps
   git push origin main 2>&1 | Out-String | Write-Output
   ```
 
+
+**B3 实际执行回写（待提交）**：
+
+- `db_internal.h` 的模态 include、`FtReplaySet`、18 个模态声明与 `DbInstance` 字段均按 `DB_HAS_*` 原位守卫；
+- `db.c` 的 recovery hook、FT/blob/graph/vector/FT/geo/ts open 注册与失败清理均守卫；
+- `db_instance.c` 的正常关闭、断电放弃、FT 事务清理均守卫；
+- `main.c` 的 REPL include、blob/graph 辅助函数和 6 个 dispatch 分支均守卫；
+- `test/run.sh` 增加 full profile 的 `DB_HAS_*` 宏，并从 `OBJ_DIR` 读取对象、日志、二进制与 rc 文件；
+- 9 个 profile（full / relational / blob / graph / vector / ft / geo / ts / doc）均 clean build + link 通过；
+- full profile：`test/run.sh` 105/105 通过；`check_deps.sh` 与 `mm_profiles_test.sh` 均通过。
+
+**B3 实际踩到的两个坑**：
+
+1. `DB_HAS_FT=0` 时 `DB` 连接结构里的 `FtReplaySet ft_del` 也必须守卫，否则 `FtReplaySet` 类型已被裁掉但字段仍引用它。
+2. `main.c` 中 graph 的三个辅助函数（`eq_ci_n`、`parse_graph_cols`、`print_graph_value`）必须和 `handle_graph` 一起守卫，否则 `-Werror` 报 `unused-function`；只守 handler 本体不够。
 ---
 
 ### Task B4：8 个 smoke —— 链接期的模态独立证明
