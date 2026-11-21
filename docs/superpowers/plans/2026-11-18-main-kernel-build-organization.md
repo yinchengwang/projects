@@ -489,7 +489,7 @@ check: deps
 - 新增宏：`DB_HAS_RELATIONAL` / `DB_HAS_BLOB` / `DB_HAS_GRAPH` / `DB_HAS_VECTOR` /
   `DB_HAS_FT` / `DB_HAS_GEO` / `DB_HAS_TS` / `DB_HAS_DOC`（恒定定义，值为 0 或 1）。
 
-- [ ] **B2.1 在 `Makefile` 的 `OBJ_DIR ?= build`（L62）之后、`SRCS :=`（L81）之前插入 MM 块**
+- [x] **B2.1 在 `Makefile` 的 `OBJ_DIR ?= build`（L62）之后、`SRCS :=`（L81）之前插入 MM 块**
 
   ⚠️ **（可执行性修正）插入点的下界必须写死** ——
   `Makefile` 里 `SRCS :=`（**L81**）、`OBJS :=`（L82）、`LIB_OBJS :=` 都是
@@ -605,7 +605,7 @@ check: deps
   endif
   ```
 
-- [ ] **B2.2 裁剪源文件**
+- [x] **B2.2 裁剪源文件**
 
   现有 L81：
 
@@ -627,7 +627,7 @@ check: deps
   ⇒ `SRCS` = 全量 ⇒ **裁剪静默失效**（构建照样绿，二进制却是全量的）。
   ⇒ 所以 B2.1 的插入点是「**L62 之后、L81 之前**」，不是「文件末尾」。
 
-- [ ] **B2.3 把宏加进 CFLAGS（并且把 `CFLAGS` 改成延迟赋值）**
+- [x] **B2.3 把宏加进 CFLAGS（并且把 `CFLAGS` 改成延迟赋值）**
 
   ⚠️ **（复审修正）这一步原来会写出「宏永远到不了编译器」的版本** ——
   `Makefile:57` 是 `CFLAGS := ...`（**立即赋值**），而 MM 块插在 `OBJ_DIR ?= build`
@@ -659,7 +659,7 @@ check: deps
   **此时所有 `#if DB_HAS_*` 都是 0，但编译照样通过** —— 这是最阴险的一类错，
   必须显式验。
 
-- [ ] **B2.4 验证：默认构建不变**
+- [x] **B2.4 验证：默认构建不变**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -673,7 +673,7 @@ check: deps
   ⚠️ **此时还没有 `#if` 裁剪点**，所以 `make MM=vector` 会在链接阶段报
   "undefined reference to db_ft_open" —— **这是预期的**，B3 修。
 
-- [ ] **B2.5 验证：裁剪确实生效（源文件层面 + 链接产物的反向断言）**
+- [x] **B2.5 验证：裁剪确实生效（源文件层面 + 对象层面的反向断言）**
 
   ```powershell
   mingw32-make MM=vector -n 2>&1 | Select-String 'ft_am|db_ft' | Measure-Object
@@ -689,28 +689,41 @@ check: deps
 
   预期：`> 0`。
 
-  ⚠️ **（可执行性修正）只验 `make -n` 是不够的，必须补一条 `nm` 反向断言** ——
-  `make -n` 只证明**命令行**里没有 ft 的编译行，
-  证明不了**链接产物**里没有 ft 的符号：
-  若 `SRCS` 的 `:=` 时序错了（MM 块被追加到文件末尾，落在 L81 之下），
-  `make -n` 看不出问题，而 `make MM=vector` 会**静默链接出完整二进制** ——
-  裁剪「看起来成功」，实际没裁。
+  ⚠️ **实测修正：B2 阶段不能用最终 `nm db.exe` 作为裁剪验收**
 
-  ⇒ 补一条**真实构建 + 符号反向断言**：
+  B2 只做「源文件裁剪 + 宏注入」。`main.c` 仍然直接调用所有模态入口
+  （`handle_ft` / `handle_geo` / `handle_ts` / `handle_graph` …），
+  而那些入口的 `#if` 守卫属于**下一项 B3**。
+
+  ⇒ `make MM=vector all` 在 B2 会**按预期在链接期失败**
+    （实测：`undefined reference to 'db_graph_hop'` / `'db_graph_schema'`）。
+    这个失败**不是**裁剪没生效，是 B3 还没做。不能记成 B2 的红灯。
+
+  ⇒ 反向证据改用**真实对象目录**（比 `make -n` 更强，也不受 B3 入口依赖影响）：
 
   ```powershell
   cd C:\code\projects\engine\db
-  mingw32-make MM=vector clean
-  mingw32-make MM=vector all
-  nm build_mm_vector/db.exe | Select-String 'db_ft_'
+  mingw32-make MM=vector all      # 预期链接失败（B3 修）
+  Get-ChildItem build_mm_vector/modalities/* -Directory
   ```
 
-  预期：**零命中**（`db_ft_*` 一个都不在二进制里）⇒ 证明 ft **真的**被裁掉了。
-  ⇒ 只要有一处命中 ⇒ 裁剪没生效 ⇒ 回去查 B2.1/B2.2 的**插入点与 `:=` 时序**。
-  （`build_mm_vector` 是 `MM=vector` 的产物目录：`OBJ_BASE` 默认 = `build`，
-  非 full 的 profile 落在 `$(OBJ_BASE)_mm_$(MM)`。）
+  **实测结果**：
 
-- [ ] **B2.6 提交**
+  | 检查点 | 预期 | 实测 |
+  |---|---|---|
+  | `make -n MM=vector` 里 ft 编译行 | 0 | **0** |
+  | `make -n MM=vector` 里 vector 编译行 | >0 | **2** |
+  | `-DDB_HAS_VECTOR=1` 出现在命令行 | 有 | **有** |
+  | `-DDB_HAS_FT=0` 出现在命令行 | 有 | **有** |
+  | `build_mm_vector/modalities/vector/*.o` | 8 | **8** |
+  | `build_mm_vector/modalities/{ft,geo,ts,graph,doc}/*.o` | 0 | **0** |
+  | `build_mm_vector/db_ft*.o` / `db_geo*.o` / `db_ts.o` / `db_graph*.o` | 0 | **0** |
+  | `build_mm_vector/repl_{ft,geo,ts}.o` | 0 | **0** |
+
+  这组断言证明 `SRCS` 过滤**真的生效**（不是 dry-run 的幻觉）。
+  链接能否成功由 B3 决定。
+
+- [x] **B2.6 提交**（提交 `7674355f8`）
 
   ```powershell
   cd C:\code\projects
