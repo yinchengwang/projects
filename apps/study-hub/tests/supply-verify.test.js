@@ -309,12 +309,11 @@ test("缺 numpy → skipped，不算通过也不算打回", { skip: SKIP }, asyn
   assert.ok(result.reason.indexOf("numpy") !== -1, result.reason)
 })
 
-test("算法题 → skipped，理由是「算法题由 P5 校验」", { skip: SKIP }, async function () {
+test("算法题 → 由 P5 校验分支处理", { skip: SKIP }, async function () {
   const repo = makeRepo(DEMO_MUTABLE, true)
-  const unit = cardUnit({ id: "algo:lc-00007", track: "algorithm", kind: "problem" })
+  const unit = cardUnit({ id: "algo:lc-00007", track: "algorithm", kind: "problem", path: "units/algorithm/lc-00007.md" })
   const result = await run(repo, unit)
-  assert.strictEqual(result.status, "skipped")
-  assert.strictEqual(result.reason, "算法题由 P5 校验")
+  assert.ok(["verified", "rejected"].indexOf(result.status) !== -1, result.reason)
 })
 
 test("断言脚本不存在 → skipped", { skip: SKIP }, async function () {

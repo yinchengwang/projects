@@ -234,6 +234,14 @@ function writeVerdict(unit, status, p) {
 async function verifyUnit(params) {
   const p = params || {}
   const unit = p.unit || {}
+  // P5 追加：算法轨分支 开始
+  if (String(unit.kind || "") === "problem" && String(unit.track || "") === "algorithm") {
+    const { verifyAlgorithmUnit } = require("./algorithm-verify.js")
+    const unitPath = path.join(String(p.learningRoot || ""), String(unit.path || "").replace(/^units[\\/]/, "units/"))
+    const algorithm = await verifyAlgorithmUnit({ unitPath: unitPath, learningRoot: p.learningRoot })
+    return Object.assign({ id: String(unit.id || "") }, algorithm)
+  }
+  // P5 追加：算法轨分支 结束
   const timeoutMs = Number(p.timeoutMs) > 0 ? Number(p.timeoutMs) : DEFAULT_VERIFY_TIMEOUT_MS
   const result = {
     id: String(unit.id || ""),
