@@ -23,7 +23,9 @@
 
 #include "common/latch.h"
 
+#if DB_HAS_FT
 #include "modalities/ft/ft_index.h"
+#endif
 
 static void close_connection_txn(DB *db)
 {
@@ -31,9 +33,13 @@ static void close_connection_txn(DB *db)
         return;
     /* 连接被直接关闭时，未提交的 FT 删除也不能遗留在内存集合里。 */
     if (db->in_txn) {
+#if DB_HAS_FT
         (void)db_ft_txn_rollback(db);
+#endif
     } else {
+#if DB_HAS_FT
         db_ft_txn_clear(db);
+#endif
     }
 }
 
@@ -66,7 +72,9 @@ static void instance_close(DbInstance *inst)
      * （读全部向量 + 重新构建）。而且这一步要写页，
      * 所以必须在 pager_close **之前**。
      */
+#if DB_HAS_VECTOR
     db_vec_close(inst);
+#endif
 
     /*
      * 全文索引：释放内存里的段清单与 tombstone 集合。
@@ -78,7 +86,9 @@ static void instance_close(DbInstance *inst)
      * 所以这里没有"flush"这一步 —— 段的内容在数据文件里，
      * 丢的只是"清单"。
      */
+#if DB_HAS_FT
     db_ft_close(inst);
+#endif
 
     /*
      * 地理空间模态（v1.4）。
@@ -89,7 +99,9 @@ static void instance_close(DbInstance *inst)
      * geo 的页是**普通脏页**，pager_close 会把它们刷盘 ⇒
      * **数据不依赖这个顺序**；把 GeoState 的内存放在 pager 之前释放更干净。
      */
+#if DB_HAS_GEO
     db_geo_close(inst);
+#endif
 
     /*
      * 时序模态（v1.5）。
@@ -101,7 +113,9 @@ static void instance_close(DbInstance *inst)
      * ts 的页是**普通脏页**，pager_close 会把它们刷盘 ⇒
      * **数据不依赖这个顺序**；把 TsStore 的内存放在 pager 之前释放更干净。
      */
+#if DB_HAS_TS
     db_ts_close(inst);
+#endif
 
     /*
      * 关闭顺序很重要：**先刷页，再写 CHECKPOINT**。
@@ -136,8 +150,12 @@ static void instance_close(DbInstance *inst)
     txn_clog_close(&inst->txns);
 
     catalog_close(inst->cat);
+#if DB_HAS_BLOB
     blob_store_destroy(inst->blobs);
+#endif
+#if DB_HAS_GRAPH
     graph_destroy(inst->graph);
+#endif
     spi_registry_destroy(inst->reg);
     free(inst->clogpath);
     free(inst->walpath);
@@ -195,7 +213,9 @@ void db_abandon(DB *db)
     DbInstance *inst = db->inst;
 
     /* 断电式放弃也要释放连接私有的 FT 事务记录；不刷页、不写新 WAL。 */
+#if DB_HAS_FT
     db_ft_txn_clear(db);
+#endif
 
     /* 同 db_close：引用计数 + 实例销毁都在临界区里 */
     latch_lock();
@@ -203,13 +223,18 @@ void db_abandon(DB *db)
 
     if (inst->nconns <= 0) {
         catalog_close(inst->cat);
+#if DB_HAS_BLOB
         blob_store_destroy(inst->blobs);
+#endif
+#if DB_HAS_GRAPH
         graph_destroy(inst->graph);
+#endif
         /*
          * 向量：断电时**不**落盘索引 ——
          * 索引本来就是 checkpoint 式的，脏页全丢了它就过期，
          * 下次开库自动重建。这正是"索引可以算出来"的价值。
          */
+#if DB_HAS_VECTOR
         if (inst->vstate) {
             VectorState *st = inst->vstate;
             if (st->hnsw)
@@ -219,24 +244,31 @@ void db_abandon(DB *db)
             free(st);
             inst->vstate = NULL;
         }
+#endif
         /*
          * 全文索引：断电时同样**不**落盘清单（本来就是内存里的）。
          * 段的内容在数据文件里（脏页丢了就丢了），
          * 清单更是一开始就没落盘 —— 所以这里只是释放内存。
          */
+#if DB_HAS_FT
         db_ft_close(inst);
+#endif
         /*
          * 地理空间模态（v1.4）：断电时树页**不**落盘 ——
          * 没关系：树页与 meta 页都进 WAL（v1.4 步骤 6 · A7），
          * 重开库时由 WAL 重放整页镜像补回来。这里只是释放内存。
          */
+#if DB_HAS_GEO
         db_geo_close(inst);
+#endif
         /*
          * 时序模态（v1.5）：断电时读数页**不**落盘 ——
          * 没关系：分区页 / 列式页 / 目录页都进 WAL（v1.5 步骤 6 · T10），
          * 重开库时由 WAL 重放整页镜像补回来。这里只是释放内存。
          */
+#if DB_HAS_TS
         db_ts_close(inst);
+#endif
         spi_registry_destroy(inst->reg);
         pager_abandon(inst->pager);     /* 脏页全丢 —— 这就是"断电" */
         wal_close(inst->wal);            /* 日志已经 fsync 过了，关掉即可 */

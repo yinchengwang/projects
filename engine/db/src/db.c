@@ -197,12 +197,22 @@ static int wal_flush_before_page(void *ctx, u32 page_id, u32 page_lsn)
  */
 static void open_fail_cleanup(DbInstance *inst, DB *db, Pager *pg)
 {
+#if DB_HAS_FT
     db_ft_close(inst);
+#endif
+#if DB_HAS_GEO
     db_geo_close(inst);
+#endif
+#if DB_HAS_TS
     db_ts_close(inst);
+#endif
+#if DB_HAS_GRAPH
     graph_destroy(inst->graph);
+#endif
     spi_registry_destroy(inst->reg);
+#if DB_HAS_BLOB
     blob_store_destroy(inst->blobs);
+#endif
     catalog_close(inst->cat);
     txn_clog_close(&inst->txns);
 
@@ -483,12 +493,16 @@ db_err db_open(const char *path, DB **out)
      * 所以注册与注销必须配对：注册 → recovery_run → 注销。
      */
     bool did_recover = false;
+#if DB_HAS_FT
     recovery_set_hook(db_ft_recovery_hook, inst);
+#endif
     rc = recovery_run(pg, inst->wal, ckpt_lsn, &did_recover);
     recovery_set_hook(NULL, NULL);
     if (rc != OK) {
+#if DB_HAS_FT
         db_ft_replay_free(&inst->ft_replay_redo);
         db_ft_replay_free(&inst->ft_replay_undo);
+#endif
         open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
     }
@@ -523,7 +537,9 @@ db_err db_open(const char *path, DB **out)
      *
      * ft_docs 虚拟表的注册是**另一步**（注册表在后面才建）。
      */
+#if DB_HAS_FT
     rc = db_ft_open(inst);
+#endif
     if (rc != OK) {
         open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
@@ -548,7 +564,9 @@ db_err db_open(const char *path, DB **out)
      * 它用同一个 wal_hook 写日志：blob 页必须进 WAL，
      * 否则崩溃后大对象会丢（页内容在盘上，日志里没有 → 重放不回来）。
      */
+#if DB_HAS_BLOB
     rc = blob_store_create(pg, db_wal_hook, inst, &inst->blobs);
+#endif
     if (rc != OK) {
         open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
@@ -573,6 +591,7 @@ db_err db_open(const char *path, DB **out)
         return map_rc(rc);
     }
 
+#if DB_HAS_BLOB
     rc = blob_am_build_frames(inst->blobs, &inst->blob_am_frames,
                               &inst->blob_ctx_frames);
     if (rc == OK)
@@ -582,6 +601,7 @@ db_err db_open(const char *path, DB **out)
         rc = spi_registry_add(inst->reg, "blob_frames", &inst->blob_am_frames);
     if (rc == OK)
         rc = spi_registry_add(inst->reg, "blob_objects", &inst->blob_am_objects);
+#endif
     if (rc != OK) {
         open_fail_cleanup(inst, db, pg);
         return map_rc(rc);
@@ -610,6 +630,7 @@ db_err db_open(const char *path, DB **out)
      * 这时候继续开库 = 带着一份解释不了的图跑，
      * 后面每一次查询都在读垃圾。与其那样，不如开不了。
      */
+#if DB_HAS_GRAPH
     rc = graph_open(pg, db_wal_hook, inst, &inst->graph);
     if (rc == OK) {
         inst->graph_ready = true;
@@ -619,7 +640,7 @@ db_err db_open(const char *path, DB **out)
         inst->graph_ready = false;
         rc = OK;
     }
-
+#endif
     /*
      * 向量模态（v1.0）。
      *
@@ -638,6 +659,7 @@ db_err db_open(const char *path, DB **out)
      *
      * **不需要用户做任何事** —— 这是"索引可以算出来"的好处。
      */
+#if DB_HAS_VECTOR
     if (rc == OK) {
         int vrc = db_vec_open(inst);
         if (vrc == E_NOTFOUND) {
@@ -646,6 +668,7 @@ db_err db_open(const char *path, DB **out)
         rc = vrc;
     }
 
+#endif
     /*
      * 全文检索模态（v1.3）：**注册 ft_docs 虚拟表**。
      *
@@ -657,9 +680,11 @@ db_err db_open(const char *path, DB **out)
      * 这与 graph 的"没有图 → 查它得到表不存在"是两种不同的状态，
      * 如实区分开（见 db_ft_open 的注释）。
      */
+#if DB_HAS_FT
     if (rc == OK) {
         rc = db_ft_register(inst);
     }
+#endif
 
     /*
      * 地理空间模态（v1.4）。
@@ -679,6 +704,7 @@ db_err db_open(const char *path, DB **out)
      * 那 geo_points 就该存在。建（db_geo_create）那次也注册一次 ——
      * 两条路互斥（没建过才建，建过就不许再建），不会重名。
      */
+#if DB_HAS_GEO
     if (rc == OK) {
         int grc = db_geo_open(inst);
         if (grc == E_NOTFOUND) {
@@ -687,6 +713,7 @@ db_err db_open(const char *path, DB **out)
         rc = grc;
     }
 
+#endif
     /*
      * 时序模态（v1.5）。
      *
@@ -703,6 +730,7 @@ db_err db_open(const char *path, DB **out)
      * 那两张虚拟表就该存在。建（db_ts_create）那次也注册一次 ——
      * 两条路互斥（没建过才建，建过就不许再建），不会重名。
      */
+#if DB_HAS_TS
     if (rc == OK) {
         int trc = db_ts_open(inst);
         if (trc == E_NOTFOUND) {
@@ -711,6 +739,7 @@ db_err db_open(const char *path, DB **out)
         rc = trc;
     }
 
+#endif
     if (rc != OK) {
         open_fail_cleanup(inst, db, pg);
         return map_rc(rc);

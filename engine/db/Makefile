@@ -371,7 +371,7 @@ deps:
 	@sh tools/check_deps.sh
 
 test: $(TARGET)
-	@sh test/run.sh
+	@OBJ_DIR=$(OBJ_DIR) sh test/run.sh
 
 check: deps
 	@sh tools/mm_profiles_test.sh

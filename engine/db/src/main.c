@@ -59,10 +59,18 @@
 #include <string.h>
 
 #include "db.h"
+#if DB_HAS_FT
 #include "repl_ft.h"
+#endif
+#if DB_HAS_GEO
 #include "repl_geo.h"
+#endif
+#if DB_HAS_TS
 #include "repl_ts.h"
+#endif
+#if DB_HAS_VECTOR
 #include "repl_vec.h"
+#endif
 
 static void print_result(Result *r)
 {
@@ -110,6 +118,7 @@ static void print_result(Result *r)
 /*
  * 处理一条 BLOB 命令。返回 true 表示这条命令被消费了。
  */
+#if DB_HAS_BLOB
 static int handle_blob(DB *db, char *line)
 {
     /* 跳过 "BLOB" 关键字 */
@@ -238,6 +247,7 @@ static int handle_blob(DB *db, char *line)
     fprintf(stderr, "错误: 未知的 BLOB 子命令\n");
     return 1;
 }
+#endif
 
 /* ---------------- graph 命令 ---------------- */
 
@@ -268,6 +278,7 @@ static int handle_blob(DB *db, char *line)
  */
 
 /* 大小写不敏感地比较 n 个字符（只看前缀，不看结尾） */
+#if DB_HAS_GRAPH
 static int eq_ci_n(const char *a, const char *b, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
@@ -388,8 +399,10 @@ static void print_graph_value(const db_graph_value *v)
     case DB_GRAPH_TEXT: printf("%s", v->s); break;
     }
 }
+#endif
 
 /* 处理一条 GRAPH 命令。返回 true 表示这条命令被消费了。 */
+#if DB_HAS_GRAPH
 static int handle_graph(DB *db, char *line)
 {
     while (*line == ' ')
@@ -551,6 +564,7 @@ static int handle_graph(DB *db, char *line)
     fprintf(stderr, "错误: 未知的 GRAPH 子命令\n");
     return 1;
 }
+#endif
 
 int main(int argc, char **argv)
 {
@@ -590,48 +604,60 @@ int main(int argc, char **argv)
             const char *p = line;
             while (*p == ' ')
                 p++;
+#if DB_HAS_BLOB
             if (strncmp(p, "BLOB", 4) == 0) {
                 handle_blob(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
+#if DB_HAS_GRAPH
             if (strncmp(p, "GRAPH", 5) == 0) {
                 handle_graph(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
+#if DB_HAS_VECTOR
             if (strncmp(p, "VEC", 3) == 0) {
                 handle_vec(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
+#if DB_HAS_FT
             if (strncmp(p, "FT", 2) == 0) {
                 handle_ft(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
+#if DB_HAS_GEO
             if (strncmp(p, "GEO", 3) == 0) {
                 handle_geo(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
             /*
              * TS 命令同理（v1.5 步骤 5）。
              *
              * ⚠️ 必须排在 SQL 缓冲**之前**（坑 M6-59）：
              * 否则 "TS INSERT 100 1 2.5" 会被当成 SQL 送去解析 → 语法错误。
              */
+#if DB_HAS_TS
             if (strncmp(p, "TS", 2) == 0) {
                 handle_ts(db, line);
                 len = 0;
                 sql[0] = '\0';
                 continue;
             }
+#endif
         }
 
         size_t n = strlen(line);

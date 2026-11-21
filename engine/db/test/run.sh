@@ -54,8 +54,11 @@ fi
 # 库代码碰巧没用到，但 test_wal_group_mt 用了 ⇒ 编译期 implicit declaration、
 # 链接期找不到符号。**主核第一次在 Linux 上跑 test/run.sh 时撞到这一条** ——
 # Windows/MinGW 的 winpthreads 头文件不按 _POSIX_C_SOURCE 裁剪，所以本地一直是绿的。
+# 模态开关宏：默认 run.sh 跑 full，与 Makefile 的 MM=full 保持一致。
+MM_FLAGS="-DDB_HAS_RELATIONAL=1 -DDB_HAS_BLOB=1 -DDB_HAS_GRAPH=1 \
+-DDB_HAS_VECTOR=1 -DDB_HAS_FT=1 -DDB_HAS_GEO=1 -DDB_HAS_TS=1 -DDB_HAS_DOC=1"
 CFLAGS="-std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O1 -g -fno-strict-aliasing \
-$SAN -Iinclude -Isrc"
+$SAN $MM_FLAGS -Iinclude -Isrc"
 
 # 线程库 + 数学库（v0.10 起有并发测试）
 #
@@ -67,11 +70,12 @@ case "$(uname -s)" in
     *)                   LDFLAGS="-lpthread -lm" ;;
 esac
 
-mkdir -p build test/tmp build/test-logs
-# 排除 build/bench/ —— 基准程序自己带 main，链进来会重复定义。
-# （bench 的对象是 2026-11-02 的步骤 6 加进来的；
-#  一开始没排除，make bench 之后测试链接就会炸。）
-OBJS=$(find build -name '*.o' ! -name 'main.o' ! -path 'build/bench/*' 2>/dev/null || true)
+# 测试单独编译，默认复用 Makefile 当前的对象目录。
+# 通过 OBJ_DIR=build_mm_<profile> 调用时，测试就会链同一 profile 的对象。
+OBJ_DIR=${OBJ_DIR:-build}
+mkdir -p "$OBJ_DIR" test/tmp "$OBJ_DIR/test-logs"
+# 排除 bench/ —— 基准程序自己带 main，链进来会重复定义。
+OBJS=$(find "$OBJ_DIR" -name '*.o' ! -name 'main.o' ! -path "$OBJ_DIR/bench/*" 2>/dev/null || true)
 
 # ==================== 单个测试：编译 → 运行 → 记结果 ====================
 #
@@ -81,8 +85,8 @@ OBJS=$(find build -name '*.o' ! -name 'main.o' ! -path 'build/bench/*' 2>/dev/nu
 run_one() {
     t=$1
     name=$(basename "$t" .c)
-    log="build/test-logs/$name.log"
-    rc="build/test-logs/$name.rc"
+    log="$OBJ_DIR/test-logs/$name.log"
+    rc="$OBJ_DIR/test-logs/$name.rc"
 
     # test_stmt_alloc 自带分配器计数：链接时把 malloc 家族重定向到
     # 它内部的 __wrap_* 实现。这是**唯一**需要额外链接参数的文件，
@@ -94,12 +98,12 @@ run_one() {
             ;;
     esac
 
-    if ! $CC $CFLAGS -o "build/$name" "$t" $OBJS $LDFLAGS $extra >"$log" 2>&1; then
+    if ! $CC $CFLAGS -o "$OBJ_DIR/$name" "$t" $OBJS $LDFLAGS $extra >"$log" 2>&1; then
         echo 1 > "$rc"
         printf '  %-34s [COMPILE FAIL]\n' "$name"
         return
     fi
-    if "./build/$name" >>"$log" 2>&1; then
+    if "./$OBJ_DIR/$name" >>"$log" 2>&1; then
         echo 0 > "$rc"
         printf '  %-34s [PASS]\n' "$name"
     else
@@ -131,7 +135,7 @@ rfail=0
 failed_names=""
 
 # 清掉上次留下的 .rc，否则「这轮没跑到」会被误读成「上轮的结果」
-rm -f build/test-logs/*.rc
+rm -f "$OBJ_DIR"/test-logs/*.rc
 
 # ==================== 计时敏感的测试单独串行 ====================
 #
@@ -186,7 +190,7 @@ fi
 # ==================== 汇总 ====================
 for t in $list; do
     name=$(basename "$t" .c)
-    case "$(cat "build/test-logs/$name.rc" 2>/dev/null || echo 9)" in
+    case "$(cat "$OBJ_DIR/test-logs/$name.rc" 2>/dev/null || echo 9)" in
         0) pass=$((pass + 1)) ;;
         1) cfail=$((cfail + 1)); failed_names="$failed_names $name" ;;
         2) rfail=$((rfail + 1)); failed_names="$failed_names $name" ;;
@@ -203,13 +207,13 @@ if [ -n "$failed_names" ]; then
     echo
     echo "失败详情（每个测试日志的最后 30 行）："
     for name in $failed_names; do
-        rc=$(cat "build/test-logs/$name.rc" 2>/dev/null || echo 9)
+        rc=$(cat "$OBJ_DIR/test-logs/$name.rc" 2>/dev/null || echo 9)
         case "$rc" in
-            1) printf -- '--- %s [COMPILE FAIL] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
-            2) printf -- '--- %s [FAIL] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
-            *) printf -- '--- %s [NO RESULT] (%s) ---\n' "$name" "build/test-logs/$name.log" ;;
+            1) printf -- '--- %s [COMPILE FAIL] (%s) ---\n' "$name" "$OBJ_DIR/test-logs/$name.log" ;;
+            2) printf -- '--- %s [FAIL] (%s) ---\n' "$name" "$OBJ_DIR/test-logs/$name.log" ;;
+            *) printf -- '--- %s [NO RESULT] (%s) ---\n' "$name" "$OBJ_DIR/test-logs/$name.log" ;;
         esac
-        tail -30 "build/test-logs/$name.log" 2>/dev/null
+        tail -30 "$OBJ_DIR/test-logs/$name.log" 2>/dev/null
         echo
     done
     exit 1

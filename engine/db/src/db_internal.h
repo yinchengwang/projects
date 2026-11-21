@@ -15,22 +15,50 @@
 #include "db.h"
 
 #include "catalog/catalog.h"
+#if DB_HAS_FT
 #include "modalities/ft/ft_am.h"
+#endif
+#if DB_HAS_FT
 #include "modalities/ft/ft_index.h"
+#endif
+#if DB_HAS_GEO
 #include "modalities/geo/geo_am.h"
+#endif
+#if DB_HAS_GEO
 #include "modalities/geo/geo_state.h"
+#endif
+#if DB_HAS_GRAPH
 #include "modalities/graph/graph.h"
+#endif
+#if DB_HAS_GRAPH
 #include "modalities/graph/graph_am.h"
+#endif
+#if DB_HAS_TS
 #include "modalities/ts/ts_am.h"
+#endif
+#if DB_HAS_TS
 #include "modalities/ts/ts_am_ext.h"
+#endif
+#if DB_HAS_TS
 #include "modalities/ts/tsstore.h"
+#endif
+#if DB_HAS_VECTOR
 #include "modalities/vector/hnsw_am.h"
+#endif
+#if DB_HAS_VECTOR
 #include "modalities/vector/vector_am.h"
+#endif
+#if DB_HAS_VECTOR
 #include "modalities/vector/vector_state.h"
+#endif
 #include "query/exec.h"
+#if DB_HAS_BLOB
 #include "spi/blob_am.h"
+#endif
 #include "spi/registry.h"
+#if DB_HAS_BLOB
 #include "storage/blob.h"
+#endif
 #include "storage/pager.h"
 #include "txn/mvcc.h"
 #include "txn/txn.h"
@@ -43,11 +71,13 @@
  * 恢复阶段的钩子把 WAL 里的 tombstone 记录收进这里，
  * ft_index_recover() 再拿它们去装配最终的删除标记集合。
  */
+#if DB_HAS_FT
 typedef struct {
     u32 *ids;
     u32 n;
     u32 cap;
 } FtReplaySet;
+#endif
 
 /*
  * 实例：所有连接共享的东西。
@@ -58,7 +88,9 @@ typedef struct DbInstance {
     Pager    *pager;
     Catalog  *cat;
     Wal      *wal;
+#if DB_HAS_BLOB
     BlobStore *blobs;       /* blob 模态（实例级共享：所有连接看同一片对象空间）*/
+#endif
     TxnTable  txns;         /* 全局事务表：xid 分配 + clog */
 
     /*
@@ -71,10 +103,12 @@ typedef struct DbInstance {
     SpiRegistry *reg;
 
     /* blob 模态的 SPI 适配（实例级：所有连接用同一份） */
+#if DB_HAS_BLOB
     StorageAM  blob_am_frames;
     StorageAM  blob_am_objects;
     BlobAmCtx  blob_ctx_frames;
     BlobAmCtx  blob_ctx_objects;
+#endif
 
     /*
      * 图模态（v0.11）。
@@ -85,12 +119,14 @@ typedef struct DbInstance {
      * 这时 graph_nodes / graph_edges 这两张虚拟表也不存在，
      * 查它们会得到"表不存在"。
      */
+#if DB_HAS_GRAPH
     Graph      *graph;
     bool        graph_ready;
     StorageAM   graph_am_nodes;
     StorageAM   graph_am_edges;
     GraphAmCtx  graph_ctx_nodes;
     GraphAmCtx  graph_ctx_edges;
+#endif
 
     /*
      * 向量模态（v1.0）。
@@ -103,12 +139,14 @@ typedef struct DbInstance {
      * 向量的三样东西（数据 / 内存索引 / 磁盘索引）绑在 vstate 里，
      * 见 modalities/vector/vector_state.h。
      */
+#if DB_HAS_VECTOR
     VectorState *vstate;
     bool         vec_ready;
     StorageAM    vec_am;
     VectorAmCtx  vec_ctx;
     IndexAM      vec_index_am;      /* HNSW 的 Index AM（knn 的真实现） */
     HnswAmCtx    vec_index_ctx;
+#endif
 
     /*
      * 全文检索模态（v1.3）。
@@ -120,10 +158,12 @@ typedef struct DbInstance {
      * 所以重开库得到的是一个**空索引** —— 打开时建一个空的，
      * 不假装能从磁盘上恢复（见 db_ft_open 的注释）。
      */
+#if DB_HAS_FT
     FtIndex     *ft;
     bool         ft_ready;
     StorageAM    ft_am;
     FtAmCtx      ft_ctx;
+#endif
 
     /*
      * 全文检索的**恢复重放集合**（v1.3 步骤 5）。
@@ -134,8 +174,10 @@ typedef struct DbInstance {
      *
      * 它们只活到 ft_index_recover() 跑完（用完即释放）。
      */
+#if DB_HAS_FT
     FtReplaySet  ft_replay_redo;
     FtReplaySet  ft_replay_undo;
+#endif
 
     /*
      * 地理空间模态（v1.4）。
@@ -163,11 +205,13 @@ typedef struct DbInstance {
      * reindex 换了一棵新树 → 累计值从头开始 → 增量算出来是 0，
      * 逻辑自然成立（见 db_geo.c 的 geo_account_tree_reads）。
      */
+#if DB_HAS_GEO
     GeoState    *geo;
     bool         geo_ready;
     StorageAM    geo_am;
     GeoAmCtx     geo_ctx;
     u64          geo_tree_reads_seen;
+#endif
 
     /*
      * 时序模态（v1.5）。
@@ -189,12 +233,14 @@ typedef struct DbInstance {
      *    而且**本模态不写 WAL**（步骤 6 的账，坑 M6-41）：
      *    崩了 ⇒ 这批读数没了（页是脏页，日志里没有镜像）。
      */
+#if DB_HAS_TS
     TsStore     *ts;
     bool         ts_ready;
     StorageAM    ts_am_readings;
     StorageAM    ts_am_partitions;
     TsAmExt      ts_ext_readings;
     TsAmExt      ts_ext_partitions;
+#endif
 
     char     *walpath;
     char     *clogpath;     /* <db>-clog：提交状态日志（v1.2 步骤 6）*/
@@ -224,6 +270,7 @@ void db_checkpoint_maybe(DbInstance *inst);
  */
 bool db_wal_all_committed(Wal *w, bool *ok);
 
+#if DB_HAS_VECTOR
 /*
  * 把向量模态的两样东西接进注册表（db_vec.c 实现）。
  *
@@ -238,6 +285,8 @@ int  db_vec_open(DbInstance *inst);
 /* 关库：落盘索引 + 释放（必须在 pager_close 之前调） */
 void db_vec_close(DbInstance *inst);
 
+#endif
+#if DB_HAS_FT
 /*
  * ---------------- 全文检索模态（v1.3，db_ft.c 实现） ----------------
  */
@@ -315,6 +364,8 @@ void db_ft_txn_clear(DB *db);
  */
 db_err db_ft_delete_wired(DB *db, uint32_t doc_id);
 
+#endif
+#if DB_HAS_TS
 /*
  * ---------------- 时序模态（v1.5，db_ts.c 实现） ----------------
  */
@@ -343,6 +394,8 @@ int db_ts_open(DbInstance *inst);
  */
 void db_ts_close(DbInstance *inst);
 
+#endif
+#if DB_HAS_GEO
 /*
  * ---------------- 地理空间模态（v1.4，db_geo.c 实现） ----------------
  */
@@ -402,6 +455,7 @@ int db_geo_open(DbInstance *inst);
  */
 void db_geo_close(DbInstance *inst);
 
+#endif
 /*
  * WAL 钩子（db.c 实现，db_graph.c 复用）。
  *
@@ -424,7 +478,9 @@ int db_wal_hook(void *ctx, u32 xid, u8 logtype, u32 page_id, u16 slot,
  *   - db_open：打开时磁盘上已经有图 → 注册
  *   - db_graph_create：本次会话里现建图 → 注册
  */
+#if DB_HAS_GRAPH
 int db_graph_register(DbInstance *inst);
+#endif
 
 /*
  * 连接：一个客户端会话。
@@ -466,6 +522,7 @@ struct DB {
      */
     bool iso_locked;
 
+#if DB_HAS_FT
     /*
      * 本事务在 FT 上删过的文档号（W-D 的 D-4b）。
      *
@@ -476,6 +533,7 @@ struct DB {
      * 复用 FtReplaySet：它本来就是"一串 doc_id"的容器。
      */
     FtReplaySet ft_del;
+#endif
 };
 
 struct Result {
