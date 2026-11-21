@@ -366,6 +366,62 @@ MM_DEP_doc    := relational   # 文档模态是寄生模态：JSONB 存在关系
   git commit -m "feat(kernel): 新增 MM profile 真相源（8 个 profile 的模态边界）"
   git push origin main 2>&1 | Out-String | Write-Output
   ```
+**B4 实际执行回写（三条与计划不同的地方）**：
+
+| 计划写的 | 实际 | 后果 |
+|---|---|---|
+| 底座 = 全量 − 模态 − main/db/db_instance | 还得排除 **db_stmt.c / db_ckpt.c / db_result.c** | 它们也 include `db_internal.h`，同属 ODR 问题 |
+| smoke 的根只有 2 个文件 | 实际 **5 个** | 少一个就崩（见下） |
+| `MM_FLAGS_ONLY_<m>` 只开 `<m>` | relational **恒为 1** | 少了它连 catalog 都编不过 |
+
+🔴 **最大的一个坑：结构体布局不一致（ODR）**
+
+第一版照计划写「底座用 full 的 .o、根按单模态宏重编」，结果：
+
+```
+smoke_relational  rc=-1073741819  (STATUS_ACCESS_VIOLATION)
+smoke_ft          rc=-1073740940  (STATUS_STACK_BUFFER_OVERRUN)
+smoke_graph       rc=1（db_graph_create 莫名失败）
+```
+
+**链接成功了，一跑就崩。** 根因是 B3.2 的成果反过来咬了一口：
+`DbInstance` / `DB` 的**字段集合本身**被 `#if DB_HAS_*` 守卫着（这正是 B3 要的），
+⇒ 用不同宏编出来的是**两个布局不同的结构体**，
+两边对 `inst->ts` / `inst->geo` 的偏移理解不一致 ⇒ 一写一读就踩到别人的字段。
+
+⚠️ **这不是链接器能查出来的错误**：链接器只按符号名匹配，不看结构体布局。
+它只在运行时以随机的内存踩踏表现出来 —— 而且看起来像「某个模态的逻辑有 bug」。
+
+⇒ 处置：每个 smoke **把它需要的那一批源文件在自己的目录里完整重编**（`build/smoke_<m>/`），
+一套宏编到底。代价是多 8 次全量编译，换来整类 ODR 事故消失。
+
+**顺带撞出第二个**：`full` 的 .o 与单模态的 .o 混着链 ⇒
+`heap_am_batch_scan` / `btree_am_build` 直接 **multiple definition**。
+⇒ 每个 smoke 的链接行**只用自己目录里的 .o**，一个 full 的都不碰。
+
+**内容不是「只调 exists」**：8 个 smoke 全部走完五步（建对象 → 写 → 读回 → 断言内容 → 关闭）。
+计划 §4.3 的要求被满足了，而不是被降级。
+
+**计划里两处不存在的 API**（照抄会链接失败，而 smoke 的全部价值就是「能链接」）：
+
+- `db_blob_exists` **全仓不存在** → 换 `db_blob_stat`（4 个出参，少一个编不过）
+- `db_graph_stat` **全仓不存在** → 换 `db_graph_count`
+
+⇒ 31 个 `db_*` 调用逐个核对 `include/db.h`，**一个不缺**。
+
+**实测符号隔离（8 个二进制全查 `nm`）**：
+
+| smoke | 自家模态符号 | 别家模态符号 |
+|---|---:|---:|
+| relational | 69 | **0** |
+| blob | 8 | **0** |
+| graph | 19 | **0** |
+| vector | 36 | **0** |
+| ft | 21 | **0** |
+| geo | 31 | **0** |
+| ts | 10 | **0** |
+| doc | 18 | **0** |
+
 
 - [x] **B1.4 写 `engine/db/tools/mm_profiles_test.sh`（先写、跑红）**（提交 `3cbc4e62c`）
 
@@ -1340,7 +1396,7 @@ check: deps
 **这个 Task 证明什么**：链接通过 ⇒ 模态 `<m>` 的代码**没有**引用任何别的模态的符号。
 这是"模态之间零耦合"的**机器可验证**证据。
 
-- [ ] **B4.1 决定链接集合**
+- [x] **B4.1 决定链接集合**
 
   smoke `<m>` 的链接集合必须是：
 
@@ -1357,7 +1413,7 @@ check: deps
 
   ⚠️ **`main.o` 不进 smoke 链接集合**（smoke 自己带 main，会重复定义）。
 
-- [ ] **B4.2 Makefile：加 smoke 目标**
+- [x] **B4.2 Makefile：加 smoke 目标**
 
   在 `Makefile` 的 `LIB_OBJS` 定义之后加：
 
@@ -1449,7 +1505,7 @@ check: deps
 
   ⚠️ **`.PHONY` 清单（L272 附近）要加上 `smoke`。**
 
-- [ ] **B4.3 写 8 个 smoke 的 main**
+- [x] **B4.3 写 8 个 smoke 的 main**
 
   每个 smoke 的形状：**开一个库 → 调该模态的一个公开 API → 关库 → 打印 OK**。
   它不需要测功能对不对（那是单元测试的事），它只需要**能链接 + 能跑完**。
@@ -1585,7 +1641,7 @@ check: deps
   （内部头）。这**不违反分层** —— smoke 在 `test/` 下，不在 `src/query/` 里，
   `check_deps.sh` 的 `forbid src/query modalities/` 规则管不到它。
 
-- [ ] **B4.4 构建并跑 8 个 smoke**
+- [x] **B4.4 构建并跑 8 个 smoke**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -1607,7 +1663,7 @@ check: deps
 
   预期：每个都打印 `smoke_<m>: OK`，退出码 0。
 
-- [ ] **B4.5 验证 smoke 真的没拖进别的模态**
+- [x] **B4.5 验证 smoke 真的没拖进别的模态**
 
   ```powershell
   nm build/smoke_vector.exe | Select-String 'db_ft_open|db_graph_open|db_ts_open|db_geo_open|db_blob_open'
@@ -1621,7 +1677,7 @@ check: deps
 
   预期：**有命中**。
 
-- [ ] **B4.6 提交**
+- [x] **B4.6 提交**（提交 `041a8b56d`）
 
   ```powershell
   cd C:\code\projects
