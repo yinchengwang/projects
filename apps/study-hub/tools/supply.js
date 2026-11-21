@@ -33,6 +33,8 @@ const { scanGaps, writePlanFiles, missingOf } = require("../core/supply/plan.js"
 const { verifyBatch } = require("../core/supply/verify.js")
 const { stateFilePath } = require("../core/supply/unit-file.js")
 const { pickReviewTargets, applyReview, todayStamp } = require("../core/supply/review.js")
+// P5：算法轨批处理与专线 CLI（只在 --track algorithm 时分派）
+const { runAlgorithmCommand, parseAlgorithmArgs } = require("../core/supply/algorithm-cli.js")
 
 /** app 根目录（projects/apps/study-hub） */
 const APP_ROOT = path.resolve(__dirname, "..")
@@ -310,6 +312,22 @@ async function runCli(argv, ctx) {
   }
 
   const parsed = parseArgs(argv)
+  // P5：算法轨参数由专线解析；保持 P4 的五个子命令与旧参数不变。
+  if (Array.isArray(argv) && argv.indexOf("--track") !== -1) {
+    const trackAt = argv.indexOf("--track")
+    if (String(argv[trackAt + 1] || "") === "algorithm") {
+      const algorithm = await runAlgorithmCommand({
+        argv: argv,
+        env: env,
+        store: c.store,
+        client: c.client,
+        learningRoot: c.learningRoot,
+        localBank: c.localBank,
+        gitRunner: c.gitRunner,
+      })
+      return { code: algorithm.code, stdout: algorithm.output + (algorithm.output ? "\n" : ""), stderr: "" }
+    }
+  }
   if (parsed.error !== "") {
     warn(parsed.error)
     warn(USAGE)
@@ -670,6 +688,8 @@ module.exports = {
   EXIT_LLM_OFF: EXIT_LLM_OFF,
   USAGE: USAGE,
   parseArgs: parseArgs,
+  parseAlgorithmArgs: parseAlgorithmArgs,
+  runAlgorithmCommand: runAlgorithmCommand,
   pickGenerateTargets: pickGenerateTargets,
   runCli: runCli,
   main: main,
