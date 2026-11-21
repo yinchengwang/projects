@@ -21,6 +21,7 @@ const { resolveLearningRoot, localBankDir } = require("../paths.js")
 const fill = require("./algorithm-fill.js")
 const batch = require("./algorithm-batch.js")
 const { verifyAlgorithmUnit, verifyAlgorithmUnits } = require("./algorithm-verify.js")
+const { openDb, createStore } = require("../../server/db.js")
 
 /** 算法轨接管的子命令 */
 const COMMANDS = ["plan", "generate", "verify", "report"]
@@ -131,7 +132,7 @@ async function runAlgorithmCommand(params) {
   const o = params || {}
   const argv = Array.isArray(o.argv) ? o.argv : []
   const env = o.env || process.env
-  const store = o.store
+  const store = o.store || createStore(openDb(o.dbPath || ":memory:"))
   const lines = []
   const say = function (text) {
     lines.push(String(text))
