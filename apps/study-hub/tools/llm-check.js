@@ -19,7 +19,7 @@ const path = require("node:path")
 
 const { loadDotEnv } = require("../server/main.js")
 const { createLlmClient, keySourceOf } = require("../core/llm/client.js")
-const { buildPrompt, KINDS } = require("../core/llm/prompts.js")
+const { buildPrompt, KINDS, SKELETON_NEEDS } = require("../core/llm/prompts.js")
 const { limits } = require("../core/llm/guard.js")
 
 /** 只读的假 store：只为拿到配额上限，不写任何东西 */
@@ -89,6 +89,34 @@ function check() {
       + " / 指纹 " + digest(first)
     )
   })
+
+  // P5：算法轨的四件套提示词也是纯函数（同一形态两次构造必须一致）
+  const skeletonShapes = Object.keys(SKELETON_NEEDS)
+  skeletonShapes.forEach(function (shape) {
+    const ctx = {
+      mode: "skeleton",
+      shape: shape,
+      stem: "lc-00007",
+      title: "整数反转",
+      difficulty: "medium",
+      topics: ["数学"],
+      url: "https://leetcode.cn/problems/reverse-integer/",
+      statement: "",
+      cases: [],
+    }
+    const first = buildPrompt("generate", ctx)
+    const second = buildPrompt("generate", ctx)
+    const same = digest(first) === digest(second)
+    if (!same) ok = false
+    console.log(
+      (same ? "[通过] " : "[失败] ")
+      + "generate/skeleton-" + shape + "（需要 " + SKELETON_NEEDS[shape].join("、") + "）："
+      + "system " + String(first.system.length).padStart(4) + " 字"
+      + " / user " + String(first.user.length).padStart(4) + " 字"
+      + " / 指纹 " + digest(first)
+    )
+  })
+
   console.log("")
   console.log(ok ? "提示词自检通过。" : "提示词自检失败：同样的输入构造出了不同的提示词。")
   return ok
