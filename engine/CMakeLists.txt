@@ -50,14 +50,6 @@ if(N_CORES EQUAL 0)
 endif()
 set(CMAKE_BUILD_PARALLEL_LEVEL ${N_CORES})
 
-# ========================================================================
-# 多模态编译配置（模态开关、分布式开关）
-# ModalityProfiles 必须先于 MultimodalConfig：前者按 MMDB_MODALITY 推导
-# 全部 MMDB_ENABLE_* 缓存变量并做闭包校验，后者据此生成 multimodal_config.h。
-# （实施计划原文写"之后引入"，实测会导致生成头看不到推导值，故调整顺序。）
-# ========================================================================
-include("${CMAKE_CURRENT_LIST_DIR}/cmake/ModalityProfiles.cmake")
-include("${CMAKE_CURRENT_LIST_DIR}/cmake/MultimodalConfig.cmake")
 
 include(CTest)
 # include(GNUInstallDirs)
@@ -66,22 +58,6 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(BUILD_TESTING "Build tests" ON)
 option(ENABLE_COVERAGE "Enable code coverage" OFF)
 
-# ========================================================================
-# 冻结内核的测试入口（B5）
-#
-# engine/src/db 已于 2026-11-16 冻结（主核是 engine/db，自带 Makefile）。
-# 但它的**库**仍被 engine/src/sdk 依赖（faiss_hnsw / mm_vector_index /
-# sql_engine memctx），所以源码与构建不能直接摘掉 —— 摘了 SDK 会链接失败。
-#
-# 能干净摘掉的是**它的测试**：engine/test/db 下有 289 个源文件、约 587 条
-# ctest 用例（占整棵树约 87%），而这些测的都是已冻结的旧内核。
-# 让它们退出默认门禁，既缩短 CI，也不再维护一套不再演进的测试面。
-#
-# 要看旧内核是否还自洽时：
-#   cmake -B build/engine -S engine -DENABLE_FROZEN_SRC_DB_TESTS=ON
-# 源码、CMake、测试文件全部原位保留，只是默认不构建、不注册。
-# ========================================================================
-option(ENABLE_FROZEN_SRC_DB_TESTS "Build/register tests for frozen engine/src/db" OFF)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose the type of build." FORCE)
@@ -151,8 +127,6 @@ target_include_directories(project_includes
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-# 生成配置头全局可见（模态开关宏的唯一来源）
-target_link_libraries(project_includes INTERFACE multimodal_config_gen)
 
 add_subdirectory(src)
 

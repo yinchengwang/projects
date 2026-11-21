@@ -1,5 +1,5 @@
 # VectorBench CMakeLists.txt
 # VectorBench 基准测试框架
 
-# C API 绑定层 - 生成 vector_index_c_api.dll
-add_subdirectory(c_api)
+# C API 绑定层已随冻结轨退役删除（依赖 mm_vector_index / faiss_hnsw）
+# add_subdirectory(c_api)
