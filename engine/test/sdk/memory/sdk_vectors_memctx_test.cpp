@@ -23,7 +23,7 @@ extern "C" {
 #include "sdk/mmdb_vectors.h"        /* mmdb_vectors_add/search/delete */
 #include "sdk/impl/mmdb_internal.h"   /* 暴露 struct mmdb_s 真实结构 */
 #include "sdk/impl/mmdb_memctx.h"
-#include "db/sql/memctx.h"
+#include "sdk/impl/memctx.h"
 }
 
 namespace {

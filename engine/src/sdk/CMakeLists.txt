@@ -38,7 +38,9 @@ set(SDK_CORE_SOURCES
     core/replication.c  # P6-M3.1：Raft 复制协议
     core/sharding.c  # P6-M3.2：一致性哈希分片
     core/namespace.c  # P6-M3.3：命名空间隔离与资源配额
-    core/mmdb_memctx.c  # Task 7：SDK 兼容层内存上下文
+    core/mmdb_memctx.c  # SDK 兼容层内存上下文
+    core/memctx.c        # SDK 自持的 AllocSet 实现（脱离冻结内核）
+    core/mmdb_lock.c
 )
 
 # 向量模块
@@ -100,7 +102,7 @@ add_library(mmsdk STATIC
 target_include_directories(mmsdk PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/..  # Phase 2: faiss_hnsw.h 等 db 模块头文件
+    ${CMAKE_CURRENT_SOURCE_DIR}/..  # Task 3 完成前仍需 HNSW 头文件
 )
 # P5-2: 添加 third_part 路径，用于 roaring_bitmap.h
 # 注：原先路径上溯三级指向仓库根目录，已改用 engine/third_part/croaring（内部副本），
@@ -109,7 +111,9 @@ target_include_directories(mmsdk PRIVATE
     ${ENGINEERING_SOURCE_DIR}/third_part/croaring
 )
 
-target_link_libraries(mmsdk PUBLIC sqlite3 faiss_hnsw mm_vector_index sql_engine)
+# Task 2 只摘 sql_engine（它提供的 memctx 符号已由 core/memctx.c 本地提供）。
+# faiss_hnsw / mm_vector_index 属于 Task 3 的向量后端替换范围，本 Task 先留着。
+target_link_libraries(mmsdk PUBLIC sqlite3 faiss_hnsw mm_vector_index)
 
 # 编译选项
 if(MSVC)

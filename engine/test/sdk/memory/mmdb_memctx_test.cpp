@@ -8,8 +8,7 @@
 // 5. mmdb_mem_register_resource：资源析构回调在 reset 时触发
 // 6. mmdb_memctx_reset / delete：生命周期管理
 
-// 注意：必须先包含 gtest，再包含 memctx.h，
-// 避免 memctx.h 间接引入的 parsenodes.h 中的 `Op` 宏污染 gtest 模板名。
+// 注意：必须先包含 gtest，再包含 memctx.h。
 #include <gtest/gtest.h>
 
 #include <climits>

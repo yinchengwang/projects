@@ -8,8 +8,7 @@
  * 3. request scope 自动释放
  */
 
-// 必须先包含 gtest，再包含 memctx.h，
-// 避免 memctx.h 间接引入的 parsenodes.h 中的 `Op` 宏污染 gtest 模板名。
+// 注意：必须先包含 gtest，再包含 memctx.h。
 #include <gtest/gtest.h>
 
 #include <cstdio>
@@ -17,7 +16,7 @@
 extern "C" {
 #include "sdk/mmdb.h"
 #include "sdk/impl/mmdb_internal.h"  /* 暴露 struct mmdb_s 真实结构 */
-#include "db/sql/memctx.h"           /* MemoryContextData 字段访问 */
+#include "sdk/impl/memctx.h"           /* MemoryContextData 字段访问 */
 }
 
 /**

@@ -3,7 +3,7 @@
  * @brief SDK 兼容层：内存上下文（Memory Context）公共 API
  *
  * 在 SDK 层以 `mmdb_mem_*` 前缀对外暴露 AllocSet 内存上下文能力，
- * 与 `db/sql/memctx.h` 中的核心 API 一一对应，并补充溢出检查、
+ * 与 `sdk/impl/memctx.h` 中的核心 API 一一对应，并补充溢出检查、
  * 线程归属校验、资源析构注册等面向上层调用的便利封装。
  *
  * 类型设计：
@@ -22,7 +22,7 @@
 #ifndef SDK_IMPL_MMDB_MEMCTX_H
 #define SDK_IMPL_MMDB_MEMCTX_H
 
-#include "db/sql/memctx.h"
+#include "sdk/impl/memctx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,8 +113,8 @@ void mmdb_memctx_delete(mmdb_memctx_t ctx);
 
 /*
  * 资源析构 API（mmdb_mem_register_resource / mmdb_mem_unregister_resource）
- * 直接由核心层 sql_engine 提供，本头文件已通过 #include "db/sql/memctx.h"
- * 自动暴露其声明，SDK 层不重复包装，避免符号冲突。
+ * 由 SDK 自持的内存上下文（sdk/impl/memctx.h）提供，本头文件已通过
+ * #include "sdk/impl/memctx.h" 自动暴露其声明，SDK 层不重复包装，避免符号冲突。
  */
 
 #ifdef __cplusplus

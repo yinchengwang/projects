@@ -22,7 +22,7 @@ extern "C" {
 #include "sdk/mmdb.h"
 #include "sdk/impl/mmdb_internal.h"   /* 暴露 struct mmdb_s 真实结构 */
 #include "sdk/impl/mmdb_memctx.h"     /* MemoryContext API */
-#include "db/sql/memctx.h"            /* MemoryContextData 字段访问 */
+#include "sdk/impl/memctx.h"            /* MemoryContextData 字段访问 */
 }
 
 namespace {
