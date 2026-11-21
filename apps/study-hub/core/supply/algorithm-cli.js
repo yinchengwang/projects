@@ -220,6 +220,13 @@ async function runAlgorithmCommand(params) {
 
   // ——— generate ———
   if (options.command === "generate") {
+    if (options.dryRun) {
+      const scan = fill.scanBank({ learningRoot: learningRoot, localBank: localBank })
+      const plan = batch.planBatch({ items: scan.items, store: store, limit: options.limit, units: fill.readUnitStatuses(unitsDir) })
+      say("算法轨 dry-run：计划 " + plan.planned.length + " 题，跳过 " + plan.skipped.length + " 题")
+      plan.planned.forEach(function (item) { say("  " + item.stem + "  形态 " + item.shape + "  缺 " + item.missing.join("/")) })
+      return { code: 0, output: lines.join("\n") }
+    }
     const client = o.client
     if (!client || typeof client.complete !== "function" || client.name === "null") {
       say("【LLM 未启用】批量补题需要 LLM 才能生成内容。")
