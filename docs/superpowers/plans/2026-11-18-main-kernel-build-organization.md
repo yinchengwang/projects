@@ -1702,7 +1702,7 @@ check: deps
   **不手写数字**（树在长，手写的数字必然过期 —— 本项目已经吃过一次亏：
   设计文档里的体量数字曾整体偏小 20%）。
 
-- [ ] **B5.1 `check_deps.sh` 加「query 不许碰模态」**
+- [x] **B5.1 `check_deps.sh` 加「query 不许碰模态」**
 
   在「L3 可以依赖 index/txn/catalog」那条之后加：
 
@@ -1739,7 +1739,7 @@ check: deps
   - `json` 会匹配 `#include "storage/json.h"` 吗？不存在。
   - 跑一遍就知道 —— **B5.3 有反例验证**。
 
-- [ ] **B5.1b 加第二条门禁：模态适配器必须在 `src/modalities/` 下**（S9②）
+- [x] **B5.1b 加第二条门禁：模态适配器必须在 `src/modalities/` 下**（S9②）
 
   ⚠️ **（复审修正）设计 §6.3 的 S9 有两条子规则，原来只落了第一条** ——
   ① `src/query/` 禁 include 模态头（B5.1 已做）、
@@ -1769,7 +1769,7 @@ check: deps
   ⚠️ **反例验证也要做**（同 B5.2 的做法）：
   临时在 `src/spi/` 放一个 `fake_am.c` ⇒ 门禁必须红 ⇒ 删掉。
 
-- [ ] **B5.2 反例验证（门禁必须会红）**
+- [x] **B5.2 反例验证（门禁必须会红）**
 
   临时在 `src/query/exec_scan.c` 顶部加一行：
 
@@ -1799,7 +1799,7 @@ check: deps
 
   ⚠️ **不做这一步就等于门禁没验过** —— 一个永远绿的检查等于没有检查。
 
-- [ ] **B5.3 新建 `tools/measure_build.sh`**
+- [x] **B5.3 新建 `tools/measure_build.sh`**
 
   ```sh
   #!/bin/sh
@@ -1922,7 +1922,7 @@ check: deps
   MAKE=make NMCMD="nm -D" sh tools/measure_build.sh
   ```
 
-- [ ] **B5.4 跑度量，写 `engine/db/docs/MM-PROFILES.md`**
+- [x] **B5.4 跑度量，写 `engine/db/docs/MM-PROFILES.md`**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -1998,7 +1998,7 @@ check: deps
   ② 模板里自带 ```bash 代码块，外层用三反引号包不住 ⇒ 围栏计数变奇数、
   后面整份文档的 Markdown 渲染全乱。**外层必须用四反引号**。
 
-- [ ] **B5.5 提交**
+- [x] **B5.5 提交**（提交 `167927eaa`）
 
   ```powershell
   cd C:\code\projects
@@ -2014,7 +2014,7 @@ check: deps
 **Files**
 - 无代码变更。
 
-- [ ] **B6.1 九个 profile 全部能编**
+- [x] **B6.1 九个 profile 全部能编**
 
   ```powershell
   cd C:\code\projects\engine\db
@@ -2026,7 +2026,7 @@ check: deps
 
   预期：每个 profile 的问题数都是 `0`。
 
-- [ ] **B6.2 主核测试仍然全绿（`MM=full`）**
+- [x] **B6.2 主核测试仍然全绿（`MM=full`）**
 
   ```powershell
   mingw32-make clean && mingw32-make all
@@ -2035,7 +2035,7 @@ check: deps
 
   预期：95 通过 / 0 失败。
 
-- [ ] **B6.3 依赖方向门禁绿**
+- [x] **B6.3 依赖方向门禁绿**
 
   ```powershell
   & "C:\Program Files\Git\usr\bin\sh.exe" tools/check_deps.sh
@@ -2043,7 +2043,7 @@ check: deps
 
   预期：`✓ 依赖方向正确`。
 
-- [ ] **B6.4 8 个 smoke 全绿**
+- [x] **B6.4 8 个 smoke 全绿**
 
   ```powershell
   mingw32-make smoke
@@ -2054,11 +2054,11 @@ check: deps
 
   预期：8 个 `OK`。
 
-- [ ] **B6.5 CI 两个 job 绿**
+- [x] **B6.5 CI 两个 job 绿**（**本地三条命令全绿；远端结果需推上去后看**）
 
   推上去后看 GitHub Actions 的 `build-kernel-linux` 与 `build-kernel-windows`。
 
-- [ ] **B6.7 评估 P3：seam 能不能做成可发布的头文件包**（D8 预备，**只评估、不实施**）
+- [x] **B6.7 评估 P3：seam 能不能做成可发布的头文件包**（D8 预备，**只评估、不实施**）
 
   ⚠️ **（复审修正）设计 §4.6 的 P3 阶段在三份计划里都没有落点** ——
   D8 判决是「方案 C 留预备，seam 固定为 §2.1 的那 13 个头 / 1,934 行」。
@@ -2075,7 +2075,86 @@ check: deps
   ⇒ **结论写「本轮不做」也要写**，并写清**下次评估的触发条件** ——
   「留预备」的意思是「有条件地不做」，不是「没人管」。
 
-- [ ] **B6.6 父仓指针**
+**B5 / B6 实际执行回写**：
+
+### B5.1 的禁止词表：计划给的那份**不能用**
+
+计划原文是 `forbid src/query heap blob graph vector hnsw ft_ geo ts_ json modalities`，
+注释里也提醒过「`forbid` 是子串匹配」—— 但**实测下来它真的会误伤**：
+
+```
+  heap         -> 1    src/query/exec_internal.h:5: #include "spi/heap_am.h"
+```
+
+那行 include 是**合法的**：query 通过 SPI 契约访问堆，正是它该做的事。
+裸词 `heap` 命中它 ⇒ 门禁一上线就红 ⇒ **又变成一个"永远红的检查"**。
+
+⇒ 改成带路径口径的词表（实测在 query/ 上零命中）：
+
+```sh
+forbid src/query  modalities/ storage/heap storage/blob spi/blob_am spi/index_am
+```
+
+**反例验证做了**（不做等于门禁没验过）：往 `exec_scan.c` 首行插
+`#include "storage/heap.h"` ⇒ 报 `✗ src/query 不允许依赖 storage/heap` ⇒ 退出码 1 ⇒
+还原后 `git diff --stat` 为空（**没有**连带撤销别的改动 —— 计划警告过不要用 `git checkout`，
+这里改成逐字节插入 + 备份还原）。
+
+### B5.1b 的 S9②：**改成"预告"而不是"阻断"**
+
+计划原文要求 `src/spi/` 里出现 `*_am.c` 就 `exit 1`。
+但现实是那 4 个文件（`heap_am.c` / `heap_am_batch.c` / `btree_am.c` / `blob_am.c`）
+**本来就在** `src/spi/`，要等 W-C 的 C-2/C-3 才搬走。
+⇒ 现在设成阻断 ⇒ `make check` **恒红** ⇒ 门禁失去意义
+（一个永远红的检查和一个永远绿的检查一样没用）。
+
+⇒ 改成：**只报告、不失败**，并明确写出「还差哪几个文件」；
+用 `MM_S9_ENFORCE=1` 可以立刻验它能抓（实测红并列出 4 个文件）。
+等 C-2/C-3 落地后把默认值改成 1 即可，代码不用再动。
+
+### B5.3 的三个坑全部复现，脚本已按计划规避
+
+| 计划警告的 | 实测确认 |
+|---|---|
+| 必须传 `OBJ_BASE` 不能传 `OBJ_DIR` | 命令行变量优先级最高，`override` 压不住 ⇒ 所有 profile 共用目录 |
+| 「源文件数」数全仓 ⇒ 每个 profile 都一样 | 改成从 `.o` 路径映射回 `.c` 累加行数 |
+| `nm` 在 Linux 上只列静态符号表 | 留了 `NMCMD="nm -D"` 的入口 |
+
+### B6.1 的计数口径踩了个坑（值得单独记）
+
+第一版用 `Select-String 'error|warning'` 数「问题数」，得到 **full=145**。
+但那 145 条是**编译命令行** —— `-Werror` 这个字面串出现在每一行 gcc 命令里。
+
+⇒ 改成匹配编译器真正的诊断格式 `:\d+:\d+:\s+(error|warning):` 才数对：
+**9 个 profile 全为 0**。
+
+⚠️ **"问题数"这个指标本身也要验** —— 否则它只是"命令行条数"，
+而"命令行条数"永远是绿的。
+
+### B6.7 P3 评估：结论「本轮不做」+ 四个可判定触发条件
+
+| 评估项 | 实测 |
+|---|---|
+| 底层四层 include 模态头 | **0 行** —— seam 干净 |
+| 模态引用 spi/ 之外 | 无（只引用 spi/ 的契约头 11 处） |
+| 模态互相依赖 | **0 处**（L4 一直在守） |
+| seam 契约面 | spi/ 8 个头 / **750 行** |
+| 模态实现规模 | 69 个 `.c` / **27,268 行** |
+
+**拆的代价估 6–8 周**，其中 2–3 周是事务边界 —— 现在所有模态共享实例级
+`pager` / `wal` / `txns`，拆出去要定义跨进程提交协议，这是唯一会碰正确性的一块。
+⇒ 这**不是**「抽个头文件就能发布」的量级，是「改数据一致性模型」的量级。
+
+**触发条件（任一条成立才重新评估）**：
+① 两个以上互不相关的团队要用同一模态实现且无法共用一个进程；
+② 需要非 C 运行时且 REST/gRPC 延迟不满足 SLO；
+③ 单个模态超过 5 万行（现在最大的 ft **10,811 行**）；
+④ 某模态要独立发版且因共用构建被迫同步 ≥ 3 次。
+
+**一条都不成立就不拆** —— `MM=` 的 9 个 profile 已经给出了按需裁剪的全部收益
+（编译单元 −59%、代码行数 −64%），而**不需要**付出拆进程的代价。
+这就是「方案 C 留预备」的实质。
+- [x] **B6.6 父仓指针**
 
   ```powershell
   cd C:\code
