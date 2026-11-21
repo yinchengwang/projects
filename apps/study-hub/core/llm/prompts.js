@@ -93,6 +93,23 @@ const SYSTEM_FILL = [
   "不要加解释性前后缀，不要用代码块围栏。",
 ].join("\n")
 
+const SYSTEM_GENERATE_SKELETON = [
+  "你是一位算法出题老师，要给一道已有的题补齐内容，一次性产出四件套：题面、测试用例、参考解法、负例。",
+  "输出必须是且只是一个 JSON 对象，字段为 title、statement、difficulty、topics、cases、solution、negative、negativeNote。",
+  "solution 是正确的 C++ 参考解法；negative 是故意写错的 C++ 解法（能编译、能运行，但算错）。",
+  "不要加解释性前后缀，不要用代码块围栏。",
+].join("\n")
+
+/**
+ * 各形态需要模型给出哪几件。
+ * 形态 B 的题面、形态 C 的题面与用例都来自题库，**原样保留**，不让模型重写。
+ */
+const SKELETON_NEEDS = {
+  A: ["statement", "cases", "solution", "negative"],
+  B: ["cases", "solution", "negative"],
+  C: ["solution", "negative"],
+}
+
 /** 知识点拼成一行；空则写「未标注」 */
 function topicText(topics) {
   const list = Array.isArray(topics) ? normalizeTopics(topics) : []
@@ -172,6 +189,8 @@ function buildPrompt(kind, context) {
   }
 
   if (kind === "generate") {
+    // P5：算法轨批量补题的四件套分支（只在 ctx.mode === "skeleton" 时走）
+    if (ctx.mode === "skeleton") return buildSkeletonPrompt(ctx)
     const track = String(ctx.track || "").trim() || "未指定"
     const difficulty = DIFFICULTIES.indexOf(String(ctx.difficulty)) !== -1
       ? String(ctx.difficulty)
@@ -305,6 +324,9 @@ function buildGenerated(obj) {
       solutionLang: String(obj.solutionLang || "cpp").trim() || "cpp",
       difficulty: difficulty,
       topics: topics,
+      // —— P5 追加：负例与负例说明。老路径没有这两个字段，缺省是空串。——
+      negative: String(obj.negative === undefined || obj.negative === null ? "" : obj.negative).trim(),
+      negativeNote: String(obj.negativeNote === undefined || obj.negativeNote === null ? "" : obj.negativeNote).trim(),
     },
   }
 }
@@ -325,12 +347,135 @@ function buildFillPatch(obj) {
 }
 
 /**
+ * 四件套的提示词（算法轨批量补题用）。
+ *
+ * 形态决定「哪几件要模型给」：
+ *   A 题面与用例都缺 → 题面、用例、解法、负例都要
+ *   B 只缺用例      → 题面原样保留，要用例、解法、负例
+ *   C 只缺解法      → 题面与用例原样保留，要解法、负例
+ *
+ * @param {object} ctx {mode, shape, stem, title, difficulty, topics, url, statement, cases}
+ * @returns {{system: string, user: string}}
+ */
+function buildSkeletonPrompt(ctx) {
+  const c = ctx || {}
+  const shape = String(c.shape || "A")
+  const need = SKELETON_NEEDS[shape] || SKELETON_NEEDS.A
+  const cases = Array.isArray(c.cases) ? c.cases : []
+  const caseLines = cases.length
+    ? cases.map(function (item) {
+        return "- " + String(item.input || "") + " → " + String(item.expect || "")
+      }).join("\n")
+    : "（缺失，需要你补）"
+  const statement = String(c.statement || "").trim() || "（缺失，需要你补）"
+
+  const rules = []
+  rules.push("1. 判题契约：程序从 stdin 读入、从 stdout 输出，自带 main 函数，不要写 class Solution 之类的包装。")
+  if (need.indexOf("statement") !== -1) {
+    rules.push("2. 题面缺失，必须新写：说清输入、输出、约束，不能依赖上下文。")
+  } else {
+    rules.push("2. 题面已经存在，原样保留，不要改写、不要润色。")
+  }
+  if (need.indexOf("cases") !== -1) {
+    rules.push("3. 至少给 3 个测试用例，其中至少 1 个是边界情况；expect 必须与 solution 的实际输出逐字一致。")
+  } else {
+    rules.push("3. 测试用例已经存在，原样保留；solution 必须能通过上面列出的全部用例，expect 就是程序的输出。")
+  }
+  rules.push("4. solution 是正确的 C++ 参考解法：完整程序、自带 main 函数，能通过上面全部测试用例。")
+  rules.push("5. negative 是故意写错的 C++ 解法：完整程序、自带 main 函数、能编译通过，但逻辑上算错——")
+  rules.push("   在至少一个测试用例上给出与 expect 不同的输出。")
+  rules.push("6. negative 不能与 solution 完全相同，也不能只是把 solution 换个变量名。")
+  rules.push("7. negativeNote 用一句话说明负例错在哪（只给人看，不要泄露正确答案）。")
+
+  const fields = []
+  if (need.indexOf("statement") !== -1) fields.push("title、statement")
+  if (need.indexOf("cases") !== -1) fields.push("cases")
+  fields.push("solution、negative、negativeNote")
+
+  const lines = []
+  lines.push("请为下面这道题补齐内容。")
+  lines.push("")
+  lines.push("题号：" + String(c.stem || "未命名"))
+  lines.push("标题：" + String(c.title || "未命名"))
+  lines.push("难度：" + String(c.difficulty || "medium"))
+  lines.push("知识点：" + topicText(c.topics))
+  if (c.url) lines.push("原题链接：" + String(c.url))
+  lines.push("")
+  lines.push("当前题面：")
+  lines.push(statement)
+  lines.push("")
+  lines.push("当前测试用例（input → expect）：")
+  lines.push(caseLines)
+  lines.push("")
+  lines.push("要求：")
+  lines.push(rules.join("\n"))
+  lines.push("")
+  lines.push("这次只需要你给出：" + fields.join("、") + "。")
+  lines.push("")
+  lines.push("只输出一个 JSON 对象，不要任何多余文字，也不要用代码块围栏：")
+  lines.push(
+    '{"title":"题目名","statement":"完整题面","difficulty":"easy|medium|hard","topics":["知识点"],"cases":[{"input":"...","expect":"..."}],"solution":"完整 cpp 程序","negative":"故意写错的完整 cpp 程序","negativeNote":"一句话说明负例错在哪"}'
+  )
+
+  return {
+    system: SYSTEM_GENERATE_SKELETON,
+    user: lines.join("\n"),
+  }
+}
+
+/**
+ * 四件套的解析结果 → 骨架。
+ * 哪些件是必填由 need 决定（形态 B/C 的题面与用例来自题库，不让模型给）。
+ * @param {object} obj
+ * @param {string[]} need
+ * @returns {object}
+ */
+function buildSkeleton(obj, need) {
+  const want = Array.isArray(need) && need.length ? need : SKELETON_NEEDS.A
+  const out = {}
+  if (want.indexOf("statement") !== -1) {
+    const statement = String(obj.statement || "").trim()
+    if (statement === "") return { ok: false, reason: "生成结果缺题面" }
+    out.statement = statement
+  }
+  if (want.indexOf("cases") !== -1) {
+    const cases = normalizeCaseList(obj.cases)
+    if (cases.length === 0) return { ok: false, reason: "生成结果缺测试用例" }
+    out.cases = cases
+  }
+  if (want.indexOf("solution") !== -1) {
+    const solution = String(obj.solution || "").trim()
+    if (solution === "") return { ok: false, reason: "生成结果缺参考解法" }
+    out.solution = solution
+  }
+  if (want.indexOf("negative") !== -1) {
+    const negative = String(obj.negative || "").trim()
+    if (negative === "") return { ok: false, reason: "生成结果缺负例" }
+    out.negative = negative
+  }
+  out.title = String(obj.title || "").trim()
+  out.difficulty = DIFFICULTIES.indexOf(String(obj.difficulty)) !== -1 ? String(obj.difficulty) : "medium"
+  out.topics = topicText(obj.topics) === "未标注" ? [] : normalizeTopics(obj.topics)
+  out.solutionLang = String(obj.solutionLang || "cpp").trim() || "cpp"
+  out.negativeNote = String(obj.negativeNote === undefined || obj.negativeNote === null ? "" : obj.negativeNote).trim()
+  return { ok: true, problem: out }
+}
+
+/**
  * 解析模型回复。
  * @param {string} text
  * @param {"explain"|"hint"|"grade-idea"|"generate"|"fill"} kind
  * @returns {object} 成功时带 ok:true；失败时带 ok:false 与中文 reason
  */
-function parseResponse(text, kind) {
+/**
+ * 解析模型回复。
+ * @param {string} text
+ * @param {"explain"|"hint"|"grade-idea"|"generate"|"fill"} kind
+ * @param {object} [opts] 可选；generate 的 skeleton 模式用 {mode:"skeleton", need:[...]}
+ * @returns {object} 成功时带 ok:true；失败时带 ok:false 与中文 reason
+ */
+function parseResponse(text, kind, opts) {
+  const context = opts || {}
   const raw = text === null || text === undefined ? "" : String(text).trim()
 
   if (kind === "explain" || kind === "hint") {
@@ -354,6 +499,11 @@ function parseResponse(text, kind) {
     const obj = extractJson(raw)
     if (!obj) {
       return { ok: false, kind: kind, reason: "模型返回的不是合法 JSON，无法生成题目", raw: raw }
+    }
+    if (context.mode === "skeleton") {
+      const builtSkeleton = buildSkeleton(obj, context.need)
+      if (!builtSkeleton.ok) return { ok: false, kind: kind, reason: builtSkeleton.reason, raw: raw }
+      return { ok: true, kind: kind, problem: builtSkeleton.problem }
     }
     const built = buildGenerated(obj)
     if (!built.ok) return { ok: false, kind: kind, reason: built.reason, raw: raw }
@@ -879,6 +1029,7 @@ module.exports = {
   EXPLAIN_LEVELS: EXPLAIN_LEVELS,
   HINT_LEVELS: HINT_LEVELS,
   KINDS: KINDS,
+  SKELETON_NEEDS: SKELETON_NEEDS,
   SUPPLY_SCENARIOS: SUPPLY_SCENARIOS,
   TRACK_TEMPLATES: TRACK_TEMPLATES,
   renderTemplate: renderTemplate,
