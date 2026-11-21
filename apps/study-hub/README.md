@@ -508,6 +508,7 @@ node tools/supply.js generate --track algorithm [--batch] [--limit <n>] [--resum
 node tools/supply.js verify  --track algorithm [--unit <id>]
 node tools/supply.js report  --track algorithm
 node tools/supply.js accept  --track algorithm [--verify]
+node tools/supply.js doctor  --track algorithm
 ```
 
 一道题一次 LLM 调用产**四件套**（题面 / 测试用例 / 参考解法 / 负例），落三件文件：
@@ -536,6 +537,11 @@ learning/units/algorithm/
 每条打 `✅`（机器查过、符合）/ `❌`（机器查过、不符合）/ `…`（需要人确认或要跑外部命令）。
 加 `--verify` 才会真编译复核（全量约 40–70 分钟），不加就只做文件层面的检查。
 有不合格项退出码 `1`，全过退出码 `0`。
+
+`doctor --track algorithm` 是**环境自检**，跑全量之前先过一遍：Node / g++ / git 版本、
+learning 仓通不通、题库扫得到几道、产物目录能不能写、批处理配额、密钥配没配
+（只报有没有、不显示内容）、磁盘余量。每项 `✅` / `❌` / `…`，有挡住项退出码 `1`。
+**密钥没配只是提醒**，离线命令照常可用。
 
 批处理护栏：单批次 `supply.batch.session_limit`、当日 `supply.batch.daily_limit`、
 两次调用最小间隔 `supply.batch.rate_ms`、每题最多 1 + `supply.batch.max_retries` 次尝试；
@@ -614,6 +620,7 @@ node tests/run-all.js
 | `supply-algorithm-e2e.test.js` | 端到端：存量题库零改动、真 git 查脏、全程不联网 |
 | `supply-algorithm-audit.test.js` | 交付审计：三件套成对、status、负例不外泄、双份一致、密钥 |
 | `supply-algorithm-acceptance.test.js` | 交付验收 12 条自查表：文件层自动查，真编译那条按需 |
+| `supply-algorithm-doctor.test.js` | 环境自检：工具链、learning 仓、题库、产物目录、配额、密钥 |
 
 ## 写回 learning 仓的规矩
 

@@ -301,3 +301,30 @@ test("参数解析：认出 --verify（只在 accept 用）", function () {
   assert.equal(out.options.command, "accept")
   assert.equal(out.options.verifyRun, true)
 })
+
+test("doctor 打出环境自检；环境就绪时退出码 0", async function () {
+  const root = fakeLearningRoot()
+  try {
+    const res = await cli.runAlgorithmCommand(base(root, { argv: ["doctor", "--track", "algorithm"], env: {} }))
+    assert.ok(res.output.indexOf("算法轨环境自检") !== -1, res.output)
+    assert.ok(res.output.indexOf("Node.js") !== -1, res.output)
+    assert.ok(res.output.indexOf("g++") !== -1, res.output)
+    assert.ok(res.output.indexOf("批处理配额") !== -1, res.output)
+    // 没配密钥只算提醒，不算挡住
+    assert.equal(res.code, 0, res.output)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("doctor：learning 仓解析不出来 → 退出码 1", async function () {
+  const res = await cli.runAlgorithmCommand({
+    argv: ["doctor", "--track", "algorithm"],
+    env: {},
+    store: fakeStore(),
+    learningRoot: undefined,
+    localBank: path.join(os.tmpdir(), "no-such-bank"),
+  })
+  assert.equal(res.code, 1)
+  assert.ok(res.output.indexOf("解析不到 learning 仓") !== -1, res.output)
+})

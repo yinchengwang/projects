@@ -112,6 +112,21 @@ function pickNumber(value, store, key, fallback) {
 }
 
 /**
+ * 读出当前的批处理护栏（与 runBatch 内部同一口径，供环境自检与 CLI 打印用）。
+ * @param {object} store
+ * @returns {{sessionLimit: number, dailyLimit: number, maxRetries: number, rateMs: number}}
+ */
+function readLimits(store) {
+  const s = store || { getSetting: function (key, fallback) { return fallback } }
+  return {
+    sessionLimit: readNumberSetting(s, SETTING_KEYS.sessionLimit, 800),
+    dailyLimit: readNumberSetting(s, SETTING_KEYS.dailyLimit, 800),
+    maxRetries: readNumberSetting(s, SETTING_KEYS.maxRetries, 2),
+    rateMs: readNumberSetting(s, SETTING_KEYS.rateMs, 1200),
+  }
+}
+
+/**
  * 读单题进度。
  * @param {object} store
  * @param {string} stem
@@ -639,6 +654,7 @@ module.exports = {
   dateKey: dateKey,
   makeBatchId: makeBatchId,
   readNumberSetting: readNumberSetting,
+  readLimits: readLimits,
   readItemState: readItemState,
   writeItemState: writeItemState,
   readRunSummary: readRunSummary,
