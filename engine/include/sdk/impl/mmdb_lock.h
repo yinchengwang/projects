@@ -2,9 +2,8 @@
  * @file mmdb_lock.h
  * @brief SDK 自持的跨平台读写锁原语。
  *
- * 原先只是转发冻结轨锁头的兼容 shim；冻结轨删除后 SDK 不能再依赖
- * `engine/include/db/`，因此这里把平台分支和声明复制进 SDK 自身，
- * 实现见 `src/sdk/core/mmdb_lock.c`。
+ * 原先只是转发冻结轨锁头的兼容 shim；冻结轨退役后 SDK 不能再依赖它，
+ * 因此这里把平台分支和声明复制进 SDK 自身，实现见 `src/sdk/core/mmdb_lock.c`。
  */
 #ifndef SDK_IMPL_MMDB_LOCK_H
 #define SDK_IMPL_MMDB_LOCK_H
