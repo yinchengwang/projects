@@ -21,6 +21,7 @@ const { resolveLearningRoot, localBankDir } = require("../paths.js")
 const fill = require("./algorithm-fill.js")
 const batch = require("./algorithm-batch.js")
 const { verifyAlgorithmUnit, verifyAlgorithmUnits } = require("./algorithm-verify.js")
+const audit = require("./audit.js")
 const { openDb, createStore } = require("../../server/db.js")
 
 /** 算法轨接管的子命令 */
@@ -298,6 +299,9 @@ async function runAlgorithmCommand(params) {
     units: fill.readUnitStatuses(unitsDir),
   })
   say(batch.renderCoverageReport(report))
+  // 顺带做交付审计：三件套成对 / status / 负例不外泄 / 双份一致 / 清单别混进产物 / 密钥
+  say("")
+  say(audit.renderAuditReport(audit.auditAlgorithmUnits({ unitsDir: unitsDir, learningRoot: learningRoot })))
   return { code: 0, output: lines.join("\n") }
 }
 

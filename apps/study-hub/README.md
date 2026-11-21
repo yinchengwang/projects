@@ -526,6 +526,11 @@ learning/units/algorithm/
 
 `--dry-run` **不需要 LLM**：只扫题库、算计划、打清单，不调模型、不写文件、不花配额。
 
+`report --track algorithm` 除了覆盖报告，还会顺带做一次**交付审计**（纯文件检查，不联网不编译）：
+三件套是否成对、status 是否 `verified`、md 里有没有混进负例代码、md 代码块与
+`.reference.cpp` 是否逐字节一致、`plan.json` 有没有混进产物目录、密钥有没有漏进单元文件。
+审计有问题就逐条列出来，没问题打「没有发现问题」。
+
 批处理护栏：单批次 `supply.batch.session_limit`、当日 `supply.batch.daily_limit`、
 两次调用最小间隔 `supply.batch.rate_ms`、每题最多 1 + `supply.batch.max_retries` 次尝试；
 到顶**立刻停**并提示「用 `--resume` 接着跑」。单题进度落
@@ -601,6 +606,7 @@ node tests/run-all.js
 | `supply-algorithm-cli.test.js` | 算法轨 CLI：六个选项、退出码、LLM 关掉只影响 generate |
 | `supply-algorithm-report.test.js` | 覆盖报告：欠账口径、四项分组、批次汇总、中文渲染 |
 | `supply-algorithm-e2e.test.js` | 端到端：存量题库零改动、真 git 查脏、全程不联网 |
+| `supply-algorithm-audit.test.js` | 交付审计：三件套成对、status、负例不外泄、双份一致、密钥 |
 
 ## 写回 learning 仓的规矩
 
