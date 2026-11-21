@@ -1,6 +1,6 @@
 # Engineering Track
 
-工程轨道 —— α 工程作品集。PG 风格存储引擎、MiniVecDB、RAG、SDK、CI/CD、Docker。
+工程轨道 —— α 工程作品集。多模态数据库内核、SDK、CI/CD、Docker。
 
 ## 数据库主线
 
@@ -10,11 +10,11 @@
 - 严格 `-Werror` 零警告门禁，改完必跑 `sh tools/check_deps.sh`
 - 主核的公开 API 是 `db/include/db.h`
 
-并列的 [`src/db/`](src/db/) 是 PostgreSQL 风格的 CMake 工程内核。它已**冻结**：
+原先并列的 `src/db/`（PostgreSQL 风格 CMake 工程内核）已于 **2026-11-18 退役** ——
+源码、公开头、测试、CMake 接线（含 `cmake/ModalityProfiles.cmake` / `MultimodalConfig.cmake`）
+全部删除。**本轨道现在只有一个数据库内核**：`db/`。
 
-- 保留目录、源码、CMake、测试与设计文档，作为机制研究与历史参考
-- **不是**主数据库主线，不再作为新功能、默认门禁与 CI 的落点
-- 其中确有价值的能力须按「在主核现有接口内重实现/适配」的方式逐项迁移；恢复维护或删除须另行批准
+嵌入式 SDK（`src/sdk/`）是另一条独立线：不链接主核，自己也只依赖 SQLite 一个外部库。
 
 ## 构建与测试
 
@@ -49,7 +49,7 @@ mingw32-make check                       # 全套
 
 | 目录 | 说明 |
 |---|---|
-| `src/` | 库代码（db/, algo-prod/, cpp/, ds/, redis/, sdk/） |
+| `src/` | 库代码（algo-prod/, cpp/, ds/, redis/, sdk/） |
 | `include/` | 公共头文件 |
 | `test/` | gtest 测试 |
 | `sdk/` | 多语言 SDK |
@@ -61,7 +61,7 @@ mingw32-make check                       # 全套
 
 `engine/` 是以下所有内容的唯一 canonical 位置：
 - 顶层 `sdk/`、Docker 文件——已迁入
-- RAG 系统——不在 `engine/rag/`，而在 `engine/src/db/executor/rag/`（随 db 执行器）
+- RAG 系统——随冻结轨一并退役（原在 `engine/src/db/executor/rag/`）
 - 根目录 `include/` 中工程头文件——已审计归入 `engine/include/`
 - 根目录 `test_data/` 中复用测试夹具——已迁入
 - 工程专用工具——从根 `tools/` 拆分迁入 `engine/tools/`

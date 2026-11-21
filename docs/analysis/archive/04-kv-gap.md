@@ -1,3 +1,6 @@
+> ⚠️ **归档说明**：本文分析对象（冻结内核 `engine/src/db`）已于 2026-11-18 删除，仅作历史参考。
+> 当前主核是 `engine/db/`（自带 Makefile，不在 CMake 图内），见 [设计文档](../../superpowers/specs/2026-11-18-multimodal-db-project-organization-design.md)。
+
 # KV 模态差距深度分析
 
 > 审查日期：2026-08-27 ｜ 审查方式：静态代码审查

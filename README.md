@@ -5,7 +5,7 @@
 
 [![CI](https://img.shields.io/badge/CI-github%20actions-blue)](.github/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-271-brightgreen)](docs/)
+[![Docs](https://img.shields.io/badge/docs-285-brightgreen)](docs/)
 
 ---
 
@@ -15,69 +15,39 @@
 
 | 领域 | 说明 | 代码位置 |
 |------|------|----------|
-| **数据库内核** | 存储引擎、SQL 解析/执行、事务与 MVCC、Catalog | `engine/db/`（主核）；`engine/src/db/`（冻结，历史参考） |
-| **向量数据库** | 主核：HNSW 向量索引与 KNN 检索；冻结内核：27 个 ANN 索引 + 15 个传统索引实现 | 主核 `engine/db/src/modalities/vector/`；冻结 `engine/src/db/index/` |
-| **RAG 系统** | 检索增强生成、混合检索、Graph RAG、多模态分块（冻结内核的 db 执行器下；框架真实，检索/embedding/generate 步骤为占位或 TODO） | `engine/src/db/executor/rag/` |
-| **分布式系统** | 分片路由、Raft 共识、2PC 分布式事务（冻结内核，多为真实未验证或 stub） | `engine/src/db/{sharding,consensus,distributed}/` |
+| **数据库内核** | 存储引擎、SQL 解析/执行、事务与 MVCC、Catalog | `engine/db/`（唯一内核） |
+| **向量数据库** | HNSW 向量索引与 KNN 检索（HNSW 之外还有精确 KNN 对照） | `engine/db/src/modalities/vector/` |
+| **嵌入式 SDK** | 只依赖 SQLite 的多模态 SDK：内存上下文、读写锁、精确扁平向量索引、全文、图、时序、跨模态检索 | `engine/src/sdk/` |
+| **分布式系统** | 分片路由、Raft 共识、2PC 分布式事务（SDK 侧，真实可用但未做集群验证） | `engine/src/sdk/core/{sharding,replication,txn}.c` |
 | **算法工程** | 生产级排序、K-Means、量化压缩 | `engine/src/algo-prod/` |
 
 ---
 
 ## 🏗️ 核心能力
 
-> **阅读提示**：第 1–4 节描述的是 `engine/src/db/`（PostgreSQL 风格 CMake 内核）的资产。
-> 该内核已于 **2026-11-16 冻结**，仅作机制研究与历史参考；其中大量模块为「真实未验证」或 stub，
-> 分级依据见 `docs/superpowers/plans/2026-11-16-srcdb-asset-triage.md`。
-> **当前唯一长期维护的数据库主内核是第 5 节的 `engine/db/`。**
+> **阅读提示**：本仓曾经有两套数据库内核。并列的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）
+> 已于 **2026-11-18 退役** —— 源码、公开头、测试、构建接线全部删除，
+> 那 27 个 ANN 索引实现、15 个传统索引、RAG 执行器与分布式模块随之一起消失。
+> 历史分析见 `docs/analysis/archive/`。
+> **现在唯一长期维护的内核是下节的 `engine/db/`，外加一条独立的嵌入式 SDK（`engine/src/sdk/`）。**
 
-### 1. 存储引擎（PostgreSQL 风格）
+### 1. 嵌入式 SDK（`engine/src/sdk/`）
 
-- **Buffer Pool**：Clock-Sweep 置换、脏页管理
-- **WAL 日志**：写前日志、Redo 恢复、检查点
-- **Access Method**：Heap 堆表、B+Tree / Hash / ART / Radix Tree / R-Tree 等索引
-- **Catalog 系统**：表 / 列 / 索引元数据、OID 分配
-- **多模态存储**：向量、文档、图、空间、时序、稀疏、列式、K-V、Blob 等并存
+**只依赖 SQLite 一个外部库**的多模态 SDK：
 
-### 2. 向量索引（27 个 ANN 实现）
+- **内存上下文**：AllocSet 分配器（`palloc` / `pfree` / reset / delete），父子层级、线程归属校验、限额
+- **向量**：精确扁平索引（召回率 100%，L2 平方距离），metadata filter 谓词下推
+- **全文**：FTS5 + BM25，混合检索与 RRF 多通道融合
+- **图 / 时序 / 文本 / 跨模态**：各模态 API + SQL 表接入
+- **工程能力**：ACID 事务、备份/恢复、Raft 复制、一致性哈希分片、命名空间配额、运行时指标
 
-`engine/src/db/index/vector_index/` 下共 **34 个子模块**，其中 **27 个是独立的 ANN 索引算法实现**，
-另有 7 个支撑模块（BM25 / delete / gpu / multimodal / persist / reranker / streaming）
-与 3 个顶层编排文件（`hybrid_search.c` / `tiered_index.c` / `vector_index_selector.c`）。
+> SDK 的内存上下文、读写锁、向量索引、SQL 适配层都是**自持**的 —— 它不链接主核，
+> 也不依赖任何已退役的代码。
 
-| 类型 | 实现（均在 `vector_index/` 下） |
-|------|------|
-| 图索引 | HNSW 变体（`hnsw_pq` / `hnsw_sq` / `dist_hnsw`）、`nsw`、`ssg`、`scann`、`faiss_hnsw` |
-| 倒排索引 | `ivf`、`ivf_flat`、`ivf_pq`、`ivf_hnsw`、`milvus_ivf`、`faiss_ivf_compat` |
-| 树索引 | `kd_tree`、`ball_tree` |
-| 哈希索引 | `lsh`、`lsh_multiprobe`、`itq`、`spectral_hash` |
-| 量化 | `pq`、`sq`、`opq`、`rq`、`lvq`、`bq` |
-| 磁盘索引 | `diskann`（Vamana + PQ，23 个源文件） |
-| 其他 | `annoy` |
+### 2. 多模态数据库主内核（`engine/db/`）
 
-另有 **15 个传统索引实现**（同在 `engine/src/db/index/` 下）：
-`art`、`bitmap`、`bplus_tree`、`brin`、`btree`、`fulltext`、`gin`、`gist`、`hash`、`heap`、
-`hilbert`、`radix_tree`、`rtree`、`skip_list`、`ttree`。
-
-### 3. RAG 检索增强生成
-
-- **混合检索**：向量检索 + BM25 + RRF 融合（`engine/src/db/index/vector_index/hybrid_search.c`）
-- **Graph RAG**：知识图谱 + 实体/关系抽取 + 子图检索（`engine/src/db/executor/rag/graphrag_*.c`）
-- **多模态支持**：Markdown、PDF、代码、图片（`engine/include/rag/multimodal_chunk.h`）
-- **智能分块**：递归字符、语义、代码感知分块（`engine/src/db/executor/rag/chunk_op.c`）
-- **RAG 评估**：RAGAs 指标体系
-- **向量 API / CLI**：API 见 `engine/src/db/api/vdb_api.c`，命令行用法见 `docs/arch/vdb-cli/README.md`
-
-### 4. 分布式架构
-
-- **分片策略**：Hash 分片、Range 分片、一致性 Hash（`engine/src/db/distributed/shard/`）
-- **共识算法**：Raft Leader 选举、日志复制（`engine/src/db/consensus/raft*.c`）
-- **分布式事务**：2PC 两阶段提交（`engine/src/db/distributed/txn/`）、Percolator（`engine/src/db/distributed/percolator/`）
-- **高可用**：副本复制（`engine/src/db/replication/`）、全局时间戳（`engine/src/db/distributed/tso/`）
-
-### 5. 多模态数据库主内核（`engine/db/`）
-
-本仓的**唯一长期维护的数据库主内核**，一个**从零手写**的多模态数据库内核，与 `engine/src/db/`（PostgreSQL 风格内核）是两个独立项目：
-前者用 Makefile 构建、**不入 CMake 图**，是当前主核；后者（CMake 工程轨内核）已冻结保留、仅作历史参考。
+本仓的**唯一数据库内核**，一个**从零手写**的多模态数据库内核。它用 Makefile 构建、
+**不入 CMake 图**（有意的例外：自带 L0–L4 分层门禁、`-Werror` 编译门禁与独立测试协议）。
 
 **主核门禁**（改完必跑，`-Werror` 零警告是硬要求）：
 
@@ -92,10 +62,10 @@ mingw32-make check                       # 全套
 
 | 项 | 值 | 核实方式 |
 |---|-----|----------|
-| C 源码规模 | **195 个 `.c`/`.h`，58,437 行**（`src/` + `bench/` + `test/`，不含 `build/`） | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
-| 测试 | **55 个测试文件**（unit 35 + integration 20），**73 处断言全绿 / 0 FAIL** | `sh test/run.sh` |
-| 依赖方向门禁 | `sh tools/check_deps.sh` → `✓ 依赖方向正确` | 该脚本 |
-| 计划文档 | `engine/db/docs/` 下 **21 篇**（`PLAN-v0.1` ~ `PLAN-v1.6` + `DESIGN.md` + `MODALITIES.md`） | `Get-ChildItem engine/db/docs` |
+| C 源码规模 | **389 个 `.c`/`.h`，121,738 行**（`src/` + `bench/` + `test/`，不含 `build/`） | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
+| 测试 | **105 个测试**（unit 69 + integration 36），**全绿 / 0 FAIL** | `sh test/run.sh` |
+| 依赖方向门禁 | `sh tools/check_deps.sh` → `✓ 依赖方向正确`（S9① 已阻断 query→模态，S9② 待 C-2/C-3 落地后启用） | 该脚本 |
+| 计划文档 | `engine/db/docs/` 下 **22 篇**（`PLAN-v0.1` ~ `PLAN-v1.6` + `DESIGN.md` + `MODALITIES.md` + `MM-PROFILES.md`） | `Get-ChildItem engine/db/docs` |
 
 **强制分层（L0 → L4，`tools/check_deps.sh` 门禁）**：
 
@@ -112,21 +82,9 @@ v1.1（向量化执行 + 规则 CBO）已完成；**v1.2（内核收尾：copy-o
 ⚠️ **v1.2 唯一的未达标项是 A3（吞吐）**：细粒度 latch vs 大锁基线实测 **0.78× – 1.01×**（判据 ≥ 2×），
 瓶颈已定位为缓冲池的池级互斥量 `pg->mu` —— 详见 `engine/db/docs/PLAN-v1.2.md` §3 步骤 7；
 v1.3 ~ v1.6 依次为全文检索、地理空间、时序、文档/JSON 四模态（计划已生成，未执行）。
-
-**构建与测试**（独立于 CMake 工程轨，需 MinGW 工具链 + Git Bash）：
-
-```bash
-export PATH="/c/mingw64/bin:$PATH"       # Windows 下 Makefile 强制用 sh（find/rm）
-cd engine/db
-mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror 零警告
-sh test/run.sh                           # 55 个测试文件全绿
-sh tools/check_deps.sh                   # 依赖方向门禁
-mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
-```
+另有 `mingw32-make bench` 跑 vec_bench / graph_bench / hnswlib_ref 对照基准。
 
 ---
-
-
 
 ## 📁 项目结构
 
@@ -134,24 +92,18 @@ mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref
 projects/
 ├── engine/                # 🎯 工程轨（生产级代码）
 │   ├── src/
-│   │   ├── db/            # 数据库内核（37 个子模块）
-│   │   │   ├── index/     #   索引子系统：15 个传统索引 + vector_index/
-│   │   │   ├── executor/  #   SQL 执行器（含 rag/ 子目录）
-│   │   │   ├── storage/   #   存储层（24 个子模块：buffer/catalog/wal/vector/...）
-│   │   │   ├── consensus/ #   Raft 共识
-│   │   │   ├── distributed/#  分片 / 2PC / Percolator / TSO
-│   │   │   ├── optimizer/ parser/ sql/ txn/ sharding/ replication/ graph/ ...
-│   │   ├── algo-prod/    # 生产算法库（sort / Kmeans / quantization / heap ...）
-│   │   ├── cpp/          # C++ 基础实现（trie）
-│   │   ├── ds/           # 数据结构
-│   │   ├── redis/        # Redis 核心移植（sds / adlist / skiplist / zmalloc）
-│   │   └── sdk/          # 对外 SDK（aggregation / vectors / text / graph / ...）
-│   ├── db/               # 🆕 独立多模态数据库内核（Makefile 构建，不入 CMake 图）
-│   ├── include/          # 公共头文件
-│   ├── test/             # gtest 测试（8 个子目录，367 个 .c/.cpp 测试源文件）
-│   ├── sdk/              # 多语言 SDK（go / python / tests）
-│   ├── tools/            # benchmark（Python）+ mermaid2excalidraw
-│   ├── docs/             # 引擎内文档（22 篇 + arch/ index/ superpowers/）
+│   │   ├── sdk/           # 嵌入式 SDK（core / vectors / graph / text / timeseries
+│   │   │                  #   / extra / aggregation），只依赖 SQLite
+│   │   ├── algo-prod/     # 生产算法库（sort / Kmeans / quantization / distance）
+│   │   ├── cpp/           # C++ 基础实现（trie）
+│   │   ├── ds/            # 数据结构
+│   │   └── redis/         # Redis 核心移植（sds / adlist / skiplist / zmalloc）
+│   ├── db/                # 🎯 唯一数据库内核（Makefile 构建，L0–L4 分层门禁，不入 CMake 图）
+│   ├── include/           # 公共头文件（algo-prod/ ds/ sdk/ ...）
+│   ├── test/              # gtest 测试（5 个子目录，56 个 .c/.cpp 测试源文件）
+│   ├── sdk/               # 多语言 SDK 绑定（go / python / tests）
+│   ├── tools/             # benchmark（Python）+ mermaid2excalidraw
+│   ├── docs/              # 引擎内文档（44 篇）
 │   ├── cmake/  drivers/  proto/  scripts/  test_data/  third_part/
 │   ├── Dockerfile  docker-compose.yml
 │   └── CMakeLists.txt
@@ -166,10 +118,10 @@ projects/
 ├── docs/                  # 📄 项目级文档（271 篇 .md）
 │   ├── arch/              #   架构设计（63 篇，含 modular-rag/ theory/ implementation/）
 │   ├── storage/           #   存储设计（12 篇）
-│   ├── analysis/          #   差距分析（27 篇）
+│   ├── analysis/archive/  #   已归档的差距分析（27 篇，分析对象已退役）
 │   ├── process/           #   流程与实施计划（106 篇）
 │   ├── diagrams/          #   分层图（46 篇）
-│   └── superpowers/       #   设计与规格（2 篇）
+│   └── superpowers/       #   设计与规格 / 计划（16 篇）
 │
 ├── openspec/              # 📋 变更与规格
 │   ├── specs/             #   23 个 spec 目录 + 1 篇根级 spec（learning/ 已迁出）
@@ -217,8 +169,8 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 主核的交互入口是 `engine/db/src/main.c` 的 REPL（`mingw32-make` 产物，见 `engine/db/README.md`）。
 
-> **冻结内核的 CLI（历史参考）**：`engine/src/db/cli/` 曾编译出 `db_cli`，向量 API 为 `engine/src/db/api/vdb_api.c`。
-> `engine/src/db` 已于 2026-11-16 冻结，这些入口不再作为主线，用法见 `docs/arch/vdb-cli/README.md`。
+> 原先并列的 `engine/src/db/cli/`（`db_cli`）与其向量 API 已随冻结轨于 **2026-11-18 删除**，
+> 相关设计文档的「已退役」说明见 `docs/arch/vdb-cli/README.md`。
 
 ---
 
@@ -226,14 +178,15 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 | 轨道 | 数量 | 核实方式 |
 |------|------|----------|
-| 工程轨测试源文件 | **367** | `git ls-files 'engine/test/**'` 下的 `.c` / `.cpp`（db 289、sdk 36、algo 13、smoke 13、index 8、kbase 7、self_made_cpp 1） |
-| 工程轨 ctest 用例 | **835** | 已配置构建目录 `engine/build/base` 下 `ctest -N` 报告的用例总数（gtest 用例逐条展开） |
-| RAG 相关测试源文件 | **4** | `engine/test/db/rag`（1）+ `engine/test/sdk/rag`（3） |
-| 独立内核测试文件 | **55** | `engine/db/test/`（unit 35 + integration 20），由 `sh test/run.sh` 驱动，73 处断言全绿 |
+| 工程轨测试源文件 | **56** | `engine/test/` 下的 `.c` / `.cpp`（algo 13、sdk 36、kbase 7，含 ds 与 self_made_cpp 子目录） |
+| 工程轨 ctest 用例 | **76** | `ctest --test-dir build/engine -N` 报告的用例总数（gtest 用例逐条展开） |
+| 独立内核测试 | **105** | `engine/db/test/`（unit 69 + integration 36），由 `sh test/run.sh` 驱动，**105 通过 / 0 失败** |
 
 > 学习轨的测试与题解**已随学习轨迁出**，统计在 `../learning/` 仓，本仓不再重复计数。
-> `engine/build/` 是本地构建产物目录（未纳入版本控制），上面的 835 来自该目录中最近一次配置；
+> `build/engine` 是本地构建产物目录（未纳入版本控制），上面的 76 来自该目录最近一次配置；
 > 重新配置后以 `ctest -N` 的实时输出为准。
+> 冻结轨退役后用例数从 835 降到 76 —— 少掉的绝大部分是 `engine/test/db/`（289 个源文件）与被删的
+> `smoke/`、`index/` 目录，**不是覆盖丢失**：它们测的内核已经不存在了。
 
 ---
 
@@ -245,10 +198,10 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 | [engine/docs/](engine/docs/) | 引擎内文档：架构、B+Tree、MVCC、WAL、HNSW 深潜等（22 篇 + 3 个子目录） |
 | [engine/docs/index/](engine/docs/index/) | 各索引实现的设计文档（art / btree / diskann / gin / hnsw / ivf_pq / ...） |
 | [docs/](docs/) | 项目级文档总入口（按 arch / storage / analysis / process / diagrams 分区） |
-| [docs/arch/](docs/arch/) | 架构总览、索引与 SQL 执行器设计、RAG 与 modular-rag 规范、理论推导 |
+| [docs/arch/](docs/arch/) | 架构总览、索引与 SQL 执行器设计、RAG 与 modular-rag 规范、理论推导（**多数对应已退役的旧内核，详见各篇顶部说明**） |
 | [docs/storage/](docs/storage/) | 存储设计：向量 / 文档 / 图 / 空间 / 时序 / CCEH |
 | [docs/diagrams/](docs/diagrams/) | L0–L6 分层图（storage / sql / rag 等） |
-| [docs/analysis/](docs/analysis/) | 差距分析与研究报告 |
+| [docs/analysis/archive/](docs/analysis/archive/) | **已归档**的差距分析与研究报告（分析对象已退役，仅作历史参考） |
 | [openspec/specs/](openspec/specs/) | 规格文档（23 个 spec 目录） |
 | [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) | 项目级 agent 规约 |
 
@@ -347,19 +300,16 @@ ctest --test-dir build/engine -R <name> --output-on-failure   # 单个测试
 
 | 数字 | 核实命令 |
 |---|---|
-| 27 个 ANN 实现 / 34 个 vector_index 子模块 | `Get-ChildItem engine/src/db/index/vector_index` |
-| 15 个传统索引实现 | `Get-ChildItem engine/src/db/index -Directory` |
-| 37 个 db 子模块 / 24 个 storage 子模块 | `Get-ChildItem engine/src/db`、`engine/src/db/storage` |
-| 367 个测试源文件 | `git ls-files 'engine/test/**'` 后按 `.c` / `.cpp` 计数 |
-| 835 个 ctest 用例 | `ctest --test-dir engine/build/base -N` |
-| 271 篇 `docs/` 文档（63+12+27+106+46+2+15） | `git ls-files 'docs/**'` 后按扩展名计数 |
+| 56 个测试源文件 | `git ls-files 'engine/test/**'` 后按 `.c` / `.cpp` 计数 |
+| 76 个 ctest 用例 | `ctest --test-dir build/engine -N` |
+| 285 篇 `docs/` 文档（63+12+27+106+46+16+15） | `git ls-files 'docs/**'` 后按扩展名计数 |
 | 23 个 spec 目录 / 8 个进行中变更 / 3 个已归档变更 | `Get-ChildItem openspec/{specs,changes,archived}` |
 | 4 个小程序 | `Get-ChildItem apps -Directory` |
 | 38 个 skill | `skills-lock.json` 的 `skills` 键计数 |
 | 95 个第三方 submodule（reference 仓） | `Select-String reference/.gitmodules '^\[submodule '` |
-| 独立内核 195 个 `.c`/`.h`、58,437 行 | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
-| 独立内核 55 个测试文件 / 73 处断言 | `Get-ChildItem -Recurse -File engine/db/test -Filter '*.c'`；`sh test/run.sh` |
-| 独立内核 21 篇计划与设计文档 | `Get-ChildItem engine/db/docs -Filter '*.md'` |
+| 独立内核 389 个 `.c`/`.h`、121,738 行 | `Get-ChildItem -Recurse -Include '*.c','*.h' engine/db/src,engine/db/bench,engine/db/test` |
+| 独立内核 105 个测试（unit 69 + integration 36） | `sh test/run.sh` |
+| 独立内核 22 篇计划与设计文档 | `Get-ChildItem engine/db/docs -Filter '*.md'` |
 
 ---
 

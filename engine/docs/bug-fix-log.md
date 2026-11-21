@@ -1,3 +1,6 @@
+> ⚠️ **退役说明**：本文引用的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役**，源码、公开头与测试全部删除；文中出现的 `engine/src/db/...`、`engine/include/db/...`、`engine/test/db/...` 路径均为**历史路径**，现已不存在。
+> 当前唯一数据库内核是 `engine/db/`。
+
 # Bug 修复记录
 
 本文档记录 Phase 1 中修复的所有 bug，包括问题分析、修复方案和验证结果。

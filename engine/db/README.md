@@ -6,9 +6,9 @@
 > 它自带 Makefile、L0–L4 分层依赖门禁、严格 `-Werror` 编译门禁与独立测试协议；
 > 新 DB 功能、唯一对外主 API、默认 build/test 门禁都以本目录为准。
 >
-> `engine/src/db/`（PostgreSQL 风格 CMake 内核）已**冻结保留**：目录、源码、CMake、测试与设计文档原位保存，
-> 作为机制研究与历史参考，不再是主线，也不再是默认维护入口。其中确有价值的能力须按
-> 「在主核现有接口内重实现/适配」逐项迁移；恢复维护或删除须另行批准。
+> `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役** —— 源码、公开头、
+> 测试与构建接线（含 `cmake/ModalityProfiles.cmake` / `MultimodalConfig.cmake`）全部删除。
+> **本仓现在只有一个数据库内核**：本目录。
 >
 > 本 README 后半保留了 v1.6 文档模态的历史计划描述（“计划已生成，未执行”“执行记录留待填写”）。
 > 当前仓中已存在 `src/modalities/doc/jsonb.*` / `json_parse.*` / `json_path.*` / `json_ovf.*`
@@ -625,7 +625,7 @@ vector=2 / json=3 / ft=geo=ts=0）。读者能查到「v1.4 要做地理空间�
 
 ### 八模态一屏总表
 
-> **状态口径更新（2026-11-16）：**下表是 v1.6 之前的机制设计与版本时间线，不是当前维护状态。**`engine/db` 是本仓唯一主内核**（2026-11-16 路线翻转），关系、blob、图、向量、全文、空间、时序的代码/测试仍按历史版本保留；已有能力的冻结/重启以本 README 顶部的状态校称为准。JSONB parser/codec/path/overflow 现有源码与单测已通过 standalone `make check`，但仍**未接入 `db_exec` / SQL**，所以不能把 `json_match`、JSON 列或路径索引写成已实现。`engine/src/db/` 已冻结保留、仅供历史参考；其中能力若迁移须走单独切片设计。
+> **状态口径更新（2026-11-16）：**下表是 v1.6 之前的机制设计与版本时间线，不是当前维护状态。**`engine/db` 是本仓唯一主内核**（2026-11-16 路线翻转），关系、blob、图、向量、全文、空间、时序的代码/测试按当前版本维护；已有能力的冻结/重启以本 README 顶部的状态校正为准。JSONB parser/codec/path/overflow 现有源码与单测已通过 standalone `make check`，但仍**未接入 `db_exec` / SQL**，所以不能把 `json_match`、JSON 列或路径索引写成已实现。`engine/src/db/` 已于 2026-11-18 退役（源码、公开头、测试、构建接线全部删除）；那个位置现在没有内核。
 
 | # | 模态 | 物理布局 | 一行 = | 事务语义 | SQL 入口 | 版本 | 状态 |
 |---|---|---|---|---|---|---|---|

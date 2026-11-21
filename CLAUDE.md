@@ -63,8 +63,7 @@ C/C++ 算法与数据结构练习项目。CMake 3.20+、C11、C++17。无运行�
 
 ```
 engine/         # 工程轨道（默认构建）
-├── src/             # 库代码（db/algo-prod/cpp/ds/redis/sdk）
-│   └── db/executor/rag/  # RAG 系统（在 db 执行器下，不在 engine 顶层）
+├── src/             # 库代码（algo-prod/cpp/ds/redis/sdk）
 ├── db/              # 独立多模态数据库内核（自带 Makefile，不入 CMake 图，见下）
 ├── include/         # 公共头文件
 ├── test/            # gtest 测试
@@ -176,180 +175,23 @@ self_made_cpp ──→ project_includes
 leetcode ──→ project_includes
 interview ──→ project_includes
 
-db/storage ──→ db_catalog ──→ db/lock, db/buf
-db/sql ──→ db/storage, db/catalog, db/rel, db/heapam, db/btreeam
-
 主二进制 (AlgorithmPractice) ──→ project_includes + self_made + leetcode + Threads::Threads
 ```
 
 ## 数据库存储引擎
 
-> **冻结内核参考**：以下「数据库存储引擎」「多模态存储引擎」「GUC」「initdb / pg_ctl / db_server」等章节描述的是
-> `engine/src/db/`（PostgreSQL 风格 CMake 内核）。该内核**已冻结**（2026-11-16 路线翻转），仅作机制研究与历史参考，
-> 不再是主数据库主线。当前主核的架构与纪律见「子项目规则 › 主数据库内核（`engine/db/`）」。
+> **本仓只有一套数据库内核**：`engine/db/`（从零手写的多模态数据库内核）。
+> 它自带 `Makefile`，**不在 CMake 构建图内**（根 `CMakeLists.txt` 只引入 `engine/`，
+> `engine/CMakeLists.txt` 只引入 `src/` `tools/` `test/`，均不含 `db/`）——
+> 这是有意的例外：它有自己的分层门禁、编译门禁与测试协议。
+>
+> 原先并列的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役**，
+> 源码、公开头、测试与构建接线（含 `cmake/ModalityProfiles.cmake`、`MultimodalConfig.cmake`）
+> 全部删除。那个位置**现在没有内核** —— 不要按旧文档或旧路径去找它。
+> 历史分析文档已归档到 `docs/analysis/archive/`。
 
-实现了 PostgreSQL 风格的存储架构，详见 [docs/storage-architecture.md](docs/storage-architecture.md)。
-
-核心模块：
-- **Catalog** (`db/catalog.h`)：系统表管理，OID 分配，表/列/索引元数据
-- **Buffer Pool** (`db/buf.h`)：内存缓存，Clock-Sweep 置换，Hash 表查找
-- **Access Method** (`db/rel.h`)：Relation 抽象，TupleDesc，扫描接口
-- **Heap AM** (`db/heapam.h`)：堆表存储，页面结构，元组操作
-- **BTree AM** (`db/btreeam.h`)：BTree 索引，键比较，范围扫描
-- **WAL** (`db/wal.h`, `db/wal_buf.h`)：写前日志，Buffer 协调，检查点
-
-### 存储引擎架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SQL 执行器层                             │
-│         (sql_exec.c - 解析、优化、执行)                      │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────────┐
-│                    Access Method 层                          │
-│              (rel.c - Relation 抽象)                         │
-│         表扫描 / 索引扫描 / 元组操作                          │
-└──────┬──────────────┬──────────────┬───────────────────────┘
-       │              │              │
-┌──────▼──────┐ ┌─────▼──────┐ ┌────▼──────────────┐
-│  Heap AM   │ │ BTree AM   │ │  其他访问方法      │
-│  heapam.c  │ │ btreeam.c  │ │                   │
-│ 堆表存储    │ │ BTree 索引 │ │                   │
-└──────┬──────┘ └─────┬──────┘ └───────────────────┘
-       │               │
-┌──────▼───────────────▼─────────────────────────────────────┐
-│                    Buffer Pool 层                            │
-│              (bufmgr.c - 页面缓存)                         │
-│     Hash 表查找 + Clock-Sweep 置换 + 脏页刷盘             │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────────┐
-│                      WAL 层                                 │
-│            (wal.c, wal_buf.c - 写前日志)                   │
-│        Redo 日志 + 检查点 + Buffer 协调                    │
-└─────────────────────┬───────────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────────┐
-│                    磁盘文件层                                │
-│              (disk.c, page.c - 页面管理)                   │
-│              页面读写 + 空闲页面分配                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### API 使用示例
-
-```c
-// 1. 初始化存储系统
-kv_t *db = kv_open("mydb.db");  // 打开或创建 KV 数据库
-
-// 2. 表操作（通过 SQL 或直接调用）
-//    - 表创建: sql_exec_ddl(exec, create_node)
-//    - 表打开: table_t *table = table_open(db, "users");
-//    - 表关闭: table_close(table);
-
-// 3. 元组操作
-//    - 插入: table_insert(table, values, num_values);
-//    - 更新: table_update(table, row_id, values, num_values);
-//    - 删除: table_delete(table, row_id);
-
-// 4. 扫描操作
-//    - 全表扫描: table_iter_t *iter = table_scan(table);
-//    - 索引扫描: 需先创建索引，再使用索引扫描
-
-// 5. 关闭数据库
-kv_close(db);
-
-// 6. Buffer Pool 直接操作（高级）
-//    buffer_pool_t *pool = kv_get_buffer_pool(db);
-//    page_t *page = buffer_get_page(pool, page_id);
-//    buffer_unpin_page(pool, page_id);
-```
-
-### 多模态存储引擎
-
-除关系模型外，还支持多种数据模型：
-
-| 模型 | 引擎 | 说明 |
-|------|------|------|
-| KV | kv_engine | 键值存储 |
-| Vector | vector_engine | 向量存储，KNN 搜索 |
-| Timeseries | ts_engine | 时序数据，聚合查询 |
-| Document | doc_engine | 文档存储，JSONPath 查询 |
-| Spatial | spatial_engine | 空间数据，bbox 查询 |
-| Graph | graph_engine | 图存储，顶点/边操作 |
-| Yang | yang_engine | 层次数据，树遍历 |
-
-详见 `engine/include/db/mm_storage.h` 和 `engine/include/db/storage_engine.h`。
-
-### GUC 配置系统
-
-实现了 PostgreSQL 风格的配置参数系统（Grand Unified Configuration）：
-
-- **核心参数**：`shared_buffers`, `work_mem`, `max_connections`, `wal_level` 等
-- **配置文件**：`postgresql.conf` 格式支持
-- **单位转换**：支持 `kB`, `MB`, `GB`, `s`, `min`, `ms` 等单位后缀
-- **来源**：`engine/include/db/guc.h`, `engine/src/db/core/guc.c`
-
-### initdb 工具
-
-数据库集群初始化工具：
-
-```bash
-./initdb -D /path/to/data_dir
-```
-
-功能：
-- 创建数据目录结构
-- 初始化系统表（`pg_database`, `pg_class` 等）
-- 生成 `postgresql.conf` 和 `pg_hba.conf`
-- 初始化 WAL 日志
-- 来源：`engine/include/db/initdb.h`, `engine/src/db/core/initdb.c`
-
-### pg_ctl 工具
-
-服务器控制工具：
-
-```bash
-./pg_ctl start -D /path/to/data_dir   # 启动
-./pg_ctl stop -D /path/to/data_dir    # 停止
-./pg_ctl status -D /path/to/data_dir  # 状态
-./pg_ctl restart -D /path/to/data_dir # 重启
-```
-
-- 来源：`engine/include/db/pg_ctl.h`, `engine/src/db/core/pg_ctl.c`
-
-### 数据库服务器
-
-简化版 PostgreSQL Wire 协议服务器：
-
-- **端口**：默认 5432
-- **协议**：支持 StartupMessage、Simple Query 协议
-- **来源**：`engine/include/db/db_server.h`, `engine/src/db/core/db_server.c`
-
-### postgresql.conf 示例
-
-```ini
-# 连接配置
-max_connections = 100
-port = 5432
-listen_addresses = '*'
-
-# 内存配置
-shared_buffers = 128MB
-work_mem = 4MB
-
-# WAL 配置
-wal_level = replica
-fsync = on
-
-# 日志配置
-log_destination = 'stderr'
-logging_collector = off
-log_level = 'info'
-```
-
-详见 `docs/postgresql.conf.example`。
+主核的分层、纪律与构建命令见「子项目规则 › 主数据库内核（`engine/db/`）」。
+嵌入式 SDK（`engine/src/sdk/`）是主核能力的独立实现，**只依赖 SQLite 一个外部库**。
 
 ## 添加代码的约定
 
@@ -374,9 +216,12 @@ log_level = 'info'
 `engine/CMakeLists.txt` 只引入 `src/` `tools/` `test/`，均不含 `db/`）——这是有意的例外，
 因为它有自己独立的分层门禁、编译门禁与测试协议。
 
-并列的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已**冻结保留**：目录、源码、CMake、测试与设计文档原位保存，
-仅作机制研究与历史参考。新 DB 功能、对外主 API、默认门禁都以 `engine/db` 为准；
-`engine/src/db` 中的能力若确有价值，须按「在主核现有接口内重实现/适配」逐项迁移，恢复维护或删除须另行批准。
+并列的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役** —— 源码、公开头、
+测试与构建接线（`cmake/ModalityProfiles.cmake` / `MultimodalConfig.cmake` / `mm_smoke.cmake` 等）全部删除。
+**本仓现在只有一个数据库内核** —— `engine/db/`。
+
+嵌入式 SDK（`engine/src/sdk/`）是另一条独立线：它不链接主核，自己也只依赖 SQLite 一个外部库
+（内存上下文、读写锁、向量索引、SQL 引擎适配层都已自持）。
 
 **构建与测试（需 MinGW 工具链 + Git Bash）：**
 
@@ -384,7 +229,7 @@ log_level = 'info'
 export PATH="/c/mingw64/bin:$PATH"   # Windows 下 Makefile 强制 SHELL := sh（依赖 find/rm）
 cd engine/db
 mingw32-make clean && mingw32-make all   # -Wall -Wextra -Werror，零警告
-sh test/run.sh                           # 55 个测试文件，73 处断言，期望 0 FAIL
+sh test/run.sh                           # 105 个测试，期望 0 FAIL
 sh tools/check_deps.sh                   # 依赖方向门禁，期望 ✓ 依赖方向正确
 mingw32-make bench                       # vec_bench / graph_bench / hnswlib_ref 对照基准
 ```
@@ -402,7 +247,7 @@ L4 modalities/                  模态之间禁互相 include
 **专属纪律：**
 
 - 编译门禁是 `-Werror`（比工程轨更严），**零警告**是硬要求
-- 新文件不超过 800 行；`index/btree.c` 与 `catalog/catalog.c` 的例外**已在 v1.2 步骤 7 消除**（两者均已拆分）；既有超限文件 `src/storage/heap.c`、`src/db.c`、`src/storage/pager.c` 记在 v1.3 账上
+- 新文件不超过 800 行；`index/btree.c` 与 `catalog/catalog.c` 的例外**已在 v1.2 步骤 7 消除**（两者均已拆分）；v1.3 账上的历史超限（`src/storage/heap.c`、`src/db.c`、`src/storage/pager.c`）**已全部消除**，现在没有超限文件
 - 公开 API 前缀 `db_<模态>_<动作>`；内部错误码 `E_*`，公开层映射为 `DB_E_*`
 - 新入口必须成对 `latch_lock()` / `latch_unlock()`；xid 必须显式传参，不得藏进共享对象
 - 注释用中文，坑用 `M<层>-<序号>` 编号（汇总在 `engine/db/docs/MODALITIES.md`）

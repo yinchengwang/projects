@@ -1,3 +1,6 @@
+> ⚠️ **退役说明**：本文引用的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役**，源码、公开头与测试全部删除；文中出现的 `engine/src/db/...`、`engine/include/db/...`、`engine/test/db/...` 路径均为**历史路径**，现已不存在。
+> 当前唯一数据库内核是 `engine/db/`。
+
 # 工程轨道覆盖率策略（Engineering Coverage Policy）
 
 > 适用范围：`engine/` 轨道（含 `engine/src/`, `engine/apps/`, `engine/rag/`, `engine/sdk/`）。学习轨已切出为独立仓 `yinchengwang/learning`，不在本仓范围内。

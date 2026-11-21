@@ -1,3 +1,8 @@
+> ⚠️ **退役说明**：本文记录的迁移**已完成并随冻结轨退役** —— memctx 已移植为
+>  engine/src/sdk/core/memctx.c（契约在 engine/include/sdk/impl/memctx.h），
+>  SDK 不再依赖 engine/src/db/。文中出现的 engine/src/db/... 路径均为**历史路径**，
+>  现已不存在；当前唯一数据库内核是 engine/db/。
+
 # MemoryContext 迁移报告
 
 ## 1. 迁移概览

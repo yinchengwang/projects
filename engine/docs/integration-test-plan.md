@@ -1,3 +1,6 @@
+> ⚠️ **退役说明**：本文引用的 `engine/src/db/`（PostgreSQL 风格 CMake 内核）已于 **2026-11-18 退役**，源码、公开头与测试全部删除；文中出现的 `engine/src/db/...`、`engine/include/db/...`、`engine/test/db/...` 路径均为**历史路径**，现已不存在。
+> 当前唯一数据库内核是 `engine/db/`。
+
 # 集成测试计划
 
 本文档定义 Phase 1 的集成测试计划，覆盖核心模块间的交互测试。
