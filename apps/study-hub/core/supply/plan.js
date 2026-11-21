@@ -164,6 +164,14 @@ function scanGaps(opts) {
         missing: missing,
       })
     }
+    // P5 追加：算法轨覆盖报告——题库是只读的，欠账由 units/algorithm/ 的 verified 抵扣。
+    if (code === "algorithm" && (!unit.kind || unit.kind === "problem") && o.store) {
+      const { buildCoverageReport } = require("./algorithm-batch.js")
+      const { scanBank, readUnitStatuses } = require("./algorithm-fill.js")
+      const scan = scanBank({ learningRoot: learningRoot, localBank: null })
+      const report = buildCoverageReport({ items: scan.items, store: o.store, units: readUnitStatuses(path.join(learningRoot || "", "units", "algorithm")) })
+      gaps.push({ track: "algorithm", total: report.total, ready: report.ready, debt: report.debt, missing: report.missing })
+    }
   })
 
   const tracks = TRACK_CODES.filter(function (code) {
