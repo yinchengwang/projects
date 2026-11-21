@@ -71,20 +71,65 @@ SRC_DIR := src
 OBJ_DIR ?= build
 
 # ---------------------------------------------------------------------
-# MM：编译期模态裁剪（B1：接入 profile 真相源）
+# MM：编译期模态裁剪
 # ---------------------------------------------------------------------
+# 用法：
+#   make MM=full          # 全部模态（默认，与不带 MM 完全等价）
+#   make MM=vector        # 只编 vector 模态（+ 恒常驻的关系模态 + 底座）
+#   make MM=doc           # 只编文档模态
+#
+# 【MM 裁的是"模态"，不是"层"】
+# 每个 profile 都含 L0–L3 底座**与关系模态**（关系模态的实现横跨 L1–L3，
+# catalog 直接持有 Heap* ⇒ 关不掉）。详见 tools/mm_profiles.mk。
+#
+# 【为什么非 full 的 profile 用独立的对象目录】
+# 裁剪后的 .o 绝不能和 full 的 .o 混在一处：
+# 混了之后 `make MM=full` 会因为"目标文件比源文件旧"而跳过重编，
+# 于是跑的是上一次的二进制 —— 这正是本文件头部注释里说的那个阴险坑
+# （改了源码、编译"成功"、跑的是旧二进制）。
+# 做法与 BIGLOCK_DIR 一致：各写各的目录。
 MM ?= full
 include tools/mm_profiles.mk
+
 ifeq ($(filter $(MM),$(MM_PROFILES)),)
   $(error 未知的 MM profile '$(MM)'。可选：$(MM_PROFILES))
 endif
+
+# ---- 依赖闭包（展开到不动点；三轮足够 —— 模态只有 8 个）----
+# ⚠️ 关系模态恒常驻 ⇒ 永远在闭包里。种子必须**无条件带上** relational：
+# MM_SET_relational 是**空的**（它不进"可变集"），若只拿 $(MM_SET_$(MM)) 做种子，
+# `make MM=relational` 的闭包里就没有 relational ⇒ DB_HAS_RELATIONAL=0 ⇒
+# 与"关系模态恒常驻"直接矛盾，而且所有 `#if DB_HAS_RELATIONAL` 会被整块裁掉。
+MM_CLOSED := relational $(MM_SET_$(MM))
+MM_CLOSED := $(MM_CLOSED) $(foreach m,$(MM_CLOSED),$(MM_DEP_$(m)))
+MM_CLOSED := $(MM_CLOSED) $(foreach m,$(MM_CLOSED),$(MM_DEP_$(m)))
+MM_CLOSED := $(sort $(MM_CLOSED))
+
+# ---- 校验：依赖名必须是已知模态 ----
+$(foreach m,$(MM_CLOSED),$(foreach d,$(MM_DEP_$(m)),\
+  $(if $(filter $(d),$(MM_ALL)),,$(error 模态 $(m) 的依赖 $(d) 不是已知模态（已知模态：$(MM_ALL)）))))
+
+# ---- 未激活模态的源文件（要裁掉的）----
+# MM=full 时这一步算出来是空的 ⇒ 与原来的"全量编译"完全等价。
+MM_CROP_SRCS :=
+$(foreach m,$(MM_CROPPABLE),\
+  $(if $(filter $(m),$(MM_CLOSED)),,$(eval MM_CROP_SRCS += $(MM_FILES_$(m)))))
+
+# ---- DB_HAS_* 宏：每个模态恒定定义（开=1，关=0）----
+# ⚠️ 恒定定义（不是"只定义开着的那几个"）：
+# 代码里可以直接写 `#if DB_HAS_FT`，不需要先 `#ifdef DB_HAS_FT` 再嵌套一层。
+MM_FLAGS :=
+$(foreach m,$(MM_ALL),\
+  $(eval MM_FLAGS += -DDB_HAS_$(MM_UP_$(m))=$(if $(filter $(m),$(MM_CLOSED)),1,0)))
+
+# ---- 实际使用的对象目录 ----
+# ⚠️ 命令行的 `OBJ_DIR=` 会覆盖 makefile 里的赋值（GNU Make 里「命令行变量 > makefile 赋值」），
+# 所以 `make MM=vector OBJ_DIR=out` 会让 OBJ_DIR 停在 out ⇒ 与 `make MM=full` 共用同一个目录
+# ⇒ 裁剪的 .o 与 full 的 .o 混在一处 ⇒ 跑的是旧二进制（正是本文件头部警告的坑）。
+# ⇒ 用 OBJ_BASE 承接「用户想放的根目录」，再用 override 落最终目录。
 OBJ_BASE ?= $(OBJ_DIR)
 MM_OBJ_DIR := $(if $(filter full,$(MM)),$(OBJ_BASE),$(OBJ_BASE)_mm_$(MM))
 override OBJ_DIR := $(MM_OBJ_DIR)
-# B1 先把 profile 数据、独立对象目录和恒定 DB_HAS_* 宏接入；
-# B2 再启用 MM_CROP_SRCS 做真正的源文件裁剪。
-MM_FLAGS :=
-$(foreach m,$(MM_ALL),$(eval MM_FLAGS += -DDB_HAS_$(MM_UP_$(m))=1))
 
 # 【为什么用 wildcard 而不是 $(shell find ...)】
 #
@@ -104,15 +149,36 @@ $(foreach m,$(MM_ALL),$(eval MM_FLAGS += -DDB_HAS_$(MM_UP_$(m))=1))
 #       （文本搜索工具，不是 findutils）⇒ SRCS 为空 ⇒ 目标为空 ⇒ 什么都不编。
 # 修法：改用 make 内建的 $(wildcard ...)（不经过 shell，没有引号问题）。
 # 验证：改一个源文件 → 对象文件时间戳必须跟着变（否则就是又踩了这个坑）。
-SRCS    := $(wildcard $(SRC_DIR)/*/*.c $(SRC_DIR)/*/*/*.c $(SRC_DIR)/*.c)
+#
+# ⚠️ 这两行的位置**不能挪**：`SRCS :=` 是立即赋值，它在被读到的那一瞬间
+# 就把右边的 $(MM_CROP_SRCS) 定死。上面的 MM 块必须**在它之前**跑完，
+# 否则此刻 MM_CROP_SRCS 还是空 ⇒ SRCS = 全量 ⇒ **裁剪静默失效**
+# （构建照样绿，二进制却是全量的 —— 不报错的那种错最坏）。
+SRCS_ALL := $(wildcard $(SRC_DIR)/*/*.c $(SRC_DIR)/*/*/*.c $(SRC_DIR)/*.c)
+# 裁掉未激活模态的源文件（MM=full 时 MM_CROP_SRCS 为空 ⇒ 与原来完全等价）
+SRCS    := $(filter-out $(MM_CROP_SRCS),$(SRCS_ALL))
 OBJS    := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS    := $(OBJS:.o=.d)
 
 # Windows 下 gcc -o db 实际产出 db.exe，显式区分省得找不到文件
+#
+# ⚠️ 路径为什么分两种：
+#   MM=full   → 落在仓库根（`db.exe`），**与改动前完全一致**（不动既有习惯）。
+#   其他 profile → 落在自己的对象目录（`build_mm_vector/db.exe`）。
+# 理由和对象目录那一段一样：两个 profile 的二进制绝不能同名同路径，
+# 否则后编的那个会静默覆盖前一个，`nm` 之类的反向断言就失去意义。
 ifeq ($(OS),Windows_NT)
+  ifeq ($(filter full,$(MM)),)
+TARGET  := $(OBJ_DIR)/db.exe
+  else
 TARGET  := db.exe
+  endif
 else
+  ifeq ($(filter full,$(MM)),)
+TARGET  := $(OBJ_DIR)/db
+  else
 TARGET  := db
+  endif
 endif
 
 # 基准与参照工具（不进主二进制，也不参与 make check）
@@ -251,7 +317,18 @@ $(LATCH_BENCH_BIGLOCK_EXE): $(BIGLOCK_DIR)/bench/latch_bench.o $(BIGLOCK_LIB)
 # exec_bench（v1.1）：执行器基准 + 新旧执行器对拍。
 #   它额外链 exec_volcano.o —— 那是"改造前执行器"的冻结副本，
 #   只存在于这个基准里，主二进制（db.exe）不链它（PLAN §1.6 R5）。
+#
+# ⚠️ `make bench` 只在 `MM=full` 下可用：
+#   它要链 vec_bench / graph_bench / ft_bench / geo_bench / ts_bench，
+#   那些基准各依赖对应模态的对象 —— 裁剪 profile 下必然缺符号。
+#   与其让它在链接期报一堆 undefined reference，不如**在入口就拒绝并说清原因**。
+ifeq ($(filter full,$(MM)),)
+bench:
+	@echo "make bench 只在 MM=full 下可用，当前 MM=$(MM)"
+	@exit 1
+else
 bench: $(VEC_BENCH_EXE) $(GRAPH_BENCH_EXE) $(REF_EXE) $(EXEC_BENCH_EXE) $(LATCH_BENCH_EXE) $(LATCH_BENCH_BIGLOCK_EXE) $(FT_BENCH_EXE) $(GEO_BENCH_EXE) $(TS_BENCH_EXE) $(TS_BENCH_IO_EXE) $(INS_BATCH_BENCH_EXE)
+endif
 
 $(INS_BATCH_BENCH_EXE): $(INS_BATCH_BENCH_OBJS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(INS_BATCH_BENCH_OBJS) $(LIB_OBJS) $(LDLIBS)
