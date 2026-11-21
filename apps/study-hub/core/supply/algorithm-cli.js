@@ -22,10 +22,11 @@ const fill = require("./algorithm-fill.js")
 const batch = require("./algorithm-batch.js")
 const { verifyAlgorithmUnit, verifyAlgorithmUnits } = require("./algorithm-verify.js")
 const audit = require("./audit.js")
+const acceptance = require("./acceptance.js")
 const { openDb, createStore } = require("../../server/db.js")
 
 /** 算法轨接管的子命令 */
-const COMMANDS = ["plan", "generate", "verify", "report"]
+const COMMANDS = ["plan", "generate", "verify", "report", "accept"]
 
 /** 中文用法 */
 const USAGE = [
@@ -35,6 +36,7 @@ const USAGE = [
   "                               [--retry-rejected] [--dry-run] [--session <batchId>]",
   "  node tools/supply.js verify  --track algorithm [--unit <id>]",
   "  node tools/supply.js report  --track algorithm",
+  "  node tools/supply.js accept  --track algorithm [--verify]",
 ].join("\n")
 
 /**
@@ -53,6 +55,7 @@ function parseAlgorithmArgs(argv) {
     resume: false,
     retryRejected: false,
     dryRun: false,
+    verifyRun: false,
     session: "",
     unit: "",
   }
@@ -60,6 +63,11 @@ function parseAlgorithmArgs(argv) {
   let i = 0
   while (i < args.length && error === "") {
     const arg = String(args[i])
+    if (arg === "--verify") {
+      options.verifyRun = true
+      i += 1
+      continue
+    }
     if (arg === "--batch") {
       options.batch = true
       i += 1
@@ -288,6 +296,19 @@ async function runAlgorithmCommand(params) {
       say("  " + r.unit + "  " + r.status + "：" + r.reason)
     })
     return { code: 0, output: lines.join("\n") }
+  }
+
+  // ——— accept（交付验收 12 条）———
+  if (options.command === "accept") {
+    const result = await acceptance.runAcceptance({
+      learningRoot: learningRoot,
+      unitsDir: unitsDir,
+      localBank: localBank,
+      store: store,
+      verify: options.verifyRun,
+    })
+    say(acceptance.renderAcceptance(result))
+    return { code: result.ok ? 0 : 1, output: lines.join("\n") }
   }
 
   // ——— report ———

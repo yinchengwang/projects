@@ -507,6 +507,7 @@ node tools/supply.js generate --track algorithm [--batch] [--limit <n>] [--resum
                              [--retry-rejected] [--dry-run] [--session <批次号>]
 node tools/supply.js verify  --track algorithm [--unit <id>]
 node tools/supply.js report  --track algorithm
+node tools/supply.js accept  --track algorithm [--verify]
 ```
 
 一道题一次 LLM 调用产**四件套**（题面 / 测试用例 / 参考解法 / 负例），落三件文件：
@@ -530,6 +531,11 @@ learning/units/algorithm/
 三件套是否成对、status 是否 `verified`、md 里有没有混进负例代码、md 代码块与
 `.reference.cpp` 是否逐字节一致、`plan.json` 有没有混进产物目录、密钥有没有漏进单元文件。
 审计有问题就逐条列出来，没问题打「没有发现问题」。
+
+`accept --track algorithm` 是**交付验收**：把计划里的 12 条验收自查表一次跑完，
+每条打 `✅`（机器查过、符合）/ `❌`（机器查过、不符合）/ `…`（需要人确认或要跑外部命令）。
+加 `--verify` 才会真编译复核（全量约 40–70 分钟），不加就只做文件层面的检查。
+有不合格项退出码 `1`，全过退出码 `0`。
 
 批处理护栏：单批次 `supply.batch.session_limit`、当日 `supply.batch.daily_limit`、
 两次调用最小间隔 `supply.batch.rate_ms`、每题最多 1 + `supply.batch.max_retries` 次尝试；
@@ -607,6 +613,7 @@ node tests/run-all.js
 | `supply-algorithm-report.test.js` | 覆盖报告：欠账口径、四项分组、批次汇总、中文渲染 |
 | `supply-algorithm-e2e.test.js` | 端到端：存量题库零改动、真 git 查脏、全程不联网 |
 | `supply-algorithm-audit.test.js` | 交付审计：三件套成对、status、负例不外泄、双份一致、密钥 |
+| `supply-algorithm-acceptance.test.js` | 交付验收 12 条自查表：文件层自动查，真编译那条按需 |
 
 ## 写回 learning 仓的规矩
 

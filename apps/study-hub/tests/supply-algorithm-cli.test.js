@@ -250,8 +250,7 @@ test("generate --dry-run 不调 LLM、不写单元", async function () {
   }
 })
 
-test("verify --unit 把结论写回 status 那一行（否则续跑会重复花钱）", { skip: SKIP }, async function () {
-  const root = fakeLearningRoot()
+test("verify --unit 把结论写回 status 那一行（否则续跑会重复花钱）", { skip: SKIP }, async function () {  const root = fakeLearningRoot()
   try {
     const unitsDir = path.join(root, "units", "algorithm")
     fill.writeTriplet({
@@ -282,4 +281,23 @@ test("verify --unit 把结论写回 status 那一行（否则续跑会重复花�
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test("accept 打出 12 条验收表；有不合格项时退出码 1", async function () {
+  const root = fakeLearningRoot()
+  try {
+    const res = await cli.runAlgorithmCommand(base(root, { argv: ["accept", "--track", "algorithm"] }))
+    assert.ok(res.output.indexOf("算法轨交付验收（12 条）") !== -1, res.output)
+    assert.ok(res.output.indexOf("单元文件批量产出") !== -1, res.output)
+    assert.equal(res.code, 1, "还有 738 道没补，必然有不合格项")
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("参数解析：认出 --verify（只在 accept 用）", function () {
+  const out = cli.parseAlgorithmArgs(["accept", "--track", "algorithm", "--verify"])
+  assert.equal(out.error, "")
+  assert.equal(out.options.command, "accept")
+  assert.equal(out.options.verifyRun, true)
 })
