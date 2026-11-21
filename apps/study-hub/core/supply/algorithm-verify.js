@@ -71,6 +71,41 @@ function summarize(result) {
   }
 }
 
+/** 判定「这一行算不算负例独有的代码」时，最短长度阈值 */
+const NEGATIVE_LEAK_MIN_LEN = 12
+
+/**
+ * 单元 md 里有没有混进负例的代码（P5-5：学习者只看得到正确解法）。
+ *
+ * 判据不是「负例全文出现在 md 里」——负例与参考解法必然共用大量样板行
+ * （`#include`、`int main() {`、`return 0;`、花括号）。所以只挑**负例独有**的
+ * 非样板行（在参考解法里找不到、且够长），再看它们有没有落进 md。
+ *
+ * @param {string} mdText 单元文件全文
+ * @param {string} negativeCode 负例源码
+ * @param {string} referenceCode 参考解法源码
+ * @returns {string} 泄漏的那一行；没泄漏返回空串
+ */
+function findNegativeLeak(mdText, negativeCode, referenceCode) {
+  const md = String(mdText || "")
+  const refText = canonicalCode(referenceCode)
+  const negLines = canonicalCode(negativeCode).split("\n")
+  for (let i = 0; i < negLines.length; i += 1) {
+    const line = negLines[i].trim()
+    if (line.length < NEGATIVE_LEAK_MIN_LEN) continue
+    if (line === "{" || line === "}") continue
+    if (line.indexOf("#include") === 0) continue
+    // 参考解法里也有的行是样板行，不算负例独有
+    if (refText.indexOf(line) !== -1) continue
+    // md 是按行存的，比对也按整行，避免把「std::cout」这种片段当成泄漏
+    const mdLines = md.split(/\r?\n/)
+    for (let k = 0; k < mdLines.length; k += 1) {
+      if (mdLines[k].trim() === line) return line
+    }
+  }
+  return ""
+}
+
 /**
  * 校验一个算法单元。
  *
@@ -145,6 +180,15 @@ async function verifyAlgorithmUnit(params) {
   const cases = parseCases(parsed.sections[SECTION_CASES] || "")
   if (cases.length === 0) {
     return reject("单元没有测试用例，判不了", "测试用例", "「## 测试用例」小节里没有数据行")
+  }
+
+  const leak = findNegativeLeak(parsed.text, negativeCode, referenceCode)
+  if (leak !== "") {
+    return reject(
+      "单元 md 里混进了负例的代码，学习者不该看到错解：" + leak,
+      "负例不外泄",
+      leak
+    )
   }
 
   const toolchain = p.toolchain || resolveToolchain({})
@@ -274,8 +318,10 @@ async function verifyAlgorithmUnits(params) {
 
 module.exports = {
   NEGATIVE_REJECTED_VERDICTS: NEGATIVE_REJECTED_VERDICTS,
+  NEGATIVE_LEAK_MIN_LEN: NEGATIVE_LEAK_MIN_LEN,
   readUnitFile: readUnitFile,
   solutionBlockOf: solutionBlockOf,
+  findNegativeLeak: findNegativeLeak,
   verifyAlgorithmUnit: verifyAlgorithmUnit,
   verifyAlgorithmUnits: verifyAlgorithmUnits,
 }

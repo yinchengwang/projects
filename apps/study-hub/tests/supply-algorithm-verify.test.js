@@ -196,3 +196,39 @@ test("verifyAlgorithmUnits 批量校验，并只改 status 那一行", { skip: S
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+/* ---------- 人工抽检清单里能自动化的两条（P5-5 负例不外泄） ---------- */
+
+test("findNegativeLeak：负例独有的行漏进 md 就被抓出来", function () {
+  const ref = ["#include <iostream>", "int main() {", '  std::cout << "correct";', "}"].join("\n")
+  const neg = ["#include <iostream>", "int main() {", '  std::cout << "WRONG_MARKER_123";', "}"].join("\n")
+  const leak = verify.findNegativeLeak("# 单元\n\n" + neg, neg, ref)
+  assert.ok(leak.indexOf("WRONG_MARKER_123") !== -1, leak)
+})
+
+test("findNegativeLeak：只有样板行重合时不算泄漏", function () {
+  const ref = ["#include <iostream>", "int main() {", "  return 0;", "}"].join("\n")
+  const neg = ["#include <iostream>", "int main() {", "  return 1;", "}"].join("\n")
+  const md = "## 参考解法\n\n```cpp\n" + ref + "\n```\n"
+  assert.equal(verify.findNegativeLeak(md, neg, ref), "")
+})
+
+test("md 里混进负例的代码 → rejected（P5-5）", function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "study-hub-p5-verify-"))
+  try {
+    const leakLine = '  std::cout << "WRONG_MARKER_LEAK_999" << "\\n";'
+    const neg = ["#include <iostream>", "#include <string>", "int main() {",
+      "  std::string s;", "  if (!(std::cin >> s)) return 0;", leakLine, "  return 0;", "}"].join("\n")
+    const unit = makeUnit(root, "lc-00014", REF_CODE, neg)
+    // 把负例独有的那一行偷偷写进单元 md（模拟落盘时串了）
+    const text = fs.readFileSync(unit.unitPath, "utf8")
+    fs.writeFileSync(unit.unitPath, text.replace("## 关联", "## 关联\n\n" + leakLine), "utf8")
+    return verify.verifyAlgorithmUnit({ unitPath: unit.unitPath, learningRoot: root }).then(function (res) {
+      assert.equal(res.status, "rejected", res.reason)
+      assert.ok(res.reason.indexOf("负例") !== -1, res.reason)
+      assert.ok(res.reason.indexOf("WRONG_MARKER_LEAK_999") !== -1, res.reason)
+    })
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
