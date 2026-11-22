@@ -378,6 +378,29 @@
   }
 
   /**
+   * 深挖：针对这个单元追问一层。
+   *
+   * 与「问 LLM」的区别：问 LLM 是从头讲一遍（不落盘），深挖是往下再挖一层，
+   * 结论会追加进单元文件的「## 讲解」小节（`### 深挖 · <问题>`）。
+   * LLM 关掉时接口也是 200 + 中文降级文案，这里照样显示。
+   */
+  async function onDeepen() {
+    const unit = pageState.unit
+    if (!unit) return
+    const question = window.prompt("想深挖哪个点？留空就再挖一层")
+    if (question === null) return
+    try {
+      const res = await A.postJson("/api/units/" + encodeURIComponent(unit.id) + "/deepen", {
+        question: String(question || ""),
+      })
+      pageState.llmText = String((res && res.text) || "")
+    } catch (err) {
+      pageState.llmText = "深挖不了：" + String((err && err.message) || err)
+    }
+    paintResult(pageState.resultBox)
+  }
+
+  /**
    * 标记「完成本单元」。
    */
   async function onComplete() {
@@ -427,6 +450,7 @@
     readKids.push(
       el("div", { class: "row" }, [
         el("button", { class: "btn", id: "unit-ask", text: "问 LLM", onclick: onAsk }),
+        el("button", { class: "btn", id: "unit-deepen", text: "深挖一层", onclick: onDeepen }),
       ])
     )
     const readCol = el("div", { class: "unit-col unit-col-read" }, [

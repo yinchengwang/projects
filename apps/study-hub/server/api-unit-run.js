@@ -276,6 +276,41 @@ function buildUnitRunRoutes(ctx) {
     },
   })
 
+  // 深挖概念（原设计 §7.1 场景 5）：在线场景，与「问 LLM」同族但不同路——
+  // 讲解是从头讲一遍，深挖是针对用户追问再往下挖一层，结论会写回单元文件的
+  // 「## 讲解」小节（作为 `### 深挖 · <问题>` 小段）。
+  routes.push({
+    method: "POST",
+    pattern: "/api/units/:id/deepen",
+    handler: async function (req, res, params) {
+      const unit = pickUnit(ctx, params.id)
+      if (!unit) {
+        notFound(res, params.id)
+        return
+      }
+      const body = await readJsonBody(req)
+      if (!llm || typeof llm.deepen !== "function") {
+        // LLM 没装配不是错误：单元页照常能读能判，只是深挖不了（与 G10 同款降级）
+        ctx.sendJson(res, 200, {
+          text: "LLM 没装配，深挖不了。可以先自己读讲解、跑一遍断言。",
+          model: "null",
+        })
+        return
+      }
+      try {
+        const result = await llm.deepen({
+          unit: unit,
+          question: String((body && body.question) || ""),
+          context: body && body.context ? body.context : undefined,
+          sessionId: body && body.sessionId ? body.sessionId : undefined,
+        })
+        ctx.sendJson(res, 200, { text: result.text, model: result.model })
+      } catch (err) {
+        throw toHttpError(err)
+      }
+    },
+  })
+
   // 环境自检：只读，不写任何文件
   routes.push({
     method: "GET",
