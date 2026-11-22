@@ -42,7 +42,7 @@ MM_UP_doc        := DOC
 #   堆实现      src/storage/heap*.c
 #   记录编解码   src/storage/record.c、value.c
 #   catalog     src/catalog/catalog.c —— 表项里**直接持有 Heap***
-#   执行器适配   src/spi/heap_am*.c、src/spi/btree_am.c
+#   执行器适配   src/modalities/relational/heap_am*.c、btree_am.c
 # catalog.h:8 与 vacuum.h:6 都持有 Heap* ⇒ 关掉关系模态 = catalog 编译不过。
 # 结论：**MM 裁的是"模态"，不是"层"**。每个 profile 都含关系模态。
 
@@ -63,7 +63,7 @@ MM_FILES_doc    := $(wildcard src/modalities/doc/*.c)
 MM_FILES_relational := src/storage/heap.c src/storage/heap_compact.c src/storage/heap_scan.c \
                        src/storage/record.c src/storage/value.c \
                        $(wildcard src/catalog/*.c) $(wildcard src/index/*.c) \
-                       $(wildcard src/spi/heap_am*.c) src/spi/btree_am.c
+                       $(wildcard src/modalities/relational/heap_am*.c) src/modalities/relational/btree_am.c
 
 # ---------------------------------------------------------------------
 # 模态依赖（闭包用）

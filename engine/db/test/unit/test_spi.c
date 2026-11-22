@@ -26,7 +26,7 @@
 #include <string.h>
 
 #include "index/btree.h"
-#include "spi/btree_am.h"
+#include "modalities/relational/btree_am.h"
 #include "spi/registry.h"
 #include "storage/value.h"
 

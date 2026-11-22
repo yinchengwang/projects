@@ -25,7 +25,7 @@
  * 这正是能力协商机制的价值 —— 加能力不影响没加能力的模态。
  */
 
-#include "spi/heap_am_internal.h"
+#include "modalities/relational/heap_am_internal.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-#include "spi/heap_am.h"
+#include "modalities/relational/heap_am.h"
 #include "storage/heap.h"
 
 /*

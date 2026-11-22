@@ -1,10 +1,10 @@
 /*
  * btree_am.c — B+tree 的 Index AM 适配（v0.9）
  *
- * 设计说明见 spi/btree_am.h。
+ * 设计说明见 modalities/relational/btree_am.h。
  */
 
-#include "spi/btree_am.h"
+#include "modalities/relational/btree_am.h"
 
 #include <string.h>
 

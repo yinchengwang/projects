@@ -1,7 +1,7 @@
 /*
  * heap_am.c — 关系模态的 SPI 适配（v0.9）
  *
- * 设计说明见 spi/heap_am.h。这里只讲实现上的关键点。
+ * 设计说明见 modalities/relational/heap_am.h。这里只讲实现上的关键点。
  *
  * 【这个文件从 exec.c 里搬走了什么】
  *
@@ -14,14 +14,14 @@
  * 它只知道"一张表有一个 StorageAM"。
  */
 
-#include "spi/heap_am.h"
+#include "modalities/relational/heap_am.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "index/btree.h"
 #include "index/index_key.h"
-#include "spi/heap_am_internal.h"
+#include "modalities/relational/heap_am_internal.h"
 #include "txn/mvcc.h"
 #include "txn/vacuum.h"
 

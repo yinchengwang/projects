@@ -2,7 +2,7 @@
 #define DB_SPI_HEAP_AM_INTERNAL_H
 
 #include "index/btree.h"
-#include "spi/heap_am.h"
+#include "modalities/relational/heap_am.h"
 
 /*
  * heap AM 的私有状态（v1.2 步骤 0 拆出来）。
