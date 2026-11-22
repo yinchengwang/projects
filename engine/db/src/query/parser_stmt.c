@@ -43,6 +43,21 @@ int p_parse_type(Parser *p, u8 *out)
      */
     if (p_accept_kw(p, "REAL") || p_accept_kw(p, "DOUBLE") ||
         p_accept_kw(p, "FLOAT")) { *out = T_REAL; return true; }
+
+    /*
+     * JSON（v1.6）。
+     *
+     * 【为什么它是一个"类型名"而不是"模态特判"】
+     * 别的模态（blob / graph / vector / geo / ts）都有自己的存储，
+     * 它们的值不进关系表的列。文档模态是**寄生**的 —— 它就是
+     * heap 行里的一个变长列，所以它必须是一个真正的列类型。
+     *
+     * 这与 A7 审计清单的落点 ③ 一致：parser 只**认识类型名**，
+     * 不做任何语义判断（不解析路径、不判断索引、不认识 json_match）。
+     */
+    if (p_accept_kw(p, "JSON") || p_accept_kw(p, "JSONB"))
+        { *out = T_JSON; return true; }
+
     p_fail(p, "不支持的类型");
     return false;
 }

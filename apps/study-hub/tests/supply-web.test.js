@@ -97,6 +97,9 @@ const STATUS = {
   gaps: [
     { id: "db:demo", track: "database", kind: "card", title: "演示卡", missing: ["asserts", "statement"] },
   ],
+  // 缺口单元没有抽检资格，所以这里默认是空的；
+  // 要测抽检流程的用例自己造一份带 reviewable 的响应。
+  reviewable: [],
   warnings: [],
 }
 
@@ -153,25 +156,30 @@ test("供给页：纯本地模式也不白屏，只给中文提醒", async funct
   assert.ok(collectText(view).indexOf("还没连上 learning 仓") !== -1, collectText(view))
 })
 
-test("供给页：缺口清单里每个单元都有「通过」和「打回」两个入口", async function () {
+test("供给页：缺口清单里没有抽检按钮（缺口是只读的）", async function () {
   const posted = []
   stubFetch({ "/api/supply/status": STATUS }, posted)
   const view = mountView()
   await PAGES.supply.render(view)
   const buttons = findAllByTag(view, "button")
   const labels = buttons.map(function (b) { return b.textContent })
-  assert.ok(labels.indexOf("通过") !== -1, "要有通过按钮")
-  assert.ok(labels.indexOf("打回") !== -1, "要有打回按钮")
+  // 补齐设计 §6.2：缺口是「还没补齐」，没有抽检资格。
+  // STATUS 的 reviewable 是空数组，所以整页不该出现任何抽检按钮。
+  assert.ok(labels.indexOf("通过") === -1, "缺口清单里不该有通过按钮：" + labels.join("/"))
+  assert.ok(labels.indexOf("打回") === -1, "缺口清单里不该有打回按钮：" + labels.join("/"))
 })
 
-test("供给页：点「通过」会 POST 到 /api/supply/review/:id", async function () {
+test("供给页：点待抽检里的「通过」会 POST 到 /api/supply/review/:id", async function () {
   const posted = []
-  stubFetch({ "/api/supply/status": STATUS }, posted)
+  const withReviewable = Object.assign({}, STATUS, {
+    reviewable: [{ id: "db:demo", track: "database", kind: "card", title: "演示卡", status: "verified" }],
+  })
+  stubFetch({ "/api/supply/status": withReviewable }, posted)
   const view = mountView()
   await PAGES.supply.render(view)
   const buttons = findAllByTag(view, "button")
   const pass = buttons.find(function (b) { return b.textContent === "通过" })
-  assert.ok(pass, "要有通过按钮")
+  assert.ok(pass, "待抽检清单里要有通过按钮：" + buttons.map(function (b) { return b.textContent }).join("/"))
   pass.dispatch("click")
   await new Promise(function (resolve) { setTimeout(resolve, 0) })
   assert.strictEqual(posted.length, 1, "要点一次就发一次")

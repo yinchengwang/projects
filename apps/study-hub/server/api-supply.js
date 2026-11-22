@@ -35,7 +35,7 @@ function buildSupplyRoutes(ctx) {
       handler: async function (req, res, params, query) {
         const learning = c.learning || { root: null, ok: false, reason: "" }
         if (!learning.ok || !learning.root) {
-          c.sendJson(res, 200, { tracks: [], gaps: [], warnings: [LOCAL_WARNING] })
+          c.sendJson(res, 200, { tracks: [], gaps: [], reviewable: [], warnings: [LOCAL_WARNING] })
           return
         }
         const track = query.get("track") || ""
@@ -45,9 +45,29 @@ function buildSupplyRoutes(ctx) {
           contentRoots: Array.isArray(c.contentRoots) ? c.contentRoots : [],
           track: track,
         })
+        // 待抽检：只有已达标（verified）且还没被人看过的单元才配被抽检。
+        // 缺口（draft / todo / rejected）是「还没补齐」，不是抽检对象——
+        // 把它们混进抽检清单，会让人误以为点一下「通过」就能把内容补齐。
+        const allUnits = Array.isArray(c.units) ? c.units : []
+        const reviewable = allUnits
+          .filter(function (unit) {
+            if (track !== "" && String(unit.track || "") !== track) return false
+            return String(unit.status || "") === "verified" && unit.reviewed !== true
+          })
+          .slice(0, 50)
+          .map(function (unit) {
+            return {
+              id: String(unit.id || ""),
+              track: String(unit.track || ""),
+              kind: String(unit.kind || ""),
+              title: String(unit.title || ""),
+              status: String(unit.status || ""),
+            }
+          })
         c.sendJson(res, 200, {
           tracks: result.tracks,
           gaps: result.gaps,
+          reviewable: reviewable,
           warnings: result.warnings,
         })
       },

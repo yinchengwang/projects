@@ -45,6 +45,9 @@
 #include "modalities/relational/rel_opener.h"
 #include "spi/table_opener.h"
 
+/* db_json_init：注册文档模态的 json_extract / json_match 与 JSONB 渲染器 */
+#include "modalities/doc/json_func.h"
+
 /*
  * 缓冲池的默认页数。
  *
@@ -776,6 +779,17 @@ db_err db_open(const char *path, DB **out)
      */
     db->db.opener_catalog = &rel_table_opener;
     db->db.opener_virtual = &spi_table_opener;
+
+    /*
+     * 文档模态（寄生模态：无存储、无"打开"）：注册两个标量函数 + 渲染器。
+     *
+     * ⚠️ 守卫是必须的 —— 计划 C5.14 写"无条件调用"的前提是 `DB_HAS_DOC`
+     * 还不存在，但 W-B P1 已落地：`MM_FILES_doc` 关闭时会把 doc 源文件
+     * 整个裁掉 ⇒ 无条件调用就是链接失败（实测于 MM=relational）。
+     */
+#if DB_HAS_DOC
+    db_json_init();
+#endif
 
     *out = db;
     return DB_OK;
