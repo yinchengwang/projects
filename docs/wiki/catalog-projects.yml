@@ -1167,6 +1167,14 @@ projects:
     language: unknown
     stars: 0
     stars_as_of: 1970-01-01
+  - name: manticoresearch
+    model: search
+    tier: T3
+    repo: https://github.com/manticoresoftware/manticoresearch
+    license: GPL-3.0
+    language: C++
+    stars: 12097
+    stars_as_of: 2026-11-22
   - name: quickwit
     model: search
     tier: T3

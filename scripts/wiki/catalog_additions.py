@@ -12,7 +12,7 @@ model 口径沿用既有清单的前缀写法（ai/rag、ai/agent），本轮新
 （推理与训练框架，既有 97 条里完全没有）。
 
 待取数（取数失败，因此未写入 ADDITIONS）：
-  manticoresearch — manticoresoftware/manticoresearch  失败原因：IncompleteRead(4127 bytes read, 3258 more expected)
+  无（本轮候选全部取到）
 """
 
 ADDITIONS = [
@@ -23,7 +23,7 @@ ADDITIONS = [
         "repo": "https://github.com/Significant-Gravitas/AutoGPT",
         "license": "NOASSERTION",
         "language": "Python",
-        "stars": 188125,
+        "stars": 188127,
         "stars_as_of": "2026-11-22",
     },
     {
@@ -83,7 +83,7 @@ ADDITIONS = [
         "repo": "https://github.com/vllm-project/vllm",
         "license": "Apache-2.0",
         "language": "Python",
-        "stars": 97325,
+        "stars": 97327,
         "stars_as_of": "2026-11-22",
     },
     {
@@ -544,6 +544,16 @@ ADDITIONS = [
         "license": "Apache-2.0",
         "language": "C",
         "stars": 8272,
+        "stars_as_of": "2026-11-22",
+    },
+    {
+        "name": "manticoresearch",
+        "model": "search",
+        "tier": "T3",
+        "repo": "https://github.com/manticoresoftware/manticoresearch",
+        "license": "GPL-3.0",
+        "language": "C++",
+        "stars": 12097,
         "stars_as_of": "2026-11-22",
     },
     {
