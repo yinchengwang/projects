@@ -29,7 +29,7 @@
 #include "common/crc.h"
 #include "common/error.h"
 #include "common/types.h"
-#include "storage/blob.h"
+#include "modalities/blob/blob.h"
 #include "storage/page.h"
 #include "storage/pager.h"
 

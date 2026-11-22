@@ -2,7 +2,7 @@
 #define DB_SPI_BLOB_AM_H
 
 #include "spi/storage_am.h"
-#include "storage/blob.h"
+#include "modalities/blob/blob.h"
 
 /*
  * blob 模态的 SPI 适配（v0.9）。

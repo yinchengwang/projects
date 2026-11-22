@@ -53,7 +53,7 @@ MM_UP_doc        := DOC
 #
 # doc 目前只有底层 JSON/JSONB 实现，尚未接 db_doc.c / SQL 入口；
 # 仍然把它作为可裁剪 profile 纳入真相源，避免未来接入时再改 profile 机制。
-MM_FILES_blob   := src/storage/blob.c src/storage/blob_hdr.c src/spi/blob_am.c src/db_blob.c
+MM_FILES_blob   := $(wildcard src/modalities/blob/*.c) src/db_blob.c
 MM_FILES_graph  := $(wildcard src/modalities/graph/*.c) src/db_graph.c src/db_graph_walk.c
 MM_FILES_vector := $(wildcard src/modalities/vector/*.c) src/db_vec.c src/repl_vec.c
 MM_FILES_ft     := $(wildcard src/modalities/ft/*.c) src/db_ft.c src/db_ft_txn.c src/repl_ft.c

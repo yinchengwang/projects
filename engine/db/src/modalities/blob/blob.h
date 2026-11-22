@@ -5,7 +5,7 @@
 #include "common/error.h"
 #include "common/loghook.h"
 #include "common/types.h"
-#include "storage/blob_hdr.h"
+#include "modalities/blob/blob_hdr.h"
 #include "storage/pager.h"
 
 /*

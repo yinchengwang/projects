@@ -53,11 +53,11 @@
 #endif
 #include "query/exec.h"
 #if DB_HAS_BLOB
-#include "spi/blob_am.h"
+#include "modalities/blob/blob_am.h"
 #endif
 #include "spi/registry.h"
 #if DB_HAS_BLOB
-#include "storage/blob.h"
+#include "modalities/blob/blob.h"
 #endif
 #include "storage/pager.h"
 #include "txn/mvcc.h"

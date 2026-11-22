@@ -4,8 +4,8 @@
  * 设计说明见 blob.h。这里只讲实现上的关键点。
  */
 
-#include "storage/blob.h"
-#include "storage/blob_hdr.h"
+#include "modalities/blob/blob.h"
+#include "modalities/blob/blob_hdr.h"
 
 #include <stdlib.h>
 #include <string.h>

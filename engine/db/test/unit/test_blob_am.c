@@ -24,8 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "spi/blob_am.h"
-#include "storage/blob.h"
+#include "modalities/blob/blob_am.h"
+#include "modalities/blob/blob.h"
 #include "storage/pager.h"
 
 static int failures = 0;

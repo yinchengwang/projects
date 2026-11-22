@@ -4,13 +4,13 @@
  * 设计说明见 blob_hdr.h。
  */
 
-#include "storage/blob_hdr.h"
+#include "modalities/blob/blob_hdr.h"
 
 #include <string.h>
 
 #include "common/crc.h"
 #include "common/error.h"
-#include "storage/blob.h"
+#include "modalities/blob/blob.h"
 
 /* 对象头里除了 crc 之外的所有字节都要参与校验 */
 static u32 blob_hdr_crc(const u8 *hdr)

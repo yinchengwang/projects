@@ -4,7 +4,7 @@
  * 设计说明见 spi/blob_am.h。
  */
 
-#include "spi/blob_am.h"
+#include "modalities/blob/blob_am.h"
 
 #include <stdlib.h>
 #include <string.h>
