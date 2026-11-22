@@ -1,7 +1,7 @@
 # PostgreSQL Wiki P2 A 组试点报告
 
 **状态：** A 组正文、机械验收与抽样深度审查完成；尚未提交。
-**源码基线：** `postgres@9b5d4e3331753b3399e84965093109cac8f364bf`（2026-11-21 shallow clone）  
+**源码基线：** `postgres@9b5d4e3331753b3399e84965093109cac8f364bf`（2026-11-21 shallow clone）
 **P2a/P2b 分支：** P2a 已合并 projects/main，合并提交 `058673f6d`；umbrella gitlink 已推到 `0ba1686`。  
 **试点范围：** 新机制清单 A 组 20 页；总机制清单为 151 项（12 组），替代 P1 的按文件生成 332 页。
 
@@ -29,7 +29,7 @@
 | W4 | a16–a20 | FSM、BufFile、ProcSignal、并行 DSM、Shared Invalidation 传输 | 5 页 |
 | **合计** | **a01–a20** | **A-存储与 IPC** | **20 页** |
 
-页面路径、slug、标题、refs 全部与 `_manifest.yml` 一致。Writer 分别报告了读取的源码文件与所用外链；实际总墙钟由各分片记录的起止时间存在近似值，故不伪造精确端到端分钟数。四分片大致在 21:52–22:05（Asia/Shanghai）完成。每页用词和源码落点由 reviewer/主代理再检查。
+页面路径、slug、标题、refs 全部与 `_manifest.yml` 一致。Writer 分别报告了读取的源码文件与所用外链；各分片时长约为 W1 14 分钟、W2 7 分钟、W3 7 分钟、W4 10 分钟。W1 的报告终点约为 22:07，晚于其他分片约 22:05 的结束点；因此不能把 21:52–22:05 的 13 分钟窗口称为所有 writer 的精确总墙钟。本报告仅把 13 分钟用于粗略规划基线，不视作精确实测端到端吞吐。
 
 ## 3. 机械门禁与规格测试
 
@@ -71,14 +71,16 @@ python -m unittest test_wiki_schema test_wiki_frontmatter test_wiki_lint \
 5. **来源质量**：至少两个权威且与论点相关的外链，URL 可达。
 6. **RAG 切块**：章节可独立理解，边界/事实不依赖未说明上下文。
 
-| 文件 | 初审 | 发现 | 修订 |
+按固定 seed 抽样的 5 页中，a19 的 `InitializeParallelDSM` 源码显示：DSM 不可用或没有请求 worker 时，初始化路径会使用本地内存建立 leader 基础 TOC，并把 worker 数设为零；`LaunchParallelWorkers` 在 worker 数为零时跳过。它不保证所有调用方需要的共享块都能转成单进程状态，也不替 caller 决定串行回退。抽样评分因此将其“实现映射/边界”记为满足，但将“取舍”项保留为 0：该页未用源码或权威资料充分证明其具体 caller 的 fallback 代价。最终计分 **29/30**，不宣称 30/30。
+
+| 文件 | 初审 | 发现 | 修订/最终 |
 |---|---:|---|---:|
-| a19-parallel-query-dsm.md | 6/6 | DSM 退化路径措辞可能被理解为仍以本地状态并行；明确为 worker=0、不启动 worker、调用方走非并行路径。 | 6/6 |
-| a17-temporary-buffiles.md | 5/6 | 两条参考外链均与 BufFile 不直接相关；更换为 temp_file_limit 配置文档与 BufFile 源码；明确普通临时文件 vs FileSet 受控共享生命周期。 | 6/6 |
+| a19-parallel-query-dsm.md | 6/6 | DSM/worker 不可用时的本地 TOC 只保障 leader 基础设施状态；caller fallback 不由通用设施决定。 | 5/6（取舍未充分证实） |
+| a17-temporary-buffiles.md | 5/6 | 两条参考外链原不相关；更换为 `temp_file_limit` 文档与 BufFile 源码；明确普通临时文件 vs FileSet 受控共享生命周期。 | 6/6 |
 | a08-smgr-md-storage.md | 6/6 | 无阻塞问题；实现与边界复核通过。 | 6/6 |
-| a13-dynamic-shared-memory.md | 6/6 | 引用计数初值/活动区间原文过度确定；改成源码内部控制基准限定。 | 6/6 |
-| a02-local-buffer-pool.md | 4/6 | 设计取舍扩成 3 项，引用改为 temp_buffers + localbuf 官方源码。 | 6/6 |
-| **合计** | **27/30** | 5 处 Major/Minor 反馈全部处理 | **30/30** |
+| a13-dynamic-shared-memory.md | 6/6 | 引用计数初值/活动区间原文过度确定；限定为源码控制表内部基准，不解释为真实进程引用数。 | 6/6 |
+| a02-local-buffer-pool.md | 4/6 | 设计取舍扩成 3 项，引用改为 `temp_buffers` + localbuf 官方源码。 | 6/6 |
+| **合计** | **27/30** | 4 篇 6/6；a19 的取舍项因缺少具体 caller 证据保留 0 | **29/30** |
 
 另有全组审核发现的非抽样问题并已修：
 
@@ -88,11 +90,11 @@ python -m unittest test_wiki_schema test_wiki_frontmatter test_wiki_lint \
 - a20-shared-invalidation.md：将“所有接收者”限缩成参与回收计算的有效接收者，并说明 `sendOnly`/reset 槽处理。
 - a01-buffer-pool.md：区分固定帧数与可替换页身份；把读 I/O 描述扩展为同步/批量路径；限定 WAL-before-data 只适用于永久关系；将 `StrategySyncStart` 限定为 bgwriter 的扫描起点/分配计数。
 - a12-shared-memory-allocation.md：将旧式 `ShmemInitStruct` 容量预留表述与新 request/init API 区分开。
-- a07/a01 的无效或错配 URL 已修正；`a07` 锁相关外链须指向 `explicit-locking.html` 而不是不存在的 `locking.html`。
+- a07/a01 的无效或错配 URL 已修正；`a07` 锁相关外链指向有效的 `explicit-locking.html`，不存在的旧 `locking.html` 已移除。
 
 ## 5. 试点成本与扩容建议
 
-实际 provider token usage 未暴露，**token/费用不可观测**，不做估算冒充实测。四 writer 分片记录的工作时长约为 W1 14 分钟、W2 7 分钟、W3 7 分钟（结束时间近似）、W4 10 分钟；四路并行的试点墙钟约 13 分钟（采样区间 21:52–22:05，个别报告开始时间存在近似值）。20 页/约 13 分钟仅是本轮粗估吞吐，不作为恒定产能承诺。
+实际 provider token usage 未暴露，**token/费用不可观测**，不做估算冒充实测。四 writer 分片记录的工作时长约为 W1 14 分钟、W2 7 分钟、W3 7 分钟（结束时间近似）、W4 10 分钟。若 W1 终点按报告的约 22:07 计算，最早开始至最晚结束约 14 分钟；因各报告的时间采样精度不同，本报告不把该区间当精确墙钟。为规划粗估，以下仍以约 13 分钟的名义基线作理想线性估算，非本轮精确实测吞吐。
 
 对剩余 131 页作线性工程估算：以 20 页/13 分钟推得约 85 分钟串行有效写作时间；4 并发约 22 分钟，8 并发理想约 11 分钟，16 并发理想约 6 分钟。估算未计跨主题学习、均衡分片、审阅和返工，实际 wall-clock 会更长。下一轮先保持 4 个不重叠分片，根据一次通过率、返工页数和 wall-clock 再决定是否加至 8；不建议直接开 16。
 

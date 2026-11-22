@@ -45,7 +45,7 @@ PGPROC 槽来自共享进程数组及其辅助结构，容量规划和槽分配�
 
 ## 参考
 
-- [PostgreSQL 官方文档：锁管理](https://www.postgresql.org/docs/current/locking.html)
+- [PostgreSQL 官方文档：显式锁定](https://www.postgresql.org/docs/current/explicit-locking.html)
 - [PostgreSQL 官方文档：监控锁等待](https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-LOCKS-VIEW)
 - [PostgreSQL 源码：proc.c](https://github.com/postgres/postgres/blob/master/src/backend/storage/lmgr/proc.c)
 
