@@ -101,7 +101,7 @@ void val_copy(DbValue *dst, const DbValue *src)
     dst->ext_fn = src->ext_fn;
     dst->ext_ctx = src->ext_ctx;
 
-    if (src->type == T_TEXT) {
+    if (src->type == T_TEXT || (src->type == T_JSON && !src->external)) {
         u16 n = src->len;
         if (n >= VAL_TEXT_MAX)
             n = VAL_TEXT_MAX - 1;
@@ -114,13 +114,34 @@ void val_copy(DbValue *dst, const DbValue *src)
 /*
  * 造一个外部值（v0.9）。
  *
- * 内容不在这里，只记"去哪儿取"。
+ * 内容不在这里，只记「去哪儿取」。type 保持 T_TEXT —— 这是既有 blob/vector
+ * 外部值的契约。T_JSON 的外部值由 val_external_json() 创建，二者共享
+ * DetoastFn 机制，但 type 不混淆。
  */
 void val_external_text(DbValue *v, u64 key, u64 off,
                        DetoastFn fn, void *ctx)
 {
     val_reset(v);
     v->type = T_TEXT;
+    v->external = true;
+    v->ext_key = key;
+    v->ext_off = off;
+    v->ext_fn = fn;
+    v->ext_ctx = ctx;
+}
+
+/*
+ * 造一个外部 JSONB 值。
+ *
+ * `key/off/fn/ctx` 与普通外部值相同，但 type 固定为 T_JSON ——
+ * 这样调用方可以在 detoast 后按 JSONB 解析，而不会把二进制字节
+ * 当成 UTF-8 文本输出。
+ */
+void val_external_json(DbValue *v, u64 key, u64 off,
+                       DetoastFn fn, void *ctx)
+{
+    val_reset(v);
+    v->type = T_JSON;
     v->external = true;
     v->ext_key = key;
     v->ext_off = off;
@@ -248,6 +269,13 @@ int val_cmp(const DbValue *a, const DbValue *b, bool *is_null, int *err)
     bool a_text = (a->type == T_TEXT);
     bool b_text = (b->type == T_TEXT);
 
+    /* JSONB 是不透明二进制，不定义通用排序/相等语义。 */
+    if (a->type == T_JSON || b->type == T_JSON) {
+        if (err)
+            *err = E_NOTSUP;
+        return 0;
+    }
+
     if (a_text && b_text) {
         /*
          * 外部值必须**物化之后**再比。
@@ -339,6 +367,12 @@ int val_cmp(const DbValue *a, const DbValue *b, bool *is_null, int *err)
     return 0;
 }
 
+
+/*
+ * 渲染器从 value_json.c 取 —— 值层提供机制，模态提供实现。
+ * 详见 value.h 的 JsonRenderFn 契约与 storage/value_json.c 的文件头。
+ */
+
 int val_to_str(const DbValue *v, char *buf, int cap)
 {
     int n;
@@ -365,6 +399,69 @@ int val_to_str(const DbValue *v, char *buf, int cap)
         }
         n = snprintf(buf, (size_t)cap, "%.*s", (int)len, tmp);
         free(tmp);
+    } else if (v->type == T_JSON) {
+        /*
+         * JSONB 是二进制值，不是可打印文本。
+         *
+         * 两条路：
+         *   1. 文档模态注册过渲染器（db_json_init 里注册）⇒ 走它，出合法 JSON；
+         *   2. 没注册 ⇒ **绝不**把原始字节当 C 字符串输出
+         *      （内嵌 NUL 会截断、控制字符会乱码，结果看起来还像 JSON）。
+         *      给一个明确的诊断标记，让人去调 db_json_decode。
+         *
+         * ⚠️ 内联 JSONB 与外部 JSONB 都要能渲染。前者字节就在 s[]，
+         *    后者要先物化成连续缓冲（物化出的 buf 由这里 free）。
+         */
+        int rc = E_INVAL;
+        u32 need = 0;
+        u8 *tmp = NULL;
+        u32 blen = 0;
+        const u8 *bytes = NULL;
+        JsonRenderFn render = val_json_render();
+
+        if (!render) {
+            n = snprintf(buf, (size_t)cap, "<JSONB: 请使用 db_json_decode 解码>");
+            goto json_done;
+        }
+
+        if (v->external) {
+            rc = val_detoast(v, &tmp, &blen);
+            if (rc != OK) {
+                n = snprintf(buf, (size_t)cap, "<JSONB 读取失败>");
+                goto json_done;
+            }
+            bytes = tmp;
+        } else {
+            bytes = (const u8 *)v->s;
+            blen = v->len;
+        }
+
+        rc = render(bytes, blen, NULL, 0, &need);
+        if (rc != E_NOSPACE || need == 0 || (int)need >= cap) {
+            n = snprintf(buf, (size_t)cap, "<JSONB 渲染失败>");
+            goto json_done;
+        }
+
+        {
+            u32 got = 0;
+            rc = render(bytes, blen, buf, (u32)cap - 1u, &got);
+            if (rc != OK) {
+                n = snprintf(buf, (size_t)cap, "<JSONB 渲染失败>");
+                goto json_done;
+            }
+            n = (int)got;
+        }
+
+    json_done:
+        free(tmp);
+        /*
+         * 渲染器只负责写 cap 字节，**不写 NUL 终止符**（它的契约与
+         * jsonb_render / DetoastFn 同一口径：按长度交付，不做 C 字符串）。
+         * 而 val_to_str 的调用方（结果集、REPL）要的是 C 字符串 ⇒
+         * 终止符必须在这里补 —— 少写这一行，输出就会带上后面残留的垃圾。
+         */
+        if (n >= 0 && n < cap)
+            buf[n] = '\0';
     } else if (v->type == T_TEXT) {
         n = snprintf(buf, (size_t)cap, "%.*s", (int)v->len, v->s);
     } else if (v->type == T_REAL) {
@@ -406,19 +503,100 @@ int val_to_str(const DbValue *v, char *buf, int cap)
     return n;
 }
 
+
 /* Value[]（指向记录内部）→ DbValue[]（自己持有内容） */
+/*
+ * 值层的通用「内存外部值」读者。
+ *
+ * 【为什么它在值层而不是 doc 模态】
+ * 外部值是**通用机制**（blob 按帧读、vector 整体读、大 JSON 按页链读）。
+ * "内容就在这块内存里"是最基础的一种 —— 每个层都可能用到，而且它
+ * 完全不需要知道载荷是文本还是 JSONB 字节。
+ * 放到模态里会让 storage 反过来依赖 modalities（L1→L4，分层门禁直接红）。
+ *
+ * 【参数口径】
+ *   ctx → 内存首字节；key = 首字节地址（重复给一次，便于只看 key 的调用方）；
+ *   off = 这段内容有多少字节。
+ */
+int val_mem_detoast(void *ctx, u64 key, u64 off,
+                    u8 *buf, u16 cap, u16 *len_out)
+{
+    (void)key;
+    const u8 *src = (const u8 *)ctx;
+    u16 len = (u16)off;
+
+    if (!len_out)
+        return E_INVAL;
+    *len_out = len;
+    if (!src && len)
+        return E_INVAL;
+    if (!buf || cap < len)
+        return E_NOSPACE;
+    if (len)
+        memcpy(buf, src, len);
+    return OK;
+}
+
+/*
+ * 记录变长列 → DbValue。
+ *
+ * `record.c` 已经把这列字节写进 tuple buffer（小文档内联）。
+ *
+ * 【为什么 256..2048 要走外部值】
+ * DbValue 里只有 255 字节内联空间；把更长的 JSONB 拷进 s[] 会截断 ——
+ * 截断 = 静默给错答案。这里用通用外部值描述来源（指向记录缓冲），
+ * 需要时再物化，语义上等同于"不截断"。
+ * ⚠️ 记录缓冲的生命周期：一次 scan/decode/求值内有效。跨扫描保存的
+ * JSON 值必须先复制，或重新绑定到稳定的页链句柄（C5.3b 负责接线）。
+ */
+static int dbvalue_from_record_var(u8 col_type, const Value *src,
+                                   DbValue *out)
+{
+    if (src->is_null) {
+        val_null(out);
+        return OK;
+    }
+
+    if (col_type == T_TEXT) {
+        val_text(out, (const char *)src->u.text.p, src->u.text.n);
+        return OK;
+    }
+
+    if (col_type == T_JSON) {
+        const u8 *bytes = src->u.text.p;
+        u32 len = src->u.text.n;
+        if (len <= VAL_INLINE_MAX) {
+            val_null(out);
+            out->is_null = false;
+            out->type = T_JSON;
+            out->len = (u16)len;
+            if (len)
+                memcpy(out->s, bytes, len);
+            return OK;
+        }
+
+        val_external_json(out, (u64)(uintptr_t)bytes, len,
+                          val_mem_detoast, (void *)bytes);
+        return OK;
+    }
+    return E_INVAL;
+}
+
 static int values_to_dbvalues(const ColDesc *cols, int ncols,
                               const Value *tmp, DbValue *out)
 {
     for (int i = 0; i < ncols; i++) {
+        if (col_is_var(cols[i].type)) {
+            int rc = dbvalue_from_record_var(cols[i].type, &tmp[i], &out[i]);
+            if (rc != OK)
+                return rc;
+            continue;
+        }
         if (tmp[i].is_null) {
             val_null(&out[i]);
             continue;
         }
         switch (cols[i].type) {
-        case T_TEXT:
-            val_text(&out[i], (const char *)tmp[i].u.text.p, tmp[i].u.text.n);
-            break;
         case T_BOOL:
             val_bool(&out[i], tmp[i].u.b);
             break;
@@ -471,12 +649,24 @@ int val_to_record(const ColDesc *cols, int ncols, const DbValue *vals,
                   u8 *buf, u16 cap, u16 *out_len)
 {
     Value tmp[REC_MAX_COLS];
+    /* 外部 JSON 需要先物化成连续字节；物化出的缓冲要在 rec_encode 之后才释放 */
+    u8 *ext_bufs[REC_MAX_COLS];
+    bool ext_owned[REC_MAX_COLS];
+    int rc;
 
     if (ncols > REC_MAX_COLS)
         return E_INVAL;
 
+    memset(ext_bufs, 0, sizeof(ext_bufs));
+    memset(ext_owned, 0, sizeof(ext_owned));
+    /*
+     * 整个数组一次清零：rec_encode 拿到的是 `tmp`（REC_MAX_COLS 项），
+     * 而循环只填前 ncols 项 —— 只清前 ncols 项会让编译器认为
+     * 后面那些项未初始化（-Wmaybe-uninitialized）。
+     */
+    memset(tmp, 0, sizeof(tmp));
+
     for (int i = 0; i < ncols; i++) {
-        memset(&tmp[i], 0, sizeof(tmp[i]));
         if (vals[i].is_null) {
             tmp[i].is_null = true;
             continue;
@@ -485,6 +675,33 @@ int val_to_record(const ColDesc *cols, int ncols, const DbValue *vals,
         case T_TEXT:
             tmp[i].u.text.p = (const u8 *)vals[i].s;
             tmp[i].u.text.n = vals[i].len;
+            break;
+        case T_JSON:
+            /*
+             * T_JSON 与 T_TEXT 共用变长区，区别只在 cols[i].type。
+             *
+             * 外部 JSON（内部 inline 装不下的）必须先物化成连续字节，
+             * 否则写进 record 的会是半截内容 —— 静默丢数据。
+             */
+            if (vals[i].external) {
+                u8 *bytes = NULL;
+                u32 blen = 0;
+                rc = val_detoast(&vals[i], &bytes, &blen);
+                if (rc != OK) {
+                    for (int k = 0; k < i; k++) {
+                        if (ext_owned[k])
+                            free(ext_bufs[k]);
+                    }
+                    return rc;
+                }
+                ext_bufs[i] = bytes;
+                ext_owned[i] = true;
+                tmp[i].u.text.p = bytes;
+                tmp[i].u.text.n = (u16)blen;
+            } else {
+                tmp[i].u.text.p = (const u8 *)vals[i].s;
+                tmp[i].u.text.n = vals[i].len;
+            }
             break;
         case T_BOOL:
             tmp[i].u.b = vals[i].i != 0;
@@ -501,7 +718,14 @@ int val_to_record(const ColDesc *cols, int ncols, const DbValue *vals,
             break;
         }
     }
-    return rec_encode(cols, ncols, tmp, buf, cap, out_len);
+
+    rc = rec_encode(cols, ncols, tmp, buf, cap, out_len);
+
+    for (int i = 0; i < ncols; i++) {
+        if (ext_owned[i])
+            free(ext_bufs[i]);
+    }
+    return rc;
 }
 
 /*

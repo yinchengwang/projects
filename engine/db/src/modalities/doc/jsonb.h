@@ -172,6 +172,33 @@ int jsonb_arr_get(const u8 *buf, u32 len, u32 idx, const u8 **val, u32 *val_len)
 /* 取一个值的 tag（buf/len 指向一个值的完整编码） */
 int jsonb_tag_of(const u8 *buf, u32 len, JsonbTag *tag);
 
+/* ---------------- 渲染（JSONB → JSON 文本） ====================
+ *
+ * 【为什么要它】
+ * JSONB 是二进制。用户 `SELECT doc FROM t` 时要是直接输出原始字节，
+ * 会在内嵌 NUL、控制字符、非文本 tag 上截断或打印乱码。
+ * 值层（`storage/value.c` 的 T_JSON 分支）明确拒绝渲染原始字节，
+ * 指向的正是这里。
+ *
+ * 【调用口径：与 DetoastFn 一致】
+ *   out == NULL       ⇒ 只算长度，写进 *out_len，返回 E_NOSPACE
+ *   out != NULL       ⇒ 按 cap 写进 out，返回 OK
+ *   cap 不够          ⇒ 返回 E_NOSPACE，且**一个字节都不写**
+ *
+ * ⚠️ **缓冲不足时不许写半个文本** —— 半个 JSON 看起来像合法 JSON，
+ *    那比明确报错危险得多。
+ *
+ * 【输出形态（A1「往返全等」的口径）】
+ *   - 整数原样：INT32 / INT64 出整数字面量，**绝不**走浮点格式
+ *   - float64：保证 double 往返无损（1.5 → "1.5"，1.0 → "1.0"）
+ *   - 字符串：引号/反斜杠/控制字符转义；**非 ASCII 字节直接输出**
+ *             （不转 \uXXXX，否则中文文档读出来的与输入不一致）
+ *   - 对象键按 JSONB 内部的排序输出（不是原始输入顺序）
+ *
+ * 实现见 jsonb_render.c（独立文件：jsonb.c 已接近 800 行硬上限）。
+ */
+int jsonb_render(const u8 *buf, u32 len, char *out, u32 cap, u32 *out_len);
+
 #ifdef __cplusplus
 }
 #endif

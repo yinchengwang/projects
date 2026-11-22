@@ -84,7 +84,14 @@ extern "C" {
 /* 页头大小 */
 #define JSON_OVF_HDR 8u
 
-/* 内联阈值：超过这个大小就外置 */
+/*
+ * 内联阈值：记录内超过这个大小就写入 PT_JSON_OVF 页链。
+ *
+ * ⚠️ 这个 2048 与**值层**的内联上限（VAL_INLINE_MAX = 255，见
+ *    storage/value.h）不是同一个数 —— 两者之间的文档在 heap 记录里
+ *    内联，但在运行时值中用指向当前记录缓冲的通用外部值表示，
+ *    因而不会被文本路径截断。两个阈值服务两个不同的目的，别合并。
+ */
 #ifndef JSON_INLINE_MAX
 #define JSON_INLINE_MAX 2048u
 #endif

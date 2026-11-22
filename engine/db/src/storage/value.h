@@ -40,9 +40,29 @@
  * `SELECT blob_id, frame_no FROM blob_frames` 不该读帧页，
  * `SELECT data FROM blob_frames` 才读。
  * 这靠的就是"外部值在过滤/投影的中间过程不物化"。
+ *
+ * 【T_JSON：寄生文档模态的表示】
+ *
+ * `T_JSON` 的载荷是 **JSONB 字节**（不是文本）。根据 `len`：
+ *   - `len <= VAL_INLINE_MAX`（255）：DbValue.s[] 内联 JSONB 字节；
+ *   - `len > VAL_INLINE_MAX`：external 句柄指向本次扫描仍有效的记录缓冲，
+ *     ext_fn 仅在需要物化时从这块内存拷贝；
+ *   - 超过 `JSON_INLINE_MAX`（2048）的文档由 doc 模态存到 `PT_JSON_OVF`
+ *     页链，record 里只存页链 key，再由 `json_ovf_detoast` 读取。
+ *
+ * ⚠️ `value.h` 不 include `modalities/doc/json_ovf.h` —— 这是 L1→L4 反向依赖。
+ * 页链写入 / 读取由 doc 模态的 record 适配层负责；值层只知道通用 DetoastFn。
  */
 
+/*
+ * 运行时内联文本 / 小 JSONB 的字节上限。
+ *
+ * DbValue 本身有 256 字节的 s[]，但要留一个 NUL 终止符，
+ * 因而实际最多内联 255 字节。JSONB 是二进制，不需要 NUL；
+ * 仍沿用同一上限，避免 DbValue 布局变化。
+ */
 #define VAL_TEXT_MAX 256
+#define VAL_INLINE_MAX (VAL_TEXT_MAX - 1)
 
 /*
  * ================= v1.1：REAL 类型 =================
@@ -113,6 +133,88 @@ void val_copy(DbValue *dst, const DbValue *src);
  */
 void val_external_text(DbValue *v, u64 key, u64 off,
                        DetoastFn fn, void *ctx);
+
+/*
+ * 造一个外部 JSONB 值（type = T_JSON，与文本外部值保持类型区别）。
+ *
+ * 【谁调用】
+ *   - 256..2048B 的 JSON：heap record 里是内联字节，ext_key/ext_off 指向
+ *     本次查询仍有效的 record buffer（使用限制见后文 C5.3b 接线记录）；
+ *   - >2048B 的 JSON：doc 模态用 PT_JSON_OVF 页链，ext_fn = json_ovf_detoast。
+ *
+ * value 层只收通用句柄和 DetoastFn，不依赖 json_ovf 或任何模态头。
+ */
+void val_external_json(DbValue *v, u64 key, u64 off,
+                       DetoastFn fn, void *ctx);
+
+/*
+ * 通用「内存外部值」读者：内容就在 ctx 指向的那块内存里。
+ *
+ * ctx = 内存首字节；off = 这段内容有多少字节。
+ * 契约与其它 DetoastFn 一致：先问长度（返回 E_NOSPACE 并填 len_out），
+ * 再按 cap 读内容。
+ *
+ * 【为什么它属于值层】
+ * "内容在内存里"不携带任何模态知识；而 blob / vector / 大 JSON 各自
+ * 的外部值机制都建立在同一个 DetoastFn 契约上。
+ */
+int  val_mem_detoast(void *ctx, u64 key, u64 off,
+                     u8 *buf, u16 cap, u16 *len_out);
+
+/*
+ * ==================== JSONB 渲染器注册（v1.6） ====================
+ *
+ * 【问题】
+ * `val_to_str` 要把 DbValue 转成可打印文本。T_TEXT 直接输出 s[]；
+ * 但 T_JSON 的载荷是 **JSONB 二进制**，把它当 C 字符串输出会在
+ * 内嵌 NUL / 控制字符 / 非文本 tag 上截断或打印乱码。
+ *
+ * 【为什么用注册而不是让值层直接依赖文档模态】
+ * 值层是 L1，文档模态是 L4。`storage/` include `modalities/doc/` 是
+ * L1→L4 反向依赖 —— 分层门禁（tools/check_deps.sh）会直接红。
+ * 所以值层只持一个**函数指针**，"怎么渲染 JSONB"由模态在初始化时注册
+ * 进来。这与通用函数表（val_func_register）同一条纪律：值层提供机制，
+ * 模态提供实现，两者通过一个很窄的契约相连。
+ *
+ * 【签名与 jsonb_render 完全相同】
+ * 刻意不做适配层：文档模态注册时直接把 jsonb_render 传进来，
+ * 中间不出现第二份语义（"一个语义只能有一个主人"）。
+ *
+ * 【调用口径】
+ *   out == NULL  ⇒ 只报长度（写 *out_len），返回 E_NOSPACE
+ *   out != NULL  ⇒ 按 cap 写；装不下 ⇒ E_NOSPACE 且**一个字节都不写**
+ *
+ * 【生命周期】
+ * 注册发生在 `db_open` 里（db_json_init 调），之后只读不写 ⇒
+ * 并发读安全。未注册时 val_to_str 输出明确标记，绝不吐原始字节。
+ */
+typedef int (*JsonRenderFn)(const u8 *buf, u32 len, char *out, u32 cap,
+                            u32 *out_len);
+
+/*
+ * 注册 JSONB 渲染器。同名重复注册（即已有实现）返回 E_INVAL ——
+ * 覆盖是静默换行为，与 val_func_register 同一取舍。
+ */
+int  val_set_json_renderer(JsonRenderFn fn);
+
+/*
+ * 查询当前是否已注册 / 已注册的是不是 fn。
+ *
+ * fn == NULL 时回答"目前有没有渲染器"；给具体 fn 时回答"是不是它"。
+ * （测试与诊断用；生产路径不需要它。）
+ */
+bool val_json_renderer_is(JsonRenderFn fn);
+
+/*
+ * 取出当前渲染器（未注册返回 NULL）。
+ *
+ * 实现见 `storage/value_json.c` —— 它单独一个文件，因为 `value.c`
+ * 已经接近 800 行上限（值操作 + 记录编解码 + 函数表都在里面）。
+ *
+ * ⚠️ 这个访问器是给 `val_to_str` 用的；调用方拿到之后**不要缓存**，
+ *    每次用之前现取（注册只发生一次，代价可以忽略）。
+ */
+JsonRenderFn val_json_render(void);
 
 /*
  * 物化：把值的内容读进新分配的缓冲。
