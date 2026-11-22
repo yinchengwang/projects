@@ -1,0 +1,2329 @@
+---
+project: postgres
+schema_version: 1
+pages:
+  - feature: bufmgr
+    feature_group: A-存储基础
+    title: Buffer Pool 主体
+    page_file: a01-bufmgr.md
+    refs:
+      - path: src/backend/storage/buffer/bufmgr.c
+        symbols: [PrefetchSharedBuffer, PrefetchBuffer, ReadRecentBuffer]
+  - feature: procarray
+    feature_group: A-存储基础
+    title: 进程数组与快照
+    page_file: a02-procarray.md
+    refs:
+      - path: src/backend/storage/ipc/procarray.c
+        symbols: [ProcArrayAdd, ProcArrayRemove, ProcArrayEndTransaction]
+  - feature: predicate
+    feature_group: A-存储基础
+    title: SSI 可串行化隔离
+    page_file: a03-predicate.md
+    refs:
+      - path: src/backend/storage/lmgr/predicate.c
+        symbols: [check_serial_buffers, CheckPointPredicate, GetPredicateLockStatusData]
+  - feature: lock
+    feature_group: A-存储基础
+    title: 常规锁系统
+    page_file: a04-lock.md
+    refs:
+      - path: src/backend/storage/lmgr/lock.c
+        symbols: [InitLockManagerAccess, GetLocksMethodTable, GetLockTagsMethodTable]
+  - feature: fd
+    feature_group: A-存储基础
+    title: 虚拟文件描述符与文件句柄
+    page_file: a05-fd.md
+    refs:
+      - path: src/backend/storage/file/fd.c
+        symbols: [pg_fsync, pg_fsync_no_writethrough, pg_fsync_writethrough]
+  - feature: proc
+    feature_group: A-存储基础
+    title: PGPROC 与进程槽
+    page_file: a06-proc.md
+    refs:
+      - path: src/backend/storage/lmgr/proc.c
+        symbols: [ProcGlobalSemas, InitProcess, InitProcessPhase2]
+  - feature: md
+    feature_group: A-存储基础
+    title: 段文件与表空间布局
+    page_file: a07-md.md
+    refs:
+      - path: src/backend/storage/smgr/md.c
+        symbols: [mdinit, mdexists, mdcreate]
+  - feature: waiteventset
+    feature_group: A-存储基础
+    title: 等待事件集
+    page_file: a08-waiteventset.md
+    refs:
+      - path: src/backend/storage/ipc/waiteventset.c
+        symbols: [InitializeWaitEventSupport, CreateWaitEventSet, FreeWaitEventSet]
+  - feature: lwlock
+    feature_group: A-存储基础
+    title: 轻量锁 LWLock
+    page_file: a09-lwlock.md
+    refs:
+      - path: src/backend/storage/lmgr/lwlock.c
+        symbols: [InitLWLockAccess, GetNamedLWLockTranche, LWLockNewTrancheId]
+  - feature: read-stream
+    feature_group: A-存储基础
+    title: 预读流
+    page_file: a10-read-stream.md
+    refs:
+      - path: src/backend/storage/aio/read_stream.c
+        symbols: [block_range_read_stream_cb, read_stream_enable_stats, read_stream_begin_impl]
+  - feature: standby
+    feature_group: A-存储基础
+    title: standby 模块
+    page_file: a11-standby.md
+    refs:
+      - path: src/backend/storage/ipc/standby.c
+        symbols: [InitRecoveryTransactionEnvironment, ShutdownRecoveryTransactionEnvironment, LogRecoveryConflict]
+  - feature: bufpage
+    feature_group: A-存储基础
+    title: bufpage 模块
+    page_file: a12-bufpage.md
+    refs:
+      - path: src/backend/storage/page/bufpage.c
+        symbols: [PageInit, PageIsVerified, PageAddItemExtended]
+  - feature: shmem
+    feature_group: A-存储基础
+    title: 共享内存段管理
+    page_file: a13-shmem.md
+    refs:
+      - path: src/backend/storage/ipc/shmem.c
+        symbols: [ShmemRequestStructWithOpts, ShmemRequestInternal, ShmemGetRequestedSize]
+  - feature: dsm
+    feature_group: A-存储基础
+    title: 动态共享内存
+    page_file: a14-dsm.md
+    refs:
+      - path: src/backend/storage/ipc/dsm.c
+        symbols: [dsm_postmaster_startup, dsm_cleanup_using_control_segment, dsm_set_control_handle]
+  - feature: shm-mq
+    feature_group: A-存储基础
+    title: 共享消息队列
+    page_file: a15-shm-mq.md
+    refs:
+      - path: src/backend/storage/ipc/shm_mq.c
+        symbols: [shm_mq_create, shm_mq_set_receiver, shm_mq_set_sender]
+  - feature: aio
+    feature_group: A-存储基础
+    title: 异步 IO 提交
+    page_file: a16-aio.md
+    refs:
+      - path: src/backend/storage/aio/aio.c
+        symbols: [pgaio_io_acquire, pgaio_io_acquire_nb, pgaio_io_release]
+  - feature: deadlock
+    feature_group: A-存储基础
+    title: 死锁检测
+    page_file: a17-deadlock.md
+    refs:
+      - path: src/backend/storage/lmgr/deadlock.c
+        symbols: [InitDeadLockChecking, DeadLockCheck, GetBlockingAutoVacuumPgproc]
+  - feature: smgr
+    feature_group: A-存储基础
+    title: 存储管理器抽象
+    page_file: a18-smgr.md
+    refs:
+      - path: src/backend/storage/smgr/smgr.c
+        symbols: [smgrinit, smgropen, smgrpin]
+  - feature: lmgr
+    feature_group: A-存储基础
+    title: 锁管理器总控
+    page_file: a19-lmgr.md
+    refs:
+      - path: src/backend/storage/lmgr/lmgr.c
+        symbols: [RelationInitLockInfo, LockRelationOid, ConditionalLockRelationOid]
+  - feature: dsm-impl
+    feature_group: A-存储基础
+    title: dsm_impl 模块
+    page_file: a20-dsm-impl.md
+    refs:
+      - path: src/backend/storage/ipc/dsm_impl.c
+        symbols: [dsm_impl_op, dsm_impl_pin_segment, dsm_impl_unpin_segment]
+  - feature: method-worker
+    feature_group: A-存储基础
+    title: method_worker 模块
+    page_file: a21-method-worker.md
+    refs:
+      - path: src/backend/storage/aio/method_worker.c
+        symbols: [pgaio_worker_pm_test_grow_signal_sent, pgaio_worker_pm_test_grow, pgaio_worker_pm_clear_grow_signal_sent]
+  - feature: localbuf
+    feature_group: A-存储基础
+    title: 本地缓冲
+    page_file: a22-localbuf.md
+    refs:
+      - path: src/backend/storage/buffer/localbuf.c
+        symbols: [PrefetchLocalBuffer, LocalBufferAlloc, FlushLocalBuffer]
+  - feature: freespace
+    feature_group: A-存储基础
+    title: 空闲空间映射 FSM
+    page_file: a23-freespace.md
+    refs:
+      - path: src/backend/storage/freespace/freespace.c
+        symbols: [GetPageWithFreeSpace, RecordAndGetPageWithFreeSpace, RecordPageWithFreeSpace]
+  - feature: buffile
+    feature_group: A-存储基础
+    title: BufFile 临时文件
+    page_file: a24-buffile.md
+    refs:
+      - path: src/backend/storage/file/buffile.c
+        symbols: [BufFileCreateTemp, BufFileCreateFileSet, BufFileOpenFileSet]
+  - feature: procsignal
+    feature_group: A-存储基础
+    title: procsignal 模块
+    page_file: a25-procsignal.md
+    refs:
+      - path: src/backend/storage/ipc/procsignal.c
+        symbols: [ProcSignalInit, SendProcSignal, EmitProcSignalBarrier]
+  - feature: inv-api
+    feature_group: A-存储基础
+    title: 大对象接口
+    page_file: a26-inv-api.md
+    refs:
+      - path: src/backend/storage/large_object/inv_api.c
+        symbols: [close_lo_relation, inv_create, inv_open]
+  - feature: sinvaladt
+    feature_group: A-存储基础
+    title: 失效消息广播
+    page_file: a27-sinvaladt.md
+    refs:
+      - path: src/backend/storage/ipc/sinvaladt.c
+        symbols: [SharedInvalBackendInit, SIInsertDataEntries, SIGetDataEntries]
+  - feature: method-io-uring
+    feature_group: A-存储基础
+    title: method_io_uring 模块
+    page_file: a28-method-io-uring.md
+    refs:
+      - path: src/backend/storage/aio/method_io_uring.c
+        symbols: [pgaio_uring_procs, pgaio_uring_check_capabilities, pgaio_uring_context_shmem_size]
+  - feature: freelist
+    feature_group: A-存储基础
+    title: Clock-Sweep 置换与空闲链
+    page_file: a29-freelist.md
+    refs:
+      - path: src/backend/storage/buffer/freelist.c
+        symbols: [StrategyGetBuffer, StrategySyncStart, StrategyNotifyBgWriter]
+  - feature: xlog
+    feature_group: B-事务与WAL
+    title: WAL 写入
+    page_file: b01-xlog.md
+    refs:
+      - path: src/backend/access/transam/xlog.c
+        symbols: [XLogInsertRecord, WALReadFromBuffers, assign_max_wal_size]
+  - feature: xact
+    feature_group: B-事务与WAL
+    title: 事务生命周期
+    page_file: b02-xact.md
+    refs:
+      - path: src/backend/access/transam/xact.c
+        symbols: [IsTransactionState, IsAbortedTransactionBlockState, GetTopTransactionId]
+  - feature: xlogrecovery
+    feature_group: B-事务与WAL
+    title: WAL 重放
+    page_file: b03-xlogrecovery.md
+    refs:
+      - path: src/backend/access/transam/xlogrecovery.c
+        symbols: [InitWalRecovery, FinishWalRecovery, ShutdownWalRecovery]
+  - feature: multixact
+    feature_group: B-事务与WAL
+    title: multixact 模块
+    page_file: b04-multixact.md
+    refs:
+      - path: src/backend/access/transam/multixact.c
+        symbols: [MultiXactIdCreate, MultiXactIdExpand, MultiXactIdIsRunning]
+  - feature: twophase
+    feature_group: B-事务与WAL
+    title: 两阶段提交
+    page_file: b05-twophase.md
+    refs:
+      - path: src/backend/access/transam/twophase.c
+        symbols: [AtAbort_Twophase, PostPrepare_Twophase, MarkAsPreparing]
+  - feature: xlogreader
+    feature_group: B-事务与WAL
+    title: xlogreader 模块
+    page_file: b06-xlogreader.md
+    refs:
+      - path: src/backend/access/transam/xlogreader.c
+        symbols: [XLogReaderSetDecodeBuffer, XLogReaderAllocate, XLogReaderFree]
+  - feature: slru
+    feature_group: B-事务与WAL
+    title: slru 模块
+    page_file: b07-slru.md
+    refs:
+      - path: src/backend/access/transam/slru.c
+        symbols: [SlruFileName, SimpleLruAutotuneBuffers, SimpleLruRequestWithOpts]
+  - feature: parallel
+    feature_group: B-事务与WAL
+    title: parallel 模块
+    page_file: b08-parallel.md
+    refs:
+      - path: src/backend/access/transam/parallel.c
+        symbols: [CreateParallelContext, InitializeParallelDSM, ReinitializeParallelDSM]
+  - feature: xloginsert
+    feature_group: B-事务与WAL
+    title: WAL 记录组装
+    page_file: b09-xloginsert.md
+    refs:
+      - path: src/backend/access/transam/xloginsert.c
+        symbols: [XLogBeginInsert, XLogEnsureRecordSpace, XLogResetInsertion]
+  - feature: clog
+    feature_group: B-事务与WAL
+    title: 提交日志 CLOG
+    page_file: b10-clog.md
+    refs:
+      - path: src/backend/access/transam/clog.c
+        symbols: [TransactionIdSetTreeStatus, TransactionIdGetStatus, check_transaction_buffers]
+  - feature: xlogutils
+    feature_group: B-事务与WAL
+    title: xlogutils 模块
+    page_file: b11-xlogutils.md
+    refs:
+      - path: src/backend/access/transam/xlogutils.c
+        symbols: [XLogHaveInvalidPages, XLogCheckInvalidPages, XLogReadBufferForRedo]
+  - feature: xlogprefetcher
+    feature_group: B-事务与WAL
+    title: xlogprefetcher 模块
+    page_file: b12-xlogprefetcher.md
+    refs:
+      - path: src/backend/access/transam/xlogprefetcher.c
+        symbols: [XLogPrefetchResetStats, XLogPrefetchReconfigure, XLogPrefetcherAllocate]
+  - feature: commit-ts
+    feature_group: B-事务与WAL
+    title: commit_ts 模块
+    page_file: b13-commit-ts.md
+    refs:
+      - path: src/backend/access/transam/commit_ts.c
+        symbols: [TransactionTreeSetCommitTsData, TransactionIdGetCommitTsData, GetLatestCommitTsData]
+  - feature: varsup
+    feature_group: B-事务与WAL
+    title: 事务 ID 分配
+    page_file: b14-varsup.md
+    refs:
+      - path: src/backend/access/transam/varsup.c
+        symbols: [GetNewTransactionId, ReadNextFullTransactionId, AdvanceNextFullTransactionIdPastXid]
+  - feature: xlogfuncs
+    feature_group: B-事务与WAL
+    title: xlogfuncs 模块
+    page_file: b15-xlogfuncs.md
+    refs:
+      - path: src/backend/access/transam/xlogfuncs.c
+        symbols: [GetRecoveryPauseStateString, pg_backup_start, pg_backup_stop]
+  - feature: xlogarchive
+    feature_group: B-事务与WAL
+    title: xlogarchive 模块
+    page_file: b16-xlogarchive.md
+    refs:
+      - path: src/backend/access/transam/xlogarchive.c
+        symbols: [RestoreArchivedFile, ExecuteRecoveryCommand, KeepFileRestoredFromArchive]
+  - feature: xlogwait
+    feature_group: B-事务与WAL
+    title: xlogwait 模块
+    page_file: b17-xlogwait.md
+    refs:
+      - path: src/backend/access/transam/xlogwait.c
+        symbols: [GetCurrentLSNForWaitType, WaitLSNWakeup, WaitLSNCleanup]
+  - feature: generic-xlog
+    feature_group: B-事务与WAL
+    title: generic_xlog 模块
+    page_file: b18-generic-xlog.md
+    refs:
+      - path: src/backend/access/transam/generic_xlog.c
+        symbols: [GenericXLogStart, GenericXLogRegisterBuffer, GenericXLogFinish]
+  - feature: timeline
+    feature_group: B-事务与WAL
+    title: timeline 模块
+    page_file: b19-timeline.md
+    refs:
+      - path: src/backend/access/transam/timeline.c
+        symbols: [restoreTimeLineHistoryFiles, readTimeLineHistory, existsTimeLineHistory]
+  - feature: xactdesc
+    feature_group: B-事务与WAL
+    title: xactdesc 模块
+    page_file: b20-xactdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/xactdesc.c
+        symbols: [ParseCommitRecord, ParseAbortRecord, ParsePrepareRecord]
+  - feature: subtrans
+    feature_group: B-事务与WAL
+    title: 子事务状态
+    page_file: b21-subtrans.md
+    refs:
+      - path: src/backend/access/transam/subtrans.c
+        symbols: [SubTransSetParent, SubTransGetParent, SubTransGetTopmostTransaction]
+  - feature: heapdesc
+    feature_group: B-事务与WAL
+    title: heapdesc 模块
+    page_file: b22-heapdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/heapdesc.c
+        symbols: [heap_xlog_deserialize_prune_and_freeze, heap_desc, heap2_desc]
+  - feature: xlogdesc
+    feature_group: B-事务与WAL
+    title: xlogdesc 模块
+    page_file: b23-xlogdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/xlogdesc.c
+        symbols: [get_checksum_state_string, xlog2_desc, xlog_desc]
+  - feature: transam
+    feature_group: B-事务与WAL
+    title: transam 模块
+    page_file: b24-transam.md
+    refs:
+      - path: src/backend/access/transam/transam.c
+        symbols: [TransactionIdDidCommit, TransactionIdDidAbort, TransactionIdCommitTree]
+  - feature: nbtdesc
+    feature_group: B-事务与WAL
+    title: nbtdesc 模块
+    page_file: b25-nbtdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/nbtdesc.c
+        symbols: [btree_desc, btree_identify]
+  - feature: gindesc
+    feature_group: B-事务与WAL
+    title: gindesc 模块
+    page_file: b26-gindesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/gindesc.c
+        symbols: [gin_desc, gin_identify]
+  - feature: rmgr
+    feature_group: B-事务与WAL
+    title: rmgr 模块
+    page_file: b27-rmgr.md
+    refs:
+      - path: src/backend/access/transam/rmgr.c
+        symbols: [RmgrStartup, RmgrCleanup, RmgrNotFound]
+  - feature: hashdesc
+    feature_group: B-事务与WAL
+    title: hashdesc 模块
+    page_file: b28-hashdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/hashdesc.c
+        symbols: [hash_desc, hash_identify]
+  - feature: heapam
+    feature_group: C-堆表与元组
+    title: 堆表访问方法
+    page_file: c01-heapam.md
+    refs:
+      - path: src/backend/access/heap/heapam.c
+        symbols: [heap_setscanlimits, heap_prepare_pagescan, heap_beginscan]
+  - feature: vacuumlazy
+    feature_group: C-堆表与元组
+    title: 惰性 vacuum
+    page_file: c02-vacuumlazy.md
+    refs:
+      - path: src/backend/access/heap/vacuumlazy.c
+        symbols: [heap_vacuum_rel, heap_page_is_all_visible]
+  - feature: pruneheap
+    feature_group: C-堆表与元组
+    title: 堆页剪枝
+    page_file: c03-pruneheap.md
+    refs:
+      - path: src/backend/access/heap/pruneheap.c
+        symbols: [heap_page_prune_opt, heap_page_prune_and_freeze, heap_page_prune_execute]
+  - feature: heapam-handler
+    feature_group: C-堆表与元组
+    title: 堆表 TableAm 回调
+    page_file: c04-heapam-handler.md
+    refs:
+      - path: src/backend/access/heap/heapam_handler.c
+        symbols: [GetHeapamTableAmRoutine]
+  - feature: reloptions
+    feature_group: C-堆表与元组
+    title: reloptions 模块
+    page_file: c05-reloptions.md
+    refs:
+      - path: src/backend/access/common/reloptions.c
+        symbols: [add_reloption_kind, init_local_reloptions, register_reloptions_validator]
+  - feature: heaptuple
+    feature_group: C-堆表与元组
+    title: heaptuple 模块
+    page_file: c06-heaptuple.md
+    refs:
+      - path: src/backend/access/common/heaptuple.c
+        symbols: [getmissingattr, heap_compute_data_size, heap_fill_tuple]
+  - feature: heapam-visibility
+    feature_group: C-堆表与元组
+    title: heapam_visibility 模块
+    page_file: c07-heapam-visibility.md
+    refs:
+      - path: src/backend/access/heap/heapam_visibility.c
+        symbols: [HeapTupleSetHintBits, HeapTupleSatisfiesUpdate, HeapTupleSatisfiesDirty]
+  - feature: heapam-xlog
+    feature_group: C-堆表与元组
+    title: heapam_xlog 模块
+    page_file: c08-heapam-xlog.md
+    refs:
+      - path: src/backend/access/heap/heapam_xlog.c
+        symbols: [heap_redo, heap2_redo, heap_mask]
+  - feature: rewriteheap
+    feature_group: C-堆表与元组
+    title: rewriteheap 模块
+    page_file: c09-rewriteheap.md
+    refs:
+      - path: src/backend/access/heap/rewriteheap.c
+        symbols: [begin_heap_rewrite, end_heap_rewrite, rewrite_heap_tuple]
+  - feature: tupdesc
+    feature_group: C-堆表与元组
+    title: tupdesc 模块
+    page_file: c10-tupdesc.md
+    refs:
+      - path: src/backend/access/common/tupdesc.c
+        symbols: [populate_compact_attribute_internal, populate_compact_attribute, verify_compact_attribute]
+  - feature: hio
+    feature_group: C-堆表与元组
+    title: 堆表页插入
+    page_file: c11-hio.md
+    refs:
+      - path: src/backend/access/heap/hio.c
+        symbols: [RelationPutHeapTuple, RelationGetBufferForTuple]
+  - feature: tableam
+    feature_group: C-堆表与元组
+    title: tableam 模块
+    page_file: c12-tableam.md
+    refs:
+      - path: src/backend/access/table/tableam.c
+        symbols: [table_slot_callbacks, table_slot_create, table_beginscan_catalog]
+  - feature: heaptoast
+    feature_group: C-堆表与元组
+    title: heaptoast 模块
+    page_file: c13-heaptoast.md
+    refs:
+      - path: src/backend/access/heap/heaptoast.c
+        symbols: [heap_toast_delete, heap_toast_insert_or_update, toast_flatten_tuple]
+  - feature: visibilitymap
+    feature_group: C-堆表与元组
+    title: 可见性映射
+    page_file: c14-visibilitymap.md
+    refs:
+      - path: src/backend/access/heap/visibilitymap.c
+        symbols: [visibilitymap_clear, visibilitymap_pin, visibilitymap_pin_ok]
+  - feature: toast-internals
+    feature_group: C-堆表与元组
+    title: toast_internals 模块
+    page_file: c15-toast-internals.md
+    refs:
+      - path: src/backend/access/common/toast_internals.c
+        symbols: [toast_compress_datum, toast_save_datum, toast_valueid_scankey_init]
+  - feature: detoast
+    feature_group: C-堆表与元组
+    title: detoast 模块
+    page_file: c16-detoast.md
+    refs:
+      - path: src/backend/access/common/detoast.c
+        symbols: [detoast_external_attr, detoast_attr, detoast_attr_slice]
+  - feature: heapam-indexscan
+    feature_group: C-堆表与元组
+    title: heapam_indexscan 模块
+    page_file: c17-heapam-indexscan.md
+    refs:
+      - path: src/backend/access/heap/heapam_indexscan.c
+        symbols: [heapam_fetch_tid, heapam_index_scan_begin, heapam_index_scan_reset]
+  - feature: tidstore
+    feature_group: C-堆表与元组
+    title: tidstore 模块
+    page_file: c18-tidstore.md
+    refs:
+      - path: src/backend/access/common/tidstore.c
+        symbols: [TidStoreCreateLocal, TidStoreCreateShared, TidStoreAttach]
+  - feature: indextuple
+    feature_group: C-堆表与元组
+    title: indextuple 模块
+    page_file: c19-indextuple.md
+    refs:
+      - path: src/backend/access/common/indextuple.c
+        symbols: [index_form_tuple, index_form_tuple_context, nocache_index_getattr]
+  - feature: rmgrdesc-xactdesc
+    feature_group: C-堆表与元组
+    title: xactdesc 模块
+    page_file: c20-rmgrdesc-xactdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/xactdesc.c
+        symbols: [ParseCommitRecord, ParseAbortRecord, ParsePrepareRecord]
+  - feature: printtup
+    feature_group: C-堆表与元组
+    title: printtup 模块
+    page_file: c21-printtup.md
+    refs:
+      - path: src/backend/access/common/printtup.c
+        symbols: [printtup_create_DR, SetRemoteDestReceiverParams, SendRowDescriptionMessage]
+  - feature: rmgrdesc-heapdesc
+    feature_group: C-堆表与元组
+    title: heapdesc 模块
+    page_file: c22-rmgrdesc-heapdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/heapdesc.c
+        symbols: [heap_xlog_deserialize_prune_and_freeze, heap_desc, heap2_desc]
+  - feature: rmgrdesc-xlogdesc
+    feature_group: C-堆表与元组
+    title: xlogdesc 模块
+    page_file: c23-rmgrdesc-xlogdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/xlogdesc.c
+        symbols: [get_checksum_state_string, xlog2_desc, xlog_desc]
+  - feature: toast-helper
+    feature_group: C-堆表与元组
+    title: toast_helper 模块
+    page_file: c24-toast-helper.md
+    refs:
+      - path: src/backend/access/table/toast_helper.c
+        symbols: [toast_tuple_init, toast_tuple_find_biggest_attribute, toast_tuple_try_compression]
+  - feature: syncscan
+    feature_group: C-堆表与元组
+    title: syncscan 模块
+    page_file: c25-syncscan.md
+    refs:
+      - path: src/backend/access/common/syncscan.c
+        symbols: [ss_get_location, ss_report_location]
+  - feature: attmap
+    feature_group: C-堆表与元组
+    title: attmap 模块
+    page_file: c26-attmap.md
+    refs:
+      - path: src/backend/access/common/attmap.c
+        symbols: [make_attrmap, free_attrmap, build_attrmap_by_position]
+  - feature: toast-compression
+    feature_group: C-堆表与元组
+    title: toast_compression 模块
+    page_file: c27-toast-compression.md
+    refs:
+      - path: src/backend/access/common/toast_compression.c
+        symbols: [pglz_compress_datum, pglz_decompress_datum, pglz_decompress_datum_slice]
+  - feature: tupconvert
+    feature_group: C-堆表与元组
+    title: tupconvert 模块
+    page_file: c28-tupconvert.md
+    refs:
+      - path: src/backend/access/common/tupconvert.c
+        symbols: [convert_tuples_by_position, convert_tuples_by_name, convert_tuples_by_name_attrmap]
+  - feature: system
+    feature_group: C-堆表与元组
+    title: system 模块
+    page_file: c29-system.md
+    refs:
+      - path: src/backend/access/tablesample/system.c
+        symbols: [tsm_system_handler, system_samplescangetsamplesize, system_initsamplescan]
+  - feature: rmgrdesc-nbtdesc
+    feature_group: C-堆表与元组
+    title: nbtdesc 模块
+    page_file: c30-rmgrdesc-nbtdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/nbtdesc.c
+        symbols: [btree_desc, btree_identify]
+  - feature: bernoulli
+    feature_group: C-堆表与元组
+    title: bernoulli 模块
+    page_file: c31-bernoulli.md
+    refs:
+      - path: src/backend/access/tablesample/bernoulli.c
+        symbols: [tsm_bernoulli_handler, bernoulli_samplescangetsamplesize, bernoulli_initsamplescan]
+  - feature: session
+    feature_group: C-堆表与元组
+    title: session 模块
+    page_file: c32-session.md
+    refs:
+      - path: src/backend/access/common/session.c
+        symbols: [InitializeSession, GetSessionDsmHandle, AttachSession]
+  - feature: relation
+    feature_group: C-堆表与元组
+    title: relation 模块
+    page_file: c33-relation.md
+    refs:
+      - path: src/backend/access/common/relation.c
+        symbols: [relation_open, try_relation_open, relation_openrv]
+  - feature: rmgrdesc-gindesc
+    feature_group: C-堆表与元组
+    title: gindesc 模块
+    page_file: c34-rmgrdesc-gindesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/gindesc.c
+        symbols: [gin_desc, gin_identify]
+  - feature: rmgrdesc-hashdesc
+    feature_group: C-堆表与元组
+    title: hashdesc 模块
+    page_file: c35-rmgrdesc-hashdesc.md
+    refs:
+      - path: src/backend/access/rmgrdesc/hashdesc.c
+        symbols: [hash_desc, hash_identify]
+  - feature: nbtreadpage
+    feature_group: D-索引族
+    title: nbtreadpage 模块
+    page_file: d01-nbtreadpage.md
+    refs:
+      - path: src/backend/access/nbtree/nbtreadpage.c
+        symbols: [_bt_readpage, _bt_start_array_keys, _bt_binsrch_array_skey]
+  - feature: nbtinsert
+    feature_group: D-索引族
+    title: B 树插入
+    page_file: d02-nbtinsert.md
+    refs:
+      - path: src/backend/access/nbtree/nbtinsert.c
+        symbols: [_bt_doinsert, _bt_finish_split, _bt_getstackbuf]
+  - feature: nbtpage
+    feature_group: D-索引族
+    title: B 树页面操作
+    page_file: d03-nbtpage.md
+    refs:
+      - path: src/backend/access/nbtree/nbtpage.c
+        symbols: [_bt_initmetapage, _bt_upgrademetapage, _bt_vacuum_needs_cleanup]
+  - feature: nbtpreprocesskeys
+    feature_group: D-索引族
+    title: nbtpreprocesskeys 模块
+    page_file: d04-nbtpreprocesskeys.md
+    refs:
+      - path: src/backend/access/nbtree/nbtpreprocesskeys.c
+        symbols: [_bt_preprocess_keys]
+  - feature: brin
+    feature_group: D-索引族
+    title: BRIN 索引
+    page_file: d05-brin.md
+    refs:
+      - path: src/backend/access/brin/brin.c
+        symbols: [brininsert, brininsertcleanup, brinbeginscan]
+  - feature: brin-minmax-multi
+    feature_group: D-索引族
+    title: brin_minmax_multi 模块
+    page_file: d06-brin-minmax-multi.md
+    refs:
+      - path: src/backend/access/brin/brin_minmax_multi.c
+        symbols: [AssertArrayOrder, AssertCheckRanges, AssertCheckExpandedRanges]
+  - feature: nbtsearch
+    feature_group: D-索引族
+    title: B 树查找
+    page_file: d07-nbtsearch.md
+    refs:
+      - path: src/backend/access/nbtree/nbtsearch.c
+        symbols: [_bt_search, _bt_binsrch_insert, _bt_compare]
+  - feature: gininsert
+    feature_group: D-索引族
+    title: GIN 插入
+    page_file: d08-gininsert.md
+    refs:
+      - path: src/backend/access/gin/gininsert.c
+        symbols: [ginEntryInsert, ginbuild, ginbuildempty]
+  - feature: spgdoinsert
+    feature_group: D-索引族
+    title: spgdoinsert 模块
+    page_file: d09-spgdoinsert.md
+    refs:
+      - path: src/backend/access/spgist/spgdoinsert.c
+        symbols: [spgUpdateNodeLink, spgPageIndexMultiDelete, spgdoinsert]
+  - feature: nbtsort
+    feature_group: D-索引族
+    title: nbtsort 模块
+    page_file: d10-nbtsort.md
+    refs:
+      - path: src/backend/access/nbtree/nbtsort.c
+        symbols: [btbuild, _bt_parallel_build_main]
+  - feature: nbtree
+    feature_group: D-索引族
+    title: B 树索引主体
+    page_file: d11-nbtree.md
+    refs:
+      - path: src/backend/access/nbtree/nbtree.c
+        symbols: [btbuildempty, btinsert, btgettuple]
+  - feature: ginget
+    feature_group: D-索引族
+    title: ginget 模块
+    page_file: d12-ginget.md
+    refs:
+      - path: src/backend/access/gin/ginget.c
+        symbols: [gingetbitmap]
+  - feature: gindatapage
+    feature_group: D-索引族
+    title: gindatapage 模块
+    page_file: d13-gindatapage.md
+    refs:
+      - path: src/backend/access/gin/gindatapage.c
+        symbols: [GinDataLeafPageGetItems, GinDataLeafPageGetItemsToTbm, GinDataPageAddPostingItem]
+  - feature: gist
+    feature_group: D-索引族
+    title: gist 模块
+    page_file: d14-gist.md
+    refs:
+      - path: src/backend/access/gist/gist.c
+        symbols: [createTempGistContext, gistbuildempty, gistinsert]
+  - feature: gistbuild
+    feature_group: D-索引族
+    title: GiST 构建
+    page_file: d15-gistbuild.md
+    refs:
+      - path: src/backend/access/gist/gistbuild.c
+        symbols: [gistbuild]
+  - feature: hashpage
+    feature_group: D-索引族
+    title: 哈希索引页
+    page_file: d16-hashpage.md
+    refs:
+      - path: src/backend/access/hash/hashpage.c
+        symbols: [_hash_getbuf, _hash_getbuf_with_condlock_cleanup, _hash_getinitbuf]
+  - feature: gistproc
+    feature_group: D-索引族
+    title: gistproc 模块
+    page_file: d17-gistproc.md
+    refs:
+      - path: src/backend/access/gist/gistproc.c
+        symbols: [rt_box_union, size_box, box_penalty]
+  - feature: nbtsplitloc
+    feature_group: D-索引族
+    title: nbtsplitloc 模块
+    page_file: d18-nbtsplitloc.md
+    refs:
+      - path: src/backend/access/nbtree/nbtsplitloc.c
+        symbols: [_bt_findsplitloc]
+  - feature: nbtutils
+    feature_group: D-索引族
+    title: nbtutils 模块
+    page_file: d19-nbtutils.md
+    refs:
+      - path: src/backend/access/nbtree/nbtutils.c
+        symbols: [_bt_mkscankey, _bt_killitems, _bt_vacuum_cycleid]
+  - feature: spgutils
+    feature_group: D-索引族
+    title: spgutils 模块
+    page_file: d20-spgutils.md
+    refs:
+      - path: src/backend/access/spgist/spgutils.c
+        symbols: [spgGetCache, getSpGistTupleDesc, initSpGistState]
+  - feature: nbtdedup
+    feature_group: D-索引族
+    title: nbtdedup 模块
+    page_file: d21-nbtdedup.md
+    refs:
+      - path: src/backend/access/nbtree/nbtdedup.c
+        symbols: [_bt_dedup_pass, _bt_bottomupdel_pass, _bt_dedup_start_pending]
+  - feature: nbtxlog
+    feature_group: D-索引族
+    title: nbtxlog 模块
+    page_file: d22-nbtxlog.md
+    refs:
+      - path: src/backend/access/nbtree/nbtxlog.c
+        symbols: [btree_redo, btree_xlog_startup, btree_xlog_cleanup]
+  - feature: hashovfl
+    feature_group: D-索引族
+    title: hashovfl 模块
+    page_file: d23-hashovfl.md
+    refs:
+      - path: src/backend/access/hash/hashovfl.c
+        symbols: [_hash_ovflblkno_to_bitno, _hash_addovflpage, _hash_freeovflpage]
+  - feature: hash-xlog
+    feature_group: D-索引族
+    title: hash_xlog 模块
+    page_file: d24-hash-xlog.md
+    refs:
+      - path: src/backend/access/hash/hash_xlog.c
+        symbols: [hash_redo, hash_mask]
+  - feature: ginfast
+    feature_group: D-索引族
+    title: GIN 快速更新
+    page_file: d25-ginfast.md
+    refs:
+      - path: src/backend/access/gin/ginfast.c
+        symbols: [ginHeapTupleFastInsert, ginHeapTupleFastCollect, ginInsertCleanup]
+  - feature: spgscan
+    feature_group: D-索引族
+    title: spgscan 模块
+    page_file: d26-spgscan.md
+    refs:
+      - path: src/backend/access/spgist/spgscan.c
+        symbols: [spgbeginscan, spgrescan, spgendscan]
+  - feature: spgvacuum
+    feature_group: D-索引族
+    title: spgvacuum 模块
+    page_file: d27-spgvacuum.md
+    refs:
+      - path: src/backend/access/spgist/spgvacuum.c
+        symbols: [spgbulkdelete, spgvacuumcleanup]
+  - feature: hash
+    feature_group: D-索引族
+    title: hash 模块
+    page_file: d28-hash.md
+    refs:
+      - path: src/backend/access/hash/hash.c
+        symbols: [hashbuild, hashbuildempty, hashinsert]
+  - feature: indexam
+    feature_group: D-索引族
+    title: indexam 模块
+    page_file: d29-indexam.md
+    refs:
+      - path: src/backend/access/index/indexam.c
+        symbols: [index_open, try_index_open, index_close]
+  - feature: genam
+    feature_group: D-索引族
+    title: genam 模块
+    page_file: d30-genam.md
+    refs:
+      - path: src/backend/access/index/genam.c
+        symbols: [RelationGetIndexScan, IndexScanEnd, BuildIndexValueDescription]
+  - feature: gistutil
+    feature_group: D-索引族
+    title: gistutil 模块
+    page_file: d31-gistutil.md
+    refs:
+      - path: src/backend/access/gist/gistutil.c
+        symbols: [gistfillbuffer, gistnospace, gistfitpage]
+  - feature: brin-bloom
+    feature_group: D-索引族
+    title: brin_bloom 模块
+    page_file: d32-brin-bloom.md
+    refs:
+      - path: src/backend/access/brin/brin_bloom.c
+        symbols: [bloom_filter_size, bloom_init, bloom_add_value]
+  - feature: spgxlog
+    feature_group: D-索引族
+    title: spgxlog 模块
+    page_file: d33-spgxlog.md
+    refs:
+      - path: src/backend/access/spgist/spgxlog.c
+        symbols: [spg_redo, spg_xlog_startup, spg_xlog_cleanup]
+  - feature: planner
+    feature_group: E-优化器
+    title: 优化器总控
+    page_file: e01-planner.md
+    refs:
+      - path: src/backend/optimizer/plan/planner.c
+        symbols: [planner, standard_planner, subquery_planner]
+  - feature: costsize
+    feature_group: E-优化器
+    title: 代价估算
+    page_file: e02-costsize.md
+    refs:
+      - path: src/backend/optimizer/path/costsize.c
+        symbols: [clamp_row_est, clamp_width_est, cost_seqscan]
+  - feature: createplan
+    feature_group: E-优化器
+    title: createplan 模块
+    page_file: e03-createplan.md
+    refs:
+      - path: src/backend/optimizer/plan/createplan.c
+        symbols: [create_plan, create_memoize_plan, change_plan_targetlist]
+  - feature: clauses
+    feature_group: E-优化器
+    title: clauses 模块
+    page_file: e04-clauses.md
+    refs:
+      - path: src/backend/optimizer/util/clauses.c
+        symbols: [contain_agg_clause, contain_window_function, find_window_functions]
+  - feature: prepjointree
+    feature_group: E-优化器
+    title: prepjointree 模块
+    page_file: e05-prepjointree.md
+    refs:
+      - path: src/backend/optimizer/prep/prepjointree.c
+        symbols: [transform_MERGE_to_join, preprocess_relation_rtes, replace_empty_jointree]
+  - feature: allpaths
+    feature_group: E-优化器
+    title: allpaths 模块
+    page_file: e06-allpaths.md
+    refs:
+      - path: src/backend/optimizer/path/allpaths.c
+        symbols: [make_one_rel, set_rel_pathlist, add_paths_to_append_rel]
+  - feature: pathnode
+    feature_group: E-优化器
+    title: pathnode 模块
+    page_file: e07-pathnode.md
+    refs:
+      - path: src/backend/optimizer/util/pathnode.c
+        symbols: [compare_path_costs, compare_fractional_path_costs, set_cheapest]
+  - feature: indxpath
+    feature_group: E-优化器
+    title: indxpath 模块
+    page_file: e08-indxpath.md
+    refs:
+      - path: src/backend/optimizer/path/indxpath.c
+        symbols: [create_index_paths, check_index_predicates, relation_has_unique_index_for]
+  - feature: initsplan
+    feature_group: E-优化器
+    title: initsplan 模块
+    page_file: e09-initsplan.md
+    refs:
+      - path: src/backend/optimizer/plan/initsplan.c
+        symbols: [add_base_rels_to_query, add_other_rels_to_query, build_base_rel_tlists]
+  - feature: equivclass
+    feature_group: E-优化器
+    title: equivclass 模块
+    page_file: e10-equivclass.md
+    refs:
+      - path: src/backend/optimizer/path/equivclass.c
+        symbols: [process_equivalence, canonicalize_ec_expression, add_child_eq_member]
+  - feature: setrefs
+    feature_group: E-优化器
+    title: setrefs 模块
+    page_file: e11-setrefs.md
+    refs:
+      - path: src/backend/optimizer/plan/setrefs.c
+        symbols: [set_plan_references, trivial_subqueryscan, find_minmax_agg_replacement_param]
+  - feature: relnode
+    feature_group: E-优化器
+    title: relnode 模块
+    page_file: e12-relnode.md
+    refs:
+      - path: src/backend/optimizer/util/relnode.c
+        symbols: [setup_simple_rel_arrays, expand_planner_arrays, build_simple_rel]
+  - feature: subselect
+    feature_group: E-优化器
+    title: subselect 模块
+    page_file: e13-subselect.md
+    refs:
+      - path: src/backend/optimizer/plan/subselect.c
+        symbols: [SS_process_ctes, convert_VALUES_to_ANY, convert_ANY_sublink_to_join]
+  - feature: joinpath
+    feature_group: E-优化器
+    title: joinpath 模块
+    page_file: e14-joinpath.md
+    refs:
+      - path: src/backend/optimizer/path/joinpath.c
+        symbols: [add_paths_to_joinrel]
+  - feature: plancat
+    feature_group: E-优化器
+    title: plancat 模块
+    page_file: e15-plancat.md
+    refs:
+      - path: src/backend/optimizer/util/plancat.c
+        symbols: [get_relation_info, get_relation_notnullatts, find_relation_notnullatts]
+  - feature: joinrels
+    feature_group: E-优化器
+    title: joinrels 模块
+    page_file: e16-joinrels.md
+    refs:
+      - path: src/backend/optimizer/path/joinrels.c
+        symbols: [join_search_one_level, init_dummy_sjinfo, make_join_rel]
+  - feature: analyzejoins
+    feature_group: E-优化器
+    title: analyzejoins 模块
+    page_file: e17-analyzejoins.md
+    refs:
+      - path: src/backend/optimizer/plan/analyzejoins.c
+        symbols: [remove_useless_outer_joins, reduce_unique_semijoins, query_supports_distinctness]
+  - feature: predtest
+    feature_group: E-优化器
+    title: predtest 模块
+    page_file: e18-predtest.md
+    refs:
+      - path: src/backend/optimizer/util/predtest.c
+        symbols: [predicate_implied_by, predicate_refuted_by]
+  - feature: pathkeys
+    feature_group: E-优化器
+    title: pathkeys 模块
+    page_file: e19-pathkeys.md
+    refs:
+      - path: src/backend/optimizer/path/pathkeys.c
+        symbols: [make_canonical_pathkey, append_pathkeys, compare_pathkeys]
+  - feature: prepunion
+    feature_group: E-优化器
+    title: prepunion 模块
+    page_file: e20-prepunion.md
+    refs:
+      - path: src/backend/optimizer/prep/prepunion.c
+        symbols: [plan_set_operations]
+  - feature: var
+    feature_group: E-优化器
+    title: var 模块
+    page_file: e21-var.md
+    refs:
+      - path: src/backend/optimizer/util/var.c
+        symbols: [pull_varnos, pull_varnos_of_level, pull_varattnos]
+  - feature: tlist
+    feature_group: E-优化器
+    title: tlist 模块
+    page_file: e22-tlist.md
+    refs:
+      - path: src/backend/optimizer/util/tlist.c
+        symbols: [tlist_member, add_to_flat_tlist, get_tlist_exprs]
+  - feature: appendinfo
+    feature_group: E-优化器
+    title: appendinfo 模块
+    page_file: e23-appendinfo.md
+    refs:
+      - path: src/backend/optimizer/util/appendinfo.c
+        symbols: [make_append_rel_info, adjust_appendrel_attrs, adjust_appendrel_attrs_multilevel]
+  - feature: inherit
+    feature_group: E-优化器
+    title: inherit 模块
+    page_file: e24-inherit.md
+    refs:
+      - path: src/backend/optimizer/util/inherit.c
+        symbols: [expand_inherited_rtentry, get_rel_all_updated_cols, apply_child_basequals]
+  - feature: clausesel
+    feature_group: E-优化器
+    title: clausesel 模块
+    page_file: e25-clausesel.md
+    refs:
+      - path: src/backend/optimizer/path/clausesel.c
+        symbols: [clauselist_selectivity, clauselist_selectivity_ext, clause_selectivity]
+  - feature: paramassign
+    feature_group: E-优化器
+    title: paramassign 模块
+    page_file: e26-paramassign.md
+    refs:
+      - path: src/backend/optimizer/util/paramassign.c
+        symbols: [replace_outer_var, replace_outer_placeholdervar, replace_outer_agg]
+  - feature: prepagg
+    feature_group: E-优化器
+    title: prepagg 模块
+    page_file: e27-prepagg.md
+    refs:
+      - path: src/backend/optimizer/prep/prepagg.c
+        symbols: [preprocess_aggrefs, get_agg_clause_costs]
+  - feature: restrictinfo
+    feature_group: E-优化器
+    title: restrictinfo 模块
+    page_file: e28-restrictinfo.md
+    refs:
+      - path: src/backend/optimizer/util/restrictinfo.c
+        symbols: [make_restrictinfo, make_plain_restrictinfo, commute_restrictinfo]
+  - feature: placeholder
+    feature_group: E-优化器
+    title: placeholder 模块
+    page_file: e29-placeholder.md
+    refs:
+      - path: src/backend/optimizer/util/placeholder.c
+        symbols: [make_placeholder_expr, find_placeholder_info, find_placeholders_in_jointree]
+  - feature: prepqual
+    feature_group: E-优化器
+    title: prepqual 模块
+    page_file: e30-prepqual.md
+    refs:
+      - path: src/backend/optimizer/prep/prepqual.c
+        symbols: [negate_clause, canonicalize_qual]
+  - feature: tidpath
+    feature_group: E-优化器
+    title: tidpath 模块
+    page_file: e31-tidpath.md
+    refs:
+      - path: src/backend/optimizer/path/tidpath.c
+        symbols: [create_tidscan_paths]
+  - feature: planagg
+    feature_group: E-优化器
+    title: planagg 模块
+    page_file: e32-planagg.md
+    refs:
+      - path: src/backend/optimizer/plan/planagg.c
+        symbols: [preprocess_minmax_aggregates]
+  - feature: preptlist
+    feature_group: E-优化器
+    title: preptlist 模块
+    page_file: e33-preptlist.md
+    refs:
+      - path: src/backend/optimizer/prep/preptlist.c
+        symbols: [preprocess_targetlist, extract_update_targetlist_colnos, get_plan_rowmark]
+  - feature: planmain
+    feature_group: E-优化器
+    title: planmain 模块
+    page_file: e34-planmain.md
+    refs:
+      - path: src/backend/optimizer/plan/planmain.c
+        symbols: [query_planner]
+  - feature: orclauses
+    feature_group: E-优化器
+    title: orclauses 模块
+    page_file: e35-orclauses.md
+    refs:
+      - path: src/backend/optimizer/util/orclauses.c
+        symbols: [extract_restriction_or_clauses]
+  - feature: geqo-eval
+    feature_group: E-优化器
+    title: geqo_eval 模块
+    page_file: e36-geqo-eval.md
+    refs:
+      - path: src/backend/optimizer/geqo/geqo_eval.c
+        symbols: [geqo_eval, gimme_tree]
+  - feature: geqo-erx
+    feature_group: E-优化器
+    title: geqo_erx 模块
+    page_file: e37-geqo-erx.md
+    refs:
+      - path: src/backend/optimizer/geqo/geqo_erx.c
+        symbols: [alloc_edge_table, free_edge_table, gimme_edge_table]
+  - feature: geqo-main
+    feature_group: E-优化器
+    title: geqo_main 模块
+    page_file: e38-geqo-main.md
+    refs:
+      - path: src/backend/optimizer/geqo/geqo_main.c
+        symbols: [geqo]
+  - feature: geqo-pool
+    feature_group: E-优化器
+    title: geqo_pool 模块
+    page_file: e39-geqo-pool.md
+    refs:
+      - path: src/backend/optimizer/geqo/geqo_pool.c
+        symbols: [alloc_pool, free_pool, random_init_pool]
+  - feature: nodemodifytable
+    feature_group: F-执行器
+    title: nodeModifyTable 模块
+    page_file: f01-nodemodifytable.md
+    refs:
+      - path: src/backend/executor/nodeModifyTable.c
+        symbols: [ExecInitGenerated, ExecComputeStoredGenerated, ExecGetUpdateNewTuple]
+  - feature: execexprinterp
+    feature_group: F-执行器
+    title: execExprInterp 模块
+    page_file: f02-execexprinterp.md
+    refs:
+      - path: src/backend/executor/execExprInterp.c
+        symbols: [ExecReadyInterpretedExpr, ExecInterpExpr, ExecInterpExprStillValid]
+  - feature: execexpr
+    feature_group: F-执行器
+    title: 表达式求值
+    page_file: f03-execexpr.md
+    refs:
+      - path: src/backend/executor/execExpr.c
+        symbols: [ExecInitExpr, ExecInitExprWithParams, ExecInitQual]
+  - feature: nodeagg
+    feature_group: F-执行器
+    title: 聚合节点
+    page_file: f04-nodeagg.md
+    refs:
+      - path: src/backend/executor/nodeAgg.c
+        symbols: [hash_agg_entry_size, hash_agg_set_limits, ExecInitAgg]
+  - feature: nodewindowagg
+    feature_group: F-执行器
+    title: nodeWindowAgg 模块
+    page_file: f05-nodewindowagg.md
+    refs:
+      - path: src/backend/executor/nodeWindowAgg.c
+        symbols: [ExecInitWindowAgg, ExecEndWindowAgg, ExecReScanWindowAgg]
+  - feature: nodehash
+    feature_group: F-执行器
+    title: nodeHash 模块
+    page_file: f06-nodehash.md
+    refs:
+      - path: src/backend/executor/nodeHash.c
+        symbols: [MultiExecHash, ExecInitHash, ExecEndHash]
+  - feature: execmain
+    feature_group: F-执行器
+    title: 执行器主流程
+    page_file: f07-execmain.md
+    refs:
+      - path: src/backend/executor/execMain.c
+        symbols: [ExecutorStart, standard_ExecutorStart, ExecutorRun]
+  - feature: execpartition
+    feature_group: F-执行器
+    title: execPartition 模块
+    page_file: f08-execpartition.md
+    refs:
+      - path: src/backend/executor/execPartition.c
+        symbols: [ExecSetupPartitionTupleRouting, ExecFindPartition, ExecCleanupTupleRouting]
+  - feature: spi
+    feature_group: F-执行器
+    title: spi 模块
+    page_file: f09-spi.md
+    refs:
+      - path: src/backend/executor/spi.c
+        symbols: [SPI_connect, SPI_connect_ext, SPI_finish]
+  - feature: functions
+    feature_group: F-执行器
+    title: functions 模块
+    page_file: f10-functions.md
+    refs:
+      - path: src/backend/executor/functions.c
+        symbols: [prepare_sql_fn_parse_info, sql_fn_parser_setup, fmgr_sql]
+  - feature: exectuples
+    feature_group: F-执行器
+    title: execTuples 模块
+    page_file: f11-exectuples.md
+    refs:
+      - path: src/backend/executor/execTuples.c
+        symbols: [MakeTupleTableSlot, ExecAllocTableSlot, ExecResetTupleTable]
+  - feature: nodehashjoin
+    feature_group: F-执行器
+    title: 哈希连接节点
+    page_file: f12-nodehashjoin.md
+    refs:
+      - path: src/backend/executor/nodeHashjoin.c
+        symbols: [ExecInitHashJoin, ExecEndHashJoin, ExecHashJoinSaveTuple]
+  - feature: nodeindexscan
+    feature_group: F-执行器
+    title: 索引扫描节点
+    page_file: f13-nodeindexscan.md
+    refs:
+      - path: src/backend/executor/nodeIndexscan.c
+        symbols: [ExecReScanIndexScan, ExecIndexEvalRuntimeKeys, ExecIndexEvalArrayKeys]
+  - feature: execparallel
+    feature_group: F-执行器
+    title: 并行执行协程
+    page_file: f14-execparallel.md
+    refs:
+      - path: src/backend/executor/execParallel.c
+        symbols: [ExecInitParallelPlan, ExecParallelCreateReaders, ExecParallelReinitialize]
+  - feature: nodemergejoin
+    feature_group: F-执行器
+    title: nodeMergejoin 模块
+    page_file: f15-nodemergejoin.md
+    refs:
+      - path: src/backend/executor/nodeMergejoin.c
+        symbols: [ExecInitMergeJoin, ExecEndMergeJoin, ExecReScanMergeJoin]
+  - feature: executils
+    feature_group: F-执行器
+    title: execUtils 模块
+    page_file: f16-executils.md
+    refs:
+      - path: src/backend/executor/execUtils.c
+        symbols: [CreateExecutorState, FreeExecutorState, CreateExprContext]
+  - feature: nodesubplan
+    feature_group: F-执行器
+    title: nodeSubplan 模块
+    page_file: f17-nodesubplan.md
+    refs:
+      - path: src/backend/executor/nodeSubplan.c
+        symbols: [ExecSubPlan, EstimateSubplanHashTableSpace, ExecInitSubPlan]
+  - feature: nodeincrementalsort
+    feature_group: F-执行器
+    title: nodeIncrementalSort 模块
+    page_file: f18-nodeincrementalsort.md
+    refs:
+      - path: src/backend/executor/nodeIncrementalSort.c
+        symbols: [ExecInitIncrementalSort, ExecEndIncrementalSort, ExecReScanIncrementalSort]
+  - feature: execindexing
+    feature_group: F-执行器
+    title: execIndexing 模块
+    page_file: f19-execindexing.md
+    refs:
+      - path: src/backend/executor/execIndexing.c
+        symbols: [ExecOpenIndices, ExecCloseIndices, ExecInsertIndexTuples]
+  - feature: nodememoize
+    feature_group: F-执行器
+    title: nodeMemoize 模块
+    page_file: f20-nodememoize.md
+    refs:
+      - path: src/backend/executor/nodeMemoize.c
+        symbols: [ExecInitMemoize, ExecEndMemoize, ExecReScanMemoize]
+  - feature: execreplication
+    feature_group: F-执行器
+    title: execReplication 模块
+    page_file: f21-execreplication.md
+    refs:
+      - path: src/backend/executor/execReplication.c
+        symbols: [RelationFindReplTupleByIndex, RelationFindReplTupleSeq, RelationFindDeletedTupleInfoSeq]
+  - feature: nodeappend
+    feature_group: F-执行器
+    title: nodeAppend 模块
+    page_file: f22-nodeappend.md
+    refs:
+      - path: src/backend/executor/nodeAppend.c
+        symbols: [ExecInitAppend, ExecEndAppend, ExecReScanAppend]
+  - feature: execsrf
+    feature_group: F-执行器
+    title: execSRF 模块
+    page_file: f23-execsrf.md
+    refs:
+      - path: src/backend/executor/execSRF.c
+        symbols: [ExecInitTableFunctionResult, ExecMakeTableFunctionResult, ExecInitFunctionResultSet]
+  - feature: execprocnode
+    feature_group: F-执行器
+    title: 执行器节点驱动
+    page_file: f24-execprocnode.md
+    refs:
+      - path: src/backend/executor/execProcnode.c
+        symbols: [ExecInitNode, ExecSetExecProcNode, MultiExecProcNode]
+  - feature: nodegathermerge
+    feature_group: F-执行器
+    title: nodeGatherMerge 模块
+    page_file: f25-nodegathermerge.md
+    refs:
+      - path: src/backend/executor/nodeGatherMerge.c
+        symbols: [ExecInitGatherMerge, ExecEndGatherMerge, ExecShutdownGatherMerge]
+  - feature: nodeindexonlyscan
+    feature_group: F-执行器
+    title: nodeIndexonlyscan 模块
+    page_file: f26-nodeindexonlyscan.md
+    refs:
+      - path: src/backend/executor/nodeIndexonlyscan.c
+        symbols: [ExecReScanIndexOnlyScan, ExecEndIndexOnlyScan, ExecIndexOnlyMarkPos]
+  - feature: nodefunctionscan
+    feature_group: F-执行器
+    title: nodeFunctionscan 模块
+    page_file: f27-nodefunctionscan.md
+    refs:
+      - path: src/backend/executor/nodeFunctionscan.c
+        symbols: [ExecInitFunctionScan, ExecEndFunctionScan, ExecReScanFunctionScan]
+  - feature: execgrouping
+    feature_group: F-执行器
+    title: execGrouping 模块
+    page_file: f28-execgrouping.md
+    refs:
+      - path: src/backend/executor/execGrouping.c
+        symbols: [execTuplesMatchPrepare, execTuplesHashPrepare, ResetTupleHashTable]
+  - feature: nodesetop
+    feature_group: F-执行器
+    title: nodeSetOp 模块
+    page_file: f29-nodesetop.md
+    refs:
+      - path: src/backend/executor/nodeSetOp.c
+        symbols: [EstimateSetOpHashTableSpace, ExecInitSetOp, ExecEndSetOp]
+  - feature: nodemergeappend
+    feature_group: F-执行器
+    title: nodeMergeAppend 模块
+    page_file: f30-nodemergeappend.md
+    refs:
+      - path: src/backend/executor/nodeMergeAppend.c
+        symbols: [ExecInitMergeAppend, ExecEndMergeAppend, ExecReScanMergeAppend]
+  - feature: nodebitmapheapscan
+    feature_group: F-执行器
+    title: nodeBitmapHeapscan 模块
+    page_file: f31-nodebitmapheapscan.md
+    refs:
+      - path: src/backend/executor/nodeBitmapHeapscan.c
+        symbols: [ExecReScanBitmapHeapScan, ExecEndBitmapHeapScan, ExecInitBitmapHeapScan]
+  - feature: nodetidrangescan
+    feature_group: F-执行器
+    title: nodeTidrangescan 模块
+    page_file: f32-nodetidrangescan.md
+    refs:
+      - path: src/backend/executor/nodeTidrangescan.c
+        symbols: [ExecReScanTidRangeScan, ExecEndTidRangeScan, ExecInitTidRangeScan]
+  - feature: execami
+    feature_group: F-执行器
+    title: execAmi 模块
+    page_file: f33-execami.md
+    refs:
+      - path: src/backend/executor/execAmi.c
+        symbols: [ExecReScan, ExecMarkPos, ExecRestrPos]
+  - feature: nodeforeignscan
+    feature_group: F-执行器
+    title: nodeForeignscan 模块
+    page_file: f34-nodeforeignscan.md
+    refs:
+      - path: src/backend/executor/nodeForeignscan.c
+        symbols: [ExecInitForeignScan, ExecEndForeignScan, ExecReScanForeignScan]
+  - feature: nodetablefuncscan
+    feature_group: F-执行器
+    title: nodeTableFuncscan 模块
+    page_file: f35-nodetablefuncscan.md
+    refs:
+      - path: src/backend/executor/nodeTableFuncscan.c
+        symbols: [ExecInitTableFuncScan, ExecEndTableFuncScan, ExecReScanTableFuncScan]
+  - feature: nodeseqscan
+    feature_group: F-执行器
+    title: 顺序扫描节点
+    page_file: f36-nodeseqscan.md
+    refs:
+      - path: src/backend/executor/nodeSeqscan.c
+        symbols: [ExecInitSeqScan, ExecEndSeqScan, ExecReScanSeqScan]
+  - feature: nodetidscan
+    feature_group: F-执行器
+    title: nodeTidscan 模块
+    page_file: f37-nodetidscan.md
+    refs:
+      - path: src/backend/executor/nodeTidscan.c
+        symbols: [ExecReScanTidScan, ExecEndTidScan, ExecInitTidScan]
+  - feature: nodegather
+    feature_group: F-执行器
+    title: nodeGather 模块
+    page_file: f38-nodegather.md
+    refs:
+      - path: src/backend/executor/nodeGather.c
+        symbols: [ExecInitGather, ExecEndGather, ExecShutdownGather]
+  - feature: nodelimit
+    feature_group: F-执行器
+    title: nodeLimit 模块
+    page_file: f39-nodelimit.md
+    refs:
+      - path: src/backend/executor/nodeLimit.c
+        symbols: [ExecInitLimit, ExecEndLimit, ExecReScanLimit]
+  - feature: nodebitmapindexscan
+    feature_group: F-执行器
+    title: nodeBitmapIndexscan 模块
+    page_file: f40-nodebitmapindexscan.md
+    refs:
+      - path: src/backend/executor/nodeBitmapIndexscan.c
+        symbols: [MultiExecBitmapIndexScan, ExecReScanBitmapIndexScan, ExecEndBitmapIndexScan]
+  - feature: nodematerial
+    feature_group: F-执行器
+    title: nodeMaterial 模块
+    page_file: f41-nodematerial.md
+    refs:
+      - path: src/backend/executor/nodeMaterial.c
+        symbols: [ExecInitMaterial, ExecEndMaterial, ExecMaterialMarkPos]
+  - feature: relcache
+    feature_group: G-目录与缓存
+    title: 关系缓存
+    page_file: g01-relcache.md
+    refs:
+      - path: src/backend/utils/cache/relcache.c
+        symbols: [RelationBuildDesc, RelationInitIndexAccessInfo, RelationInitTableAccessMethod]
+  - feature: objectaddress
+    feature_group: G-目录与缓存
+    title: objectaddress 模块
+    page_file: g02-objectaddress.md
+    refs:
+      - path: src/backend/catalog/objectaddress.c
+        symbols: [get_object_address, get_object_address_rv, check_object_ownership]
+  - feature: namespace
+    feature_group: G-目录与缓存
+    title: namespace 模块
+    page_file: g03-namespace.md
+    refs:
+      - path: src/backend/catalog/namespace.c
+        symbols: [RangeVarGetRelidExtended, RangeVarGetCreationNamespace, RangeVarGetAndCheckCreationNamespace]
+  - feature: index
+    feature_group: G-目录与缓存
+    title: index 模块
+    page_file: g04-index.md
+    refs:
+      - path: src/backend/catalog/index.c
+        symbols: [index_check_primary_key, index_create_copy, index_concurrently_build]
+  - feature: aclchk
+    feature_group: G-目录与缓存
+    title: aclchk 模块
+    page_file: g05-aclchk.md
+    refs:
+      - path: src/backend/catalog/aclchk.c
+        symbols: [ExecuteGrantStmt, ExecAlterDefaultPrivilegesStmt, RemoveRoleFromObjectACL]
+  - feature: heap
+    feature_group: G-目录与缓存
+    title: heap 模块
+    page_file: g06-heap.md
+    refs:
+      - path: src/backend/catalog/heap.c
+        symbols: [SystemAttributeDefinition, SystemAttributeByName, CheckAttributeNamesTypes]
+  - feature: typcache
+    feature_group: G-目录与缓存
+    title: typcache 模块
+    page_file: g07-typcache.md
+    refs:
+      - path: src/backend/utils/cache/typcache.c
+        symbols: [lookup_type_cache, InitDomainConstraintRef, UpdateDomainConstraintRef]
+  - feature: lsyscache
+    feature_group: G-目录与缓存
+    title: lsyscache 模块
+    page_file: g08-lsyscache.md
+    refs:
+      - path: src/backend/utils/cache/lsyscache.c
+        symbols: [op_in_opfamily, get_op_opfamily_strategy, get_op_opfamily_sortfamily]
+  - feature: dependency
+    feature_group: G-目录与缓存
+    title: dependency 模块
+    page_file: g09-dependency.md
+    refs:
+      - path: src/backend/catalog/dependency.c
+        symbols: [performDeletion, performMultipleDeletions, deleteOneObject]
+  - feature: plancache
+    feature_group: G-目录与缓存
+    title: plancache 模块
+    page_file: g10-plancache.md
+    refs:
+      - path: src/backend/utils/cache/plancache.c
+        symbols: [InitPlanCache, CreateCachedPlan, CreateCachedPlanForQuery]
+  - feature: catcache
+    feature_group: G-目录与缓存
+    title: 目录缓存
+    page_file: g11-catcache.md
+    refs:
+      - path: src/backend/utils/cache/catcache.c
+        symbols: [CatCacheInvalidate, CreateCacheMemoryContext, ResetCatalogCaches]
+  - feature: inval
+    feature_group: G-目录与缓存
+    title: inval 模块
+    page_file: g12-inval.md
+    refs:
+      - path: src/backend/utils/cache/inval.c
+        symbols: [InvalidateSystemCachesExtended, LocalExecuteInvalidationMessage, InvalidateSystemCaches]
+  - feature: pg-shdepend
+    feature_group: G-目录与缓存
+    title: pg_shdepend 模块
+    page_file: g13-pg-shdepend.md
+    refs:
+      - path: src/backend/catalog/pg_shdepend.c
+        symbols: [recordSharedDependencyOn, recordDependencyOnOwner, changeDependencyOnOwner]
+  - feature: pg-constraint
+    feature_group: G-目录与缓存
+    title: pg_constraint 模块
+    page_file: g14-pg-constraint.md
+    refs:
+      - path: src/backend/catalog/pg_constraint.c
+        symbols: [ConstraintNameIsUsed, ConstraintNameExists, ChooseConstraintName]
+  - feature: pg-publication
+    feature_group: G-目录与缓存
+    title: pg_publication 模块
+    page_file: g15-pg-publication.md
+    refs:
+      - path: src/backend/catalog/pg_publication.c
+        symbols: [is_publishable_relation, is_schema_publication, is_table_publication]
+  - feature: pg-proc
+    feature_group: G-目录与缓存
+    title: pg_proc 模块
+    page_file: g16-pg-proc.md
+    refs:
+      - path: src/backend/catalog/pg_proc.c
+        symbols: [function_parse_error_transpose, oid_array_to_list]
+  - feature: pg-depend
+    feature_group: G-目录与缓存
+    title: pg_depend 模块
+    page_file: g17-pg-depend.md
+    refs:
+      - path: src/backend/catalog/pg_depend.c
+        symbols: [recordDependencyOn, recordMultipleDependencies, recordDependencyOnCurrentExtension]
+  - feature: relmapper
+    feature_group: G-目录与缓存
+    title: relmapper 模块
+    page_file: g18-relmapper.md
+    refs:
+      - path: src/backend/utils/cache/relmapper.c
+        symbols: [RelationMapOidToFilenumber, RelationMapFilenumberToOid, RelationMapOidToFilenumberForDatabase]
+  - feature: pg-operator
+    feature_group: G-目录与缓存
+    title: pg_operator 模块
+    page_file: g19-pg-operator.md
+    refs:
+      - path: src/backend/catalog/pg_operator.c
+        symbols: [OperatorLookup, OperatorCreate, OperatorValidateParams]
+  - feature: storage
+    feature_group: G-目录与缓存
+    title: storage 模块
+    page_file: g20-storage.md
+    refs:
+      - path: src/backend/catalog/storage.c
+        symbols: [RelationCreateStorage, log_smgrcreate, RelationDropStorage]
+  - feature: pg-type
+    feature_group: G-目录与缓存
+    title: pg_type 模块
+    page_file: g21-pg-type.md
+    refs:
+      - path: src/backend/catalog/pg_type.c
+        symbols: [TypeShellMake, GenerateTypeDependencies, RenameTypeInternal]
+  - feature: pg-aggregate
+    feature_group: G-目录与缓存
+    title: pg_aggregate 模块
+    page_file: g22-pg-aggregate.md
+    refs:
+      - path: src/backend/catalog/pg_aggregate.c
+        symbols: [lookup_agg_function]
+  - feature: pg-enum
+    feature_group: G-目录与缓存
+    title: pg_enum 模块
+    page_file: g23-pg-enum.md
+    refs:
+      - path: src/backend/catalog/pg_enum.c
+        symbols: [EnumValuesCreate, EnumValuesDelete, AddEnumLabel]
+  - feature: catalog
+    feature_group: G-目录与缓存
+    title: 系统目录
+    page_file: g24-catalog.md
+    refs:
+      - path: src/backend/catalog/catalog.c
+        symbols: [IsSystemRelation, IsSystemClass, IsCatalogRelation]
+  - feature: syscache
+    feature_group: G-目录与缓存
+    title: 系统缓存
+    page_file: g25-syscache.md
+    refs:
+      - path: src/backend/utils/cache/syscache.c
+        symbols: [InitCatalogCache, InitCatalogCachePhase2, SearchSysCache]
+  - feature: pg-subscription
+    feature_group: G-目录与缓存
+    title: pg_subscription 模块
+    page_file: g26-pg-subscription.md
+    refs:
+      - path: src/backend/catalog/pg_subscription.c
+        symbols: [GetPublicationsStr, GetSubscription, SubscriptionConninfo]
+  - feature: funccache
+    feature_group: G-目录与缓存
+    title: funccache 模块
+    page_file: g27-funccache.md
+    refs:
+      - path: src/backend/utils/cache/funccache.c
+        symbols: [cfunc_resolve_polymorphic_argtypes, cached_function_compile]
+  - feature: pg-inherits
+    feature_group: G-目录与缓存
+    title: pg_inherits 模块
+    page_file: g28-pg-inherits.md
+    refs:
+      - path: src/backend/catalog/pg_inherits.c
+        symbols: [find_inheritance_children, find_inheritance_children_extended, find_all_inheritors]
+  - feature: ruleutils
+    feature_group: H-内存与排序
+    title: ruleutils 模块
+    page_file: h01-ruleutils.md
+    refs:
+      - path: src/backend/utils/adt/ruleutils.c
+        symbols: [pg_get_indexdef_string, pg_get_indexdef_columns, pg_get_indexdef_columns_extended]
+  - feature: numeric
+    feature_group: H-内存与排序
+    title: numeric 模块
+    page_file: h02-numeric.md
+    refs:
+      - path: src/backend/utils/adt/numeric.c
+        symbols: [unconstify_constexpr, numeric_is_nan, numeric_is_inf]
+  - feature: selfuncs
+    feature_group: H-内存与排序
+    title: selfuncs 模块
+    page_file: h03-selfuncs.md
+    refs:
+      - path: src/backend/utils/adt/selfuncs.c
+        symbols: [var_eq_const, var_eq_non_const, mcv_selectivity]
+  - feature: arrayfuncs
+    feature_group: H-内存与排序
+    title: arrayfuncs 模块
+    page_file: h04-arrayfuncs.md
+    refs:
+      - path: src/backend/utils/adt/arrayfuncs.c
+        symbols: [array_in, CopyArrayEls, array_out]
+  - feature: timestamp
+    feature_group: H-内存与排序
+    title: timestamp 模块
+    page_file: h05-timestamp.md
+    refs:
+      - path: src/backend/utils/adt/timestamp.c
+        symbols: [anytimestamp_typmod_check, AdjustTimestampForTypmod, interval_out]
+  - feature: formatting
+    feature_group: H-内存与排序
+    title: formatting 模块
+    page_file: h06-formatting.md
+    refs:
+      - path: src/backend/utils/adt/formatting.c
+        symbols: [str_tolower, str_toupper, str_initcap]
+  - feature: jsonfuncs
+    feature_group: H-内存与排序
+    title: jsonfuncs 模块
+    page_file: h07-jsonfuncs.md
+    refs:
+      - path: src/backend/utils/adt/jsonfuncs.c
+        symbols: [pg_parse_json_or_errsave, makeJsonLexContext, json_errsave_error]
+  - feature: varlena
+    feature_group: H-内存与排序
+    title: varlena 模块
+    page_file: h08-varlena.md
+    refs:
+      - path: src/backend/utils/adt/varlena.c
+        symbols: [cstring_to_text, cstring_to_text_with_len, text_to_cstring]
+  - feature: acl
+    feature_group: H-内存与排序
+    title: acl 模块
+    page_file: h09-acl.md
+    refs:
+      - path: src/backend/utils/adt/acl.c
+        symbols: [make_empty_acl, aclcopy, aclconcat]
+  - feature: datetime
+    feature_group: H-内存与排序
+    title: datetime 模块
+    page_file: h10-datetime.md
+    refs:
+      - path: src/backend/utils/adt/datetime.c
+        symbols: [date2j, j2date, j2day]
+  - feature: xml
+    feature_group: H-内存与排序
+    title: xml 模块
+    page_file: h11-xml.md
+    refs:
+      - path: src/backend/utils/adt/xml.c
+        symbols: [xmlconcat, xmltotext_with_options, xmlelement]
+  - feature: jsonpath-exec
+    feature_group: H-内存与排序
+    title: jsonpath_exec 模块
+    page_file: h12-jsonpath-exec.md
+    refs:
+      - path: src/backend/utils/adt/jsonpath_exec.c
+        symbols: [GetJsonPathVar, JsonPathExists, JsonPathQuery]
+  - feature: ri-triggers
+    feature_group: H-内存与排序
+    title: ri_triggers 模块
+    page_file: h13-ri-triggers.md
+    refs:
+      - path: src/backend/utils/adt/ri_triggers.c
+        symbols: [RI_FKey_pk_upd_check_required, RI_FKey_fk_upd_check_required, RI_Initial_Check]
+  - feature: geo-ops
+    feature_group: H-内存与排序
+    title: geo_ops 模块
+    page_file: h14-geo-ops.md
+    refs:
+      - path: src/backend/utils/adt/geo_ops.c
+        symbols: [single_decode, single_encode, pair_decode]
+  - feature: float
+    feature_group: H-内存与排序
+    title: float 模块
+    page_file: h15-float.md
+    refs:
+      - path: src/backend/utils/adt/float.c
+        symbols: [float_overflow_error, float_underflow_error, float_zero_divide_error]
+  - feature: tuplesort
+    feature_group: H-内存与排序
+    title: 元组排序
+    page_file: h16-tuplesort.md
+    refs:
+      - path: src/backend/utils/sort/tuplesort.c
+        symbols: [tuplesort_begin_common, tuplesort_set_bound, tuplesort_used_bound]
+  - feature: rangetypes
+    feature_group: H-内存与排序
+    title: rangetypes 模块
+    page_file: h17-rangetypes.md
+    refs:
+      - path: src/backend/utils/adt/rangetypes.c
+        symbols: [range_eq_internal, range_ne_internal, range_before_internal]
+  - feature: dsa
+    feature_group: H-内存与排序
+    title: dsa 模块
+    page_file: h18-dsa.md
+    refs:
+      - path: src/backend/utils/mmgr/dsa.c
+        symbols: [dsa_create_ext, dsa_create_in_place_ext, dsa_get_handle]
+  - feature: multirangetypes
+    feature_group: H-内存与排序
+    title: multirangetypes 模块
+    page_file: h19-multirangetypes.md
+    refs:
+      - path: src/backend/utils/adt/multirangetypes.c
+        symbols: [multirange_get_typcache, make_multirange, multirange_get_range]
+  - feature: date
+    feature_group: H-内存与排序
+    title: date 模块
+    page_file: h20-date.md
+    refs:
+      - path: src/backend/utils/adt/date.c
+        symbols: [anytime_typmod_check, EncodeSpecialDate, GetSQLCurrentDate]
+  - feature: tsvector-op
+    feature_group: H-内存与排序
+    title: tsvector_op 模块
+    page_file: h21-tsvector-op.md
+    refs:
+      - path: src/backend/utils/adt/tsvector_op.c
+        symbols: [type, tsCompareString, TS_execute]
+  - feature: pgstatfuncs
+    feature_group: H-内存与排序
+    title: pgstatfuncs 模块
+    page_file: h22-pgstatfuncs.md
+    refs:
+      - path: src/backend/utils/adt/pgstatfuncs.c
+        symbols: [CppConcat]
+  - feature: tuplesortvariants
+    feature_group: H-内存与排序
+    title: tuplesortvariants 模块
+    page_file: h23-tuplesortvariants.md
+    refs:
+      - path: src/backend/utils/sort/tuplesortvariants.c
+        symbols: [tuplesort_begin_heap, tuplesort_begin_cluster, tuplesort_begin_index_btree]
+  - feature: jsonb-util
+    feature_group: H-内存与排序
+    title: jsonb_util 模块
+    page_file: h24-jsonb-util.md
+    refs:
+      - path: src/backend/utils/adt/jsonb_util.c
+        symbols: [JsonbToJsonbValue, JsonbValueToJsonb, getJsonbOffset]
+  - feature: aset
+    feature_group: H-内存与排序
+    title: AllocSet 分配器
+    page_file: h25-aset.md
+    refs:
+      - path: src/backend/utils/mmgr/aset.c
+        symbols: [AllocSetContextCreateInternal, AllocSetReset, AllocSetDelete]
+  - feature: mcxt
+    feature_group: H-内存与排序
+    title: MemoryContext 体系
+    page_file: h26-mcxt.md
+    refs:
+      - path: src/backend/utils/mmgr/mcxt.c
+        symbols: [MemoryContextInit, MemoryContextReset, MemoryContextResetOnly]
+  - feature: regexp
+    feature_group: H-内存与排序
+    title: regexp 模块
+    page_file: h27-regexp.md
+    refs:
+      - path: src/backend/utils/adt/regexp.c
+        symbols: [RE_compile_and_cache, RE_compile_and_execute, regexp_fixed_prefix]
+  - feature: freepage
+    feature_group: H-内存与排序
+    title: freepage 模块
+    page_file: h28-freepage.md
+    refs:
+      - path: src/backend/utils/mmgr/freepage.c
+        symbols: [FreePageManagerInitialize, FreePageManagerGet, FreePageManagerPut]
+  - feature: worker
+    feature_group: I-复制与高可用
+    title: 复制 worker
+    page_file: i01-worker.md
+    refs:
+      - path: src/backend/replication/logical/worker.c
+        symbols: [ReplicationOriginNameForLogicalRep, stream_start_internal, stream_stop_internal]
+  - feature: reorderbuffer
+    feature_group: I-复制与高可用
+    title: reorderbuffer 模块
+    page_file: i02-reorderbuffer.md
+    refs:
+      - path: src/backend/replication/logical/reorderbuffer.c
+        symbols: [ReorderBufferAllocate, ReorderBufferFree, ReorderBufferAllocChange]
+  - feature: walsender
+    feature_group: I-复制与高可用
+    title: WAL 发送端
+    page_file: i03-walsender.md
+    refs:
+      - path: src/backend/replication/walsender.c
+        symbols: [InitWalSender, WalSndErrorCleanup, PhysicalWakeupLogicalWalSnd]
+  - feature: slot
+    feature_group: I-复制与高可用
+    title: slot 模块
+    page_file: i04-slot.md
+    refs:
+      - path: src/backend/replication/slot.c
+        symbols: [ReplicationSlotInitialize, ReplicationSlotValidateName, ReplicationSlotValidateNameInternal]
+  - feature: pgoutput
+    feature_group: I-复制与高可用
+    title: pgoutput 模块
+    page_file: i05-pgoutput.md
+    refs:
+      - path: src/backend/replication/pgoutput/pgoutput.c
+        symbols: [_PG_output_plugin_init]
+  - feature: logical
+    feature_group: I-复制与高可用
+    title: 逻辑复制
+    page_file: i06-logical.md
+    refs:
+      - path: src/backend/replication/logical/logical.c
+        symbols: [check_output_plugin_libraries, CheckLogicalDecodingRequirements, CreateInitDecodingContext]
+  - feature: slotsync
+    feature_group: I-复制与高可用
+    title: slotsync 模块
+    page_file: i07-slotsync.md
+    refs:
+      - path: src/backend/replication/logical/slotsync.c
+        symbols: [CheckAndGetDbnameFromConninfo, ValidateSlotSyncParams, HandleSlotSyncMessageInterrupt]
+  - feature: snapbuild
+    feature_group: I-复制与高可用
+    title: snapbuild 模块
+    page_file: i08-snapbuild.md
+    refs:
+      - path: src/backend/replication/logical/snapbuild.c
+        symbols: [AllocateSnapshotBuilder, FreeSnapshotBuilder, SnapBuildCurrentState]
+  - feature: tablesync
+    feature_group: I-复制与高可用
+    title: tablesync 模块
+    page_file: i09-tablesync.md
+    refs:
+      - path: src/backend/replication/logical/tablesync.c
+        symbols: [ProcessSyncingTablesForSync, ProcessSyncingTablesForApply, ReplicationSlotNameForTablesync]
+  - feature: walreceiver
+    feature_group: I-复制与高可用
+    title: WAL 接收端
+    page_file: i10-walreceiver.md
+    refs:
+      - path: src/backend/replication/walreceiver.c
+        symbols: [WalReceiverMain, WalRcvRequestApplyReply]
+  - feature: applyparallelworker
+    feature_group: I-复制与高可用
+    title: applyparallelworker 模块
+    page_file: i11-applyparallelworker.md
+    refs:
+      - path: src/backend/replication/logical/applyparallelworker.c
+        symbols: [pa_allocate_worker, pa_find_worker, pa_detach_all_error_mq]
+  - feature: launcher
+    feature_group: I-复制与高可用
+    title: launcher 模块
+    page_file: i12-launcher.md
+    refs:
+      - path: src/backend/replication/logical/launcher.c
+        symbols: [logicalrep_worker_find, logicalrep_workers_find, logicalrep_worker_launch]
+  - feature: origin
+    feature_group: I-复制与高可用
+    title: origin 模块
+    page_file: i13-origin.md
+    refs:
+      - path: src/backend/replication/logical/origin.c
+        symbols: [replorigin_by_name, replorigin_create, replorigin_drop_by_name]
+  - feature: decode
+    feature_group: I-复制与高可用
+    title: decode 模块
+    page_file: i14-decode.md
+    refs:
+      - path: src/backend/replication/logical/decode.c
+        symbols: [LogicalDecodingProcessRecord, xlog_decode, xlog2_decode]
+  - feature: libpqwalreceiver
+    feature_group: I-复制与高可用
+    title: libpqwalreceiver 模块
+    page_file: i15-libpqwalreceiver.md
+    refs:
+      - path: src/backend/replication/libpqwalreceiver/libpqwalreceiver.c
+        symbols: [_PG_init]
+  - feature: syncrep
+    feature_group: I-复制与高可用
+    title: syncrep 模块
+    page_file: i16-syncrep.md
+    refs:
+      - path: src/backend/replication/syncrep.c
+        symbols: [SyncRepWaitForLSN, SyncRepCleanupAtProcExit, SyncRepInitConfig]
+  - feature: proto
+    feature_group: I-复制与高可用
+    title: proto 模块
+    page_file: i17-proto.md
+    refs:
+      - path: src/backend/replication/logical/proto.c
+        symbols: [logicalrep_write_begin, logicalrep_read_begin, logicalrep_write_commit]
+  - feature: sequencesync
+    feature_group: I-复制与高可用
+    title: sequencesync 模块
+    page_file: i18-sequencesync.md
+    refs:
+      - path: src/backend/replication/logical/sequencesync.c
+        symbols: [ProcessSequencesForSync, SequenceSyncWorkerMain]
+  - feature: slotfuncs
+    feature_group: I-复制与高可用
+    title: slotfuncs 模块
+    page_file: i19-slotfuncs.md
+    refs:
+      - path: src/backend/replication/slotfuncs.c
+        symbols: [create_physical_replication_slot, pg_create_physical_replication_slot, create_logical_replication_slot]
+  - feature: logical-relation
+    feature_group: I-复制与高可用
+    title: relation 模块
+    page_file: i20-logical-relation.md
+    refs:
+      - path: src/backend/replication/logical/relation.c
+        symbols: [logicalrep_relmap_update, logicalrep_rel_open, logicalrep_rel_close]
+  - feature: logicalctl
+    feature_group: I-复制与高可用
+    title: logicalctl 模块
+    page_file: i21-logicalctl.md
+    refs:
+      - path: src/backend/replication/logical/logicalctl.c
+        symbols: [StartupLogicalDecodingStatus, InitializeProcessXLogLogicalInfo, ProcessBarrierUpdateXLogLogicalInfo]
+  - feature: conflict
+    feature_group: I-复制与高可用
+    title: conflict 模块
+    page_file: i22-conflict.md
+    refs:
+      - path: src/backend/replication/logical/conflict.c
+        symbols: [create_conflict_log_table, GetConflictLogDest, GetTupleTransactionInfo]
+  - feature: tablecmds
+    feature_group: J-服务端与命令面
+    title: tablecmds 模块
+    page_file: j01-tablecmds.md
+    refs:
+      - path: src/backend/commands/tablecmds.c
+        symbols: [DefineRelation, BuildDescForRelation, RemoveRelations]
+  - feature: trigger
+    feature_group: J-服务端与命令面
+    title: trigger 模块
+    page_file: j02-trigger.md
+    refs:
+      - path: src/backend/commands/trigger.c
+        symbols: [CreateTrigger, CreateTriggerFiringOn, TriggerSetParentTrigger]
+  - feature: guc
+    feature_group: J-服务端与命令面
+    title: GUC 配置系统
+    page_file: j03-guc.md
+    refs:
+      - path: src/backend/utils/misc/guc.c
+        symbols: [guc_malloc, guc_realloc, guc_strdup]
+  - feature: explain
+    feature_group: J-服务端与命令面
+    title: explain 模块
+    page_file: j04-explain.md
+    refs:
+      - path: src/backend/commands/explain.c
+        symbols: [ExplainQuery, ExplainResultDesc, ExplainOneQuery]
+  - feature: indexcmds
+    feature_group: J-服务端与命令面
+    title: indexcmds 模块
+    page_file: j05-indexcmds.md
+    refs:
+      - path: src/backend/commands/indexcmds.c
+        symbols: [CheckIndexCompatible, WaitForOlderSnapshots, ResolveOpClass]
+  - feature: postgres
+    feature_group: J-服务端与命令面
+    title: 后端主循环
+    page_file: j06-postgres.md
+    refs:
+      - path: src/backend/tcop/postgres.c
+        symbols: [ProcessClientReadInterrupt, ProcessClientWriteInterrupt, pg_parse_query]
+  - feature: typecmds
+    feature_group: J-服务端与命令面
+    title: typecmds 模块
+    page_file: j07-typecmds.md
+    refs:
+      - path: src/backend/commands/typecmds.c
+        symbols: [DefineType, RemoveTypeById, DefineDomain]
+  - feature: postmaster
+    feature_group: J-服务端与命令面
+    title: postmaster 总控
+    page_file: j08-postmaster.md
+    refs:
+      - path: src/backend/postmaster/postmaster.c
+        symbols: [PostmasterMain, ClosePostmasterPorts, InitProcessGlobals]
+  - feature: repack
+    feature_group: J-服务端与命令面
+    title: repack 模块
+    page_file: j09-repack.md
+    refs:
+      - path: src/backend/commands/repack.c
+        symbols: [ExecRepack, cluster_rel, check_index_is_clusterable]
+  - feature: subscriptioncmds
+    feature_group: J-服务端与命令面
+    title: subscriptioncmds 模块
+    page_file: j10-subscriptioncmds.md
+    refs:
+      - path: src/backend/commands/subscriptioncmds.c
+        symbols: [CreateSubscription, AlterSubscription, DropSubscription]
+  - feature: extension
+    feature_group: J-服务端与命令面
+    title: extension 模块
+    page_file: j11-extension.md
+    refs:
+      - path: src/backend/commands/extension.c
+        symbols: [get_extension_oid, get_extension_name, get_extension_schema]
+  - feature: autovacuum
+    feature_group: J-服务端与命令面
+    title: autovacuum 模块
+    page_file: j12-autovacuum.md
+    refs:
+      - path: src/backend/postmaster/autovacuum.c
+        symbols: [AutoVacLauncherMain, AutoVacWorkerFailed, AutoVacWorkerMain]
+  - feature: elog
+    feature_group: J-服务端与命令面
+    title: 错误上报
+    page_file: j13-elog.md
+    refs:
+      - path: src/backend/utils/error/elog.c
+        symbols: [message_level_is_interesting, in_error_recursion_trouble, errstart_cold]
+  - feature: dbcommands
+    feature_group: J-服务端与命令面
+    title: dbcommands 模块
+    page_file: j14-dbcommands.md
+    refs:
+      - path: src/backend/commands/dbcommands.c
+        symbols: [createdb, check_encoding_locale_matches, dropdb]
+  - feature: async
+    feature_group: J-服务端与命令面
+    title: async 模块
+    page_file: j15-async.md
+    refs:
+      - path: src/backend/commands/async.c
+        symbols: [Async_Notify, Async_Listen, Async_Unlisten]
+  - feature: analyze
+    feature_group: J-服务端与命令面
+    title: analyze 模块
+    page_file: j16-analyze.md
+    refs:
+      - path: src/backend/commands/analyze.c
+        symbols: [analyze_rel, attribute_is_analyzable, build_statistic_tuple]
+  - feature: utility
+    feature_group: J-服务端与命令面
+    title: 工具命令执行
+    page_file: j17-utility.md
+    refs:
+      - path: src/backend/tcop/utility.c
+        symbols: [CommandIsReadOnly, PreventCommandIfReadOnly, PreventCommandIfParallelMode]
+  - feature: vacuum
+    feature_group: J-服务端与命令面
+    title: vacuum 模块
+    page_file: j18-vacuum.md
+    refs:
+      - path: src/backend/commands/vacuum.c
+        symbols: [check_vacuum_buffer_usage_limit, ExecVacuum, vacuum]
+  - feature: user
+    feature_group: J-服务端与命令面
+    title: user 模块
+    page_file: j19-user.md
+    refs:
+      - path: src/backend/commands/user.c
+        symbols: [CreateRole, AlterRole, AlterRoleSet]
+  - feature: functioncmds
+    feature_group: J-服务端与命令面
+    title: functioncmds 模块
+    page_file: j20-functioncmds.md
+    refs:
+      - path: src/backend/commands/functioncmds.c
+        symbols: [CreateFunction, RemoveFunctionById, AlterFunction]
+  - feature: event-trigger
+    feature_group: J-服务端与命令面
+    title: event_trigger 模块
+    page_file: j21-event-trigger.md
+    refs:
+      - path: src/backend/commands/event_trigger.c
+        symbols: [CreateEventTrigger, AlterEventTrigger, AlterEventTriggerOwner]
+  - feature: copyfromparse
+    feature_group: J-服务端与命令面
+    title: copyfromparse 模块
+    page_file: j22-copyfromparse.md
+    refs:
+      - path: src/backend/commands/copyfromparse.c
+        symbols: [ReceiveCopyBegin, ReceiveCopyBinaryHeader, NextCopyFromRawFields]
+  - feature: publicationcmds
+    feature_group: J-服务端与命令面
+    title: publicationcmds 模块
+    page_file: j23-publicationcmds.md
+    refs:
+      - path: src/backend/commands/publicationcmds.c
+        symbols: [pub_rf_contains_invalid_column, pub_contains_invalid_column, InvalidatePubRelSyncCache]
+  - feature: datachecksum-state
+    feature_group: J-服务端与命令面
+    title: datachecksum_state 模块
+    page_file: j24-datachecksum-state.md
+    refs:
+      - path: src/backend/postmaster/datachecksum_state.c
+        symbols: [EmitAndWaitDataChecksumsBarrier, AbsorbDataChecksumsBarrier, DataChecksumsWorkerLauncherMain]
+  - feature: pgstat
+    feature_group: J-服务端与命令面
+    title: pgstat 模块
+    page_file: j25-pgstat.md
+    refs:
+      - path: src/backend/utils/activity/pgstat.c
+        symbols: [pgstat_restore_stats, pgstat_discard_stats, pgstat_before_server_shutdown]
+  - feature: copyfrom
+    feature_group: J-服务端与命令面
+    title: copyfrom 模块
+    page_file: j26-copyfrom.md
+    refs:
+      - path: src/backend/commands/copyfrom.c
+        symbols: [CopyFromErrorCallback, CopyLimitPrintoutLength, CopyFrom]
+  - feature: walsummarizer
+    feature_group: J-服务端与命令面
+    title: walsummarizer 模块
+    page_file: j27-walsummarizer.md
+    refs:
+      - path: src/backend/postmaster/walsummarizer.c
+        symbols: [WalSummarizerMain, GetWalSummarizerState, GetOldestUnsummarizedLSN]
+  - feature: opclasscmds
+    feature_group: J-服务端与命令面
+    title: opclasscmds 模块
+    page_file: j28-opclasscmds.md
+    refs:
+      - path: src/backend/commands/opclasscmds.c
+        symbols: [get_opfamily_oid, get_opclass_oid, DefineOpClass]
+  - feature: sequence
+    feature_group: J-服务端与命令面
+    title: sequence 模块
+    page_file: j29-sequence.md
+    refs:
+      - path: src/backend/commands/sequence.c
+        symbols: [DefineSequence, ResetSequence, AlterSequence]
+  - feature: pquery
+    feature_group: J-服务端与命令面
+    title: pquery 模块
+    page_file: j30-pquery.md
+    refs:
+      - path: src/backend/tcop/pquery.c
+        symbols: [CreateQueryDesc, FreeQueryDesc, GetQueryDescExtensionId]
+  - feature: copyto
+    feature_group: J-服务端与命令面
+    title: copyto 模块
+    page_file: j31-copyto.md
+    refs:
+      - path: src/backend/commands/copyto.c
+        symbols: [BeginCopyTo, EndCopyTo, DoCopyTo]
+  - feature: tablespace
+    feature_group: J-服务端与命令面
+    title: tablespace 模块
+    page_file: j32-tablespace.md
+    refs:
+      - path: src/backend/commands/tablespace.c
+        symbols: [TablespaceCreateDbspace, CreateTableSpace, DropTableSpace]
+  - feature: tsearchcmds
+    feature_group: J-服务端与命令面
+    title: tsearchcmds 模块
+    page_file: j33-tsearchcmds.md
+    refs:
+      - path: src/backend/commands/tsearchcmds.c
+        symbols: [DefineTSParser, DefineTSDictionary, AlterTSDictionary]
+  - feature: checkpointer
+    feature_group: J-服务端与命令面
+    title: checkpointer 模块
+    page_file: j34-checkpointer.md
+    refs:
+      - path: src/backend/postmaster/checkpointer.c
+        symbols: [CheckpointerMain, CheckpointWriteDelay, ExecCheckpoint]
+  - feature: foreigncmds
+    feature_group: J-服务端与命令面
+    title: foreigncmds 模块
+    page_file: j35-foreigncmds.md
+    refs:
+      - path: src/backend/commands/foreigncmds.c
+        symbols: [transformGenericOptions, AlterForeignDataWrapperOwner, AlterForeignDataWrapperOwner_oid]
+  - feature: rewritehandler
+    feature_group: K-横切主题
+    title: rewriteHandler 模块
+    page_file: k01-rewritehandler.md
+    refs:
+      - path: src/backend/rewrite/rewriteHandler.c
+        symbols: [AcquireRewriteLocks, build_column_default, get_view_query]
+  - feature: parse-utilcmd
+    feature_group: K-横切主题
+    title: parse_utilcmd 模块
+    page_file: k02-parse-utilcmd.md
+    refs:
+      - path: src/backend/parser/parse_utilcmd.c
+        symbols: [transformCreateStmt, expandTableLikeClause, generateClonedIndexStmt]
+  - feature: parse-expr
+    feature_group: K-横切主题
+    title: parse_expr 模块
+    page_file: k03-parse-expr.md
+    refs:
+      - path: src/backend/parser/parse_expr.c
+        symbols: [transformExpr, ParseExprKindName]
+  - feature: nodefuncs
+    feature_group: K-横切主题
+    title: 节点树遍历
+    page_file: k04-nodefuncs.md
+    refs:
+      - path: src/backend/nodes/nodeFuncs.c
+        symbols: [exprType, exprTypmod, exprIsLengthCoercion]
+  - feature: parse-clause
+    feature_group: K-横切主题
+    title: parse_clause 模块
+    page_file: k05-parse-clause.md
+    refs:
+      - path: src/backend/parser/parse_clause.c
+        symbols: [transformFromClause, setTargetTable, transformWhereClause]
+  - feature: parse-relation
+    feature_group: K-横切主题
+    title: parse_relation 模块
+    page_file: k06-parse-relation.md
+    refs:
+      - path: src/backend/parser/parse_relation.c
+        symbols: [refnameNamespaceItem, scanNameSpaceForCTE, scanNameSpaceForENR]
+  - feature: parser-analyze
+    feature_group: K-横切主题
+    title: analyze 模块
+    page_file: k07-parser-analyze.md
+    refs:
+      - path: src/backend/parser/analyze.c
+        symbols: [parse_analyze_fixedparams, parse_analyze_varparams, pg_attribute_no_sanitize_function]
+  - feature: parse-coerce
+    feature_group: K-横切主题
+    title: parse_coerce 模块
+    page_file: k08-parse-coerce.md
+    refs:
+      - path: src/backend/parser/parse_coerce.c
+        symbols: [coerce_to_target_type, coerce_type, can_coerce_type]
+  - feature: parse-func
+    feature_group: K-横切主题
+    title: parse_func 模块
+    page_file: k09-parse-func.md
+    refs:
+      - path: src/backend/parser/parse_func.c
+        symbols: [ParseFuncOrColumn, func_match_argtypes, func_select_candidate]
+  - feature: hba
+    feature_group: K-横切主题
+    title: hba 模块
+    page_file: k10-hba.md
+    refs:
+      - path: src/backend/libpq/hba.c
+        symbols: [free_auth_file, open_auth_file, tokenize_auth_file]
+  - feature: auth
+    feature_group: K-横切主题
+    title: auth 模块
+    page_file: k11-auth.md
+    refs:
+      - path: src/backend/libpq/auth.c
+        symbols: [set_authn_id, ClientAuthentication, sendAuthRequest]
+  - feature: be-secure-openssl
+    feature_group: K-横切主题
+    title: be-secure-openssl 模块
+    page_file: k12-be-secure-openssl.md
+    refs:
+      - path: src/backend/libpq/be-secure-openssl.c
+        symbols: [be_tls_init, be_tls_destroy, be_tls_open_server]
+  - feature: parse-agg
+    feature_group: K-横切主题
+    title: parse_agg 模块
+    page_file: k13-parse-agg.md
+    refs:
+      - path: src/backend/parser/parse_agg.c
+        symbols: [transformAggregateCall, transformGroupingFunc, transformWindowFuncCall]
+  - feature: parse-target
+    feature_group: K-横切主题
+    title: parse_target 模块
+    page_file: k14-parse-target.md
+    refs:
+      - path: src/backend/parser/parse_target.c
+        symbols: [transformTargetEntry, transformTargetList, transformExpressionList]
+---
