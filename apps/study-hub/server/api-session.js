@@ -17,7 +17,7 @@ const crypto = require("node:crypto")
 const { spawnSync } = require("node:child_process")
 
 const { readJsonBody } = require("./router.js")
-const { detectPython } = require("../judge/sandbox.js")
+const { detectPython, parseCandidate } = require("../judge/sandbox.js")
 const { judgeUnit } = require("../judge/runner.js")
 const { recordUnitAttempt } = require("./attempt-log.js")
 const { buildPlan } = require("../core/scheduler/plan.js")
@@ -98,7 +98,8 @@ function trackSettings(store) {
  * 探测 Python 与 numpy。
  * spawn 与 python 都可注入——测试用假实现，不碰真环境。
  * @param {{spawn?: Function, python?: object|null, override?: string|null}} opts
- * @returns {{python: {ok: boolean, detail: string}, numpy: {ok: boolean, detail: string}}}
+ * @returns {{python: {ok: boolean, detail: string, cmd?: string, args?: string[]},
+ *            numpy: {ok: boolean, detail: string, version?: string}}}
  */
 function probeEnv(opts) {
   const options = opts || {}
@@ -115,36 +116,46 @@ function probeEnv(opts) {
   const args = Array.isArray(python.args) ? python.args.slice() : []
   let numpyOk = false
   let numpyDetail = ""
+  let numpyVersion = ""
   try {
-    const res = spawn(cmd, args.concat(["-c", "import numpy"]), {
+    // 取版本号不只是为了显示：设置页要让人看出「换了这个解释器之后 numpy 真的在」，
+    // 光有 available: true 分不清是哪个 numpy。
+    const res = spawn(cmd, args.concat(["-c", "import numpy; print(numpy.__version__)"]), {
       encoding: "utf8",
       timeout: 5000,
     })
     numpyOk = !!(res && res.status === 0)
+    numpyVersion = numpyOk ? String((res && res.stdout) || "").trim() : ""
     numpyDetail = numpyOk
-      ? "numpy 可用（" + cmd + "）"
+      ? "numpy 可用（" + cmd + (numpyVersion ? "，" + numpyVersion : "") + "）"
       : "缺 numpy：" + String((res && res.stderr) || "导入失败").trim().split("\n")[0]
   } catch (err) {
     numpyOk = false
     numpyDetail = "numpy 探测失败：" + String(err && err.message ? err.message : err)
   }
   return {
-    python: { ok: true, detail: cmd + (args.length ? " " + args.join(" ") : "") },
-    numpy: { ok: numpyOk, detail: numpyDetail },
+    python: { ok: true, detail: cmd + (args.length ? " " + args.join(" ") : ""), cmd: cmd, args: args },
+    numpy: { ok: numpyOk, detail: numpyDetail, version: numpyVersion },
   }
 }
 
 /**
- * 进程内缓存的环境探测（探一次就够）。
+ * 进程内缓存的环境探测。
+ *
+ * 缓存键是**当前生效的解释器**，不是「探过没有」：
+ * 设置页改完解释器要立刻看到新的 numpy 结论，只缓存一次会让自检永远报旧结果
+ * （本机实测：python 3.11 无 numpy、py -3 3.12 有 —— 串味直接判错轨）。
  * @param {object} ctx
  * @returns {Function}
  */
 function createEnvProbe(ctx) {
+  let cachedKey = null
   let cached = null
   return function () {
-    if (!cached) {
-      cached = probeEnv({ override: ctx.store.getSetting(KEY_PYTHON) || null })
-    }
+    const key = String((ctx.store && ctx.store.getSetting(KEY_PYTHON)) || "")
+    if (cached !== null && cachedKey === key) return cached
+    cachedKey = key
+    cached = probeEnv({ override: key || null })
     return cached
   }
 }
@@ -828,10 +839,46 @@ function buildRoutes(ctx) {
         writes.push([KEY_COUNT_K, String(k)])
       }
 
+      if (body.python_cmd !== undefined && body.python_cmd !== null) {
+        const raw = String(body.python_cmd).trim()
+        if (raw === "") {
+          ctx.sendJson(res, 400, { error: "判题解释器不能是空白；要恢复自动探测就清空它" })
+          return
+        }
+        // 写入前先探一次：探测不到就拒绝，不把无效配置写进 settings。
+        //
+        // **注意 detectPython 的行为**：override 探不到时它会**回退**到候选顺序
+        // （python3 / python / py -3），所以非空返回值不代表「你要的那个能跑」——
+        // 传一个瞎写的解释器名，它照样回一个能跑的解释器。
+        // 因此还要比对回来的是不是我们要的那个。
+        const probe = detectPython(raw)
+        const wanted = parseCandidate(raw)
+        const matched =
+          probe && String(probe.cmd) === String(wanted.cmd) &&
+          JSON.stringify(probe.args || []) === JSON.stringify(wanted.args || [])
+        if (!matched) {
+          ctx.sendJson(res, 400, {
+            error: "找不到这个 Python 解释器：" + raw + "（可用：python3 / python / py -3）",
+          })
+          return
+        }
+        writes.push([KEY_PYTHON, raw])
+      }
+
       // 全部校验通过，才真正落盘
       writes.forEach(function (pair) {
         store.setSetting(pair[0], pair[1])
       })
+
+      // 解释器改了 → 单元索引要重扫：loader 的 numpy 警告依赖解释器口径。
+      // 不重扫的话，自检说「有 numpy」而供给页还报「缺 numpy」——又是两套口径。
+      if (
+        body.python_cmd !== undefined &&
+        body.python_cmd !== null &&
+        typeof ctx.reloadUnits === "function"
+      ) {
+        ctx.reloadUnits()
+      }
 
       ctx.sendJson(res, 200, settingsPayload(ctx, envProbe()))
     },

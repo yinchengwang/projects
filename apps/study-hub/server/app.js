@@ -274,18 +274,26 @@ function createServer(opts) {
  * @param {object} options
  * @returns {{units: object[], warnings: string[], byId: object}}
  */
-function loadUnitsIndex(learning, env, options) {
+function loadUnitsIndex(learning, env, options, store) {
   if (!learning || !learning.ok) {
     return { units: [], warnings: ["还没连上 learning 仓，单元列表是空的"], byId: {} }
   }
   try {
     const { loadUnits } = require("../core/unit/index.js")
-    const { localBankDir } = require("../core/paths.js")
+    const { localBankDir, resolvePythonOverride } = require("../core/paths.js")
     return loadUnits({
       learningRoot: learning.root,
       localBank: options.localBank === null ? null : localBankDir(env, options.localBank),
       unitsDir: path.join(learning.root, "units"),
       grokkingDir: path.join(learning.root, "scaffold", "grokking"),
+      // numpy 探测与判题用同一个解释器（settings 优先，其次 STUDY_HUB_PYTHON）。
+      // 不传的话 loader 的 numpy 警告按自动探测算，跟判题结论矛盾。
+      pythonOverride:
+        (store && typeof store.getSetting === "function"
+          ? store.getSetting("judge.python.cmd")
+          : "") ||
+        resolvePythonOverride(env) ||
+        null,
     })
   } catch (err) {
     return {
@@ -392,7 +400,42 @@ function createApp(opts) {
   // P2：三轨共用的单元索引（含 entry / asserts / statement）。
   // P0 的 refreshUnitIndex 只把**摘要**灌进 units 表，完整 Unit 只在内存里，
   // 判题接口要的就是那份。options.units 可注入（测试用）。
-  const units = options.units || loadUnitsIndex(learning, env, options)
+  const units = options.units || loadUnitsIndex(learning, env, options, store)
+
+  /**
+   * 解释器改了之后重扫单元索引。
+   *
+   * 为什么必须重扫：loader B 的 numpy 警告是**按解释器**算出来的结论。
+   * 设置页把 python 换成带 numpy 的 py -3 之后，如果不重扫，
+   * 自检说「有 numpy」而单元列表还挂着「这张卡需要 numpy，本机没装」——
+   * 又是两套口径，正是设计 §5.1 要消灭的那种不一致。
+   *
+   * 注意：**原地改数组**（length = 0 + push），不重新赋值——
+   * units / supplyUnits 被多个路由模块持有引用，换引用它们就看不到新数据了。
+   */
+  function reloadUnits() {
+    const fresh = loadUnitsIndex(learning, env, options, store)
+    const freshUnits = fresh.units || []
+    const freshById = fresh.byId || {}
+    // units 表整体覆盖（与启动时同一个函数）
+    const freshOpts = Object.assign({}, unitOpts, {
+      pythonOverride:
+        store.getSetting("judge.python.cmd") || resolvePythonOverride(env) || null,
+    })
+    refreshUnitIndex(store, freshOpts, fresh)
+    Object.keys(supplyUnitsById).forEach(function (key) {
+      delete supplyUnitsById[key]
+    })
+    Object.assign(supplyUnitsById, freshById)
+    supplyUnits.length = 0
+    freshUnits.forEach(function (u) {
+      supplyUnits.push(u)
+    })
+    units.length = 0
+    freshUnits.forEach(function (u) {
+      units.push(u)
+    })
+  }
 
   // P0：单元查询接口。独立文件（server/api-units.js），与其它里程碑零冲突。
   require("./api-units.js")
@@ -475,6 +518,8 @@ function createApp(opts) {
     // 会话提交带代码时要判题，判题要拿完整 Unit（含 entry 与 asserts）
     units: units,
     envPython: resolvePythonOverride(env),
+    // 解释器改了就重扫一次单元索引：loader 的 numpy 警告跟着解释器走。
+    reloadUnits: reloadUnits,
   })
   routes.push.apply(routes, sessionRoutes)
 

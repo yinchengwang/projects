@@ -22,7 +22,7 @@ const fs = require("node:fs")
 const path = require("node:path")
 const readline = require("node:readline/promises")
 
-const { resolveLearningRoot, localBankDir } = require("../core/paths.js")
+const { resolveLearningRoot, localBankDir, resolvePythonOverride } = require("../core/paths.js")
 const { TRACK_CODES, labelOf } = require("../core/track/tracks.js")
 const { loadUnits } = require("../core/unit/index.js")
 const { createLlmClient } = require("../core/llm/client.js")
@@ -367,6 +367,25 @@ async function runCli(argv, ctx) {
   if (localBank) contentRoots.push(localBank)
   const stateFile = c.stateFile || stateFilePath(APP_ROOT)
 
+  /**
+   * 当前该用哪个 Python 解释器。
+   *
+   * 优先级与判题、环境自检完全一致：settings > STUDY_HUB_PYTHON > 自动探测。
+   * 离线 CLI 也必须遵守——否则 `verify --track ai` 会按自动探测落到没有 numpy 的
+   * python（3.11），把 13 张 AI 卡全判成「环境缺失跳过」，而服务里判题却能跑。
+   * @returns {string|null}
+   */
+  function pythonOverrideNow() {
+    if (c.store && typeof c.store.getSetting === "function") {
+      const raw = c.store.getSetting("judge.python.cmd")
+      if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+        return String(raw).trim()
+      }
+    }
+    return resolvePythonOverride(env) || null
+  }
+  const pythonOverride = pythonOverrideNow()
+
   let units = []
   let loadWarnings = []
   try {
@@ -375,6 +394,8 @@ async function runCli(argv, ctx) {
       localBank: localBank,
       unitsDir: unitsDir,
       grokkingDir: grokkingDir,
+      // numpy 探测与判题用同一个解释器，否则 loader 的警告与判题结论会矛盾
+      pythonOverride: pythonOverride,
     })
     units = loaded.units || []
     loadWarnings = loaded.warnings || []
@@ -591,6 +612,8 @@ async function runCli(argv, ctx) {
       unitsDir: unitsDir,
       repoRoot: learning.root,
       stateFile: stateFile,
+      // 与判题、环境自检同一口径：否则 CLI 校验 AI 卡会落到没 numpy 的解释器上
+      pythonOverride: pythonOverride,
     })
     say("校验了 " + batch.counts.total + " 个单元：通过 " + batch.counts.verified
       + "，打回 " + batch.counts.rejected + "，跳过 " + batch.counts.skipped)
