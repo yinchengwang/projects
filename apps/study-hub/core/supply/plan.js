@@ -22,6 +22,7 @@ const path = require("node:path")
 
 const { TRACK_CODES } = require("../track/tracks.js")
 const { parseProblemMarkdown } = require("../bank/parse.js")
+const { stemOf } = require("./unit-file.js")
 
 /** 缺口种类（契约 §8.4） */
 const GAP_KINDS = ["asserts", "statement", "cases", "solution"]
@@ -49,6 +50,33 @@ function hasAssertScript(unit, learningRoot) {
   const script = String((unit.entry && unit.entry.script) || "")
   if (script === "" || !learningRoot) return false
   return fs.existsSync(absOf(learningRoot, script))
+}
+
+/**
+ * 单元文件里的「## 讲解」段是不是真有正文。
+ *
+ * 单元文件落在 `learning/units/<track>/<stem>.md`（与 `unit-file.js` 的 `unitFilePath` 一致）——
+ * **注意中间那层 `units/`**，少写它就会永远读不到文件、把每张卡都报成缺讲解。
+ * 读不到文件（还没生成单元文件）→ 返回 false（讲解算缺口）。
+ * 读到占位符或空段 → false。
+ * @param {object} unit
+ * @param {string|null} learningRoot
+ * @returns {boolean}
+ */
+function hasRealExplain(unit, learningRoot) {
+  if (!learningRoot) return false
+  const file = path.join(learningRoot, "units", String(unit.track || ""), stemOf(unit) + ".md")
+  if (!fs.existsSync(file)) return false
+  let text = ""
+  try {
+    text = fs.readFileSync(file, "utf8")
+  } catch (e) {
+    return false
+  }
+  const m = /##\s*讲解\s*\r?\n([\s\S]*?)(?:\r?\n##\s|$)/.exec(text)
+  if (!m) return false
+  const body = String(m[1] || "").trim()
+  return body !== "" && body !== EMPTY_EXPLAIN
 }
 
 /**
@@ -84,6 +112,12 @@ function missingOf(unit, opts) {
   if (kind === "card") {
     if (!hasAssertScript(unit, o.learningRoot || null)) missing.push("asserts")
     if (statement === "" || statement === EMPTY_EXPLAIN) missing.push("statement")
+    // 单元文件里的「## 讲解」段是占位符 → 讲解还没生成，也算缺口。
+    // loader B 给的 statement 是**教材原文**（README + NOTES），不是学习讲解，
+    // 所以必须看单元文件那一段，不能只看 unit.statement。
+    if (missing.indexOf("statement") === -1 && !hasRealExplain(unit, o.learningRoot || null)) {
+      missing.push("statement")
+    }
     return missing
   }
   if (statement === "") missing.push("statement")

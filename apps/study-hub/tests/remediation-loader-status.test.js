@@ -79,3 +79,62 @@ test("verify 新建单元文件时讲解段是占位符，不是教材原文", f
   assert.ok(text.indexOf(unitFile.EMPTY_EXPLAIN) !== -1, "讲解段应是占位符")
   assert.ok(/^status: verified$/m.test(text), "status 要写回 verified")
 })
+
+const plan = require("../core/supply/plan.js")
+
+test("卡类单元：没有 loader C 单元文件时，讲解算缺口", function () {
+  const root = tmpDir("study-hub-gap-")
+  const unit = {
+    id: "db:mvcc",
+    track: "database",
+    kind: "card",
+    title: "MVCC",
+    statement: "# MVCC\n\n教材原文\n",
+    entry: { demo: "scaffold/grokking/mvcc/main.py", script: "units/database/mvcc.assert.py" },
+  }
+  const missing = plan.missingOf(unit, { learningRoot: root, contentRoots: [root] })
+  assert.ok(missing.indexOf("asserts") !== -1, "缺断言脚本要算缺口：" + JSON.stringify(missing))
+  assert.ok(missing.indexOf("statement") !== -1, "没有单元文件时讲解也算缺口：" + JSON.stringify(missing))
+})
+
+test("卡类单元：单元文件讲解段是占位符时，讲解算缺口", function () {
+  const root = tmpDir("study-hub-gap2-")
+  const unitsDir = path.join(root, "units", "database")
+  fs.mkdirSync(unitsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(unitsDir, "mvcc.md"),
+    "---\nid: db:mvcc\ntrack: database\nkind: card\nstatus: verified\n---\n\n## 讲解\n\n（讲解正文还没生成）\n\n## 关联\n",
+    "utf8"
+  )
+  const unit = {
+    id: "db:mvcc",
+    track: "database",
+    kind: "card",
+    title: "MVCC",
+    statement: "（讲解正文还没生成）",
+    entry: { demo: "scaffold/grokking/mvcc/main.py", script: "units/database/mvcc.assert.py" },
+  }
+  const missing = plan.missingOf(unit, { learningRoot: root, contentRoots: [root] })
+  assert.ok(missing.indexOf("statement") !== -1, "占位符讲解要算缺口：" + JSON.stringify(missing))
+})
+
+test("卡类单元：单元文件讲解段有真正文时，讲解不算缺口", function () {
+  const root = tmpDir("study-hub-gap3-")
+  const unitsDir = path.join(root, "units", "database")
+  fs.mkdirSync(unitsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(unitsDir, "mvcc.md"),
+    "---\nid: db:mvcc\ntrack: database\nkind: card\nstatus: verified\n---\n\n## 讲解\n\n这是真正的讲解正文，讲清了版本链怎么长出来的。\n\n## 关联\n",
+    "utf8"
+  )
+  const unit = {
+    id: "db:mvcc",
+    track: "database",
+    kind: "card",
+    title: "MVCC",
+    statement: "教材原文",
+    entry: { demo: "scaffold/grokking/mvcc/main.py", script: "units/database/mvcc.assert.py" },
+  }
+  const missing = plan.missingOf(unit, { learningRoot: root, contentRoots: [root] })
+  assert.strictEqual(missing.indexOf("statement"), -1, "有真讲解就不该报缺口：" + JSON.stringify(missing))
+})
