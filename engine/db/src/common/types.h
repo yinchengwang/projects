@@ -64,6 +64,26 @@ static inline u64 get_u64(const u8 *p) {
 #define PAGE_ID_META  ((u32)0)
 
 /*
+ * 单表 / 单语句的列数上限。
+ *
+ * 【为什么住在这里（L0）而不是 query/parser.h】
+ * SPI 的表打开器契约（`spi/table_opener.h`）要求调用方按 SQL_MAX_COLS
+ * 备列定义缓冲，而 spi/ 不许反过来依赖 query/（L3 的两个同层目录，
+ * 依赖方向反了会让 query/ 与 common/ 都被 spi/ 绑住）。
+ * 它本质是"一个表的宽度上限"，跟具体是哪一层无关 —— 所以归 L0。
+ *
+ * 【为什么是 32 而不是 16】
+ * 磁盘行格式的上限是 REC_MAX_COLS = 32（storage/record.h），
+ * 32 以内行编码/解码完全不用改。
+ *
+ * 【提升它的代价（已实测）】
+ * 所有 `DbValue row[SQL_MAX_COLS]` 的栈缓冲翻倍 —— DbValue 是 320 字节，
+ * 一个 32 列的 row 占 10 KB，栈最深的 exec_select_agg 从 ~22 KB 涨到 ~30 KB。
+ * Windows 默认线程栈 1 MB，仍然安全；但不要再往上加。
+ */
+#define SQL_MAX_COLS 32
+
+/*
  * RID —— 行在堆表里的物理地址，索引里存的就是它。
  *
  * 之所以用 (page, slot) 而不是行指针：页会被逐出、文件会被重开，

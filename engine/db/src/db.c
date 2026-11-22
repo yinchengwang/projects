@@ -41,6 +41,10 @@
 
 #include "common/latch.h"
 
+/* 表打开器：执行器只认契约，两个实现分别属于关系模态与 SPI 注册表 */
+#include "modalities/relational/rel_opener.h"
+#include "spi/table_opener.h"
+
 /*
  * 缓冲池的默认页数。
  *
@@ -764,6 +768,15 @@ db_err db_open(const char *path, DB **out)
     db->db.txns = &inst->txns;        /* 事务表是共享的 */
     mvcc_snapshot(&inst->txns, 0, &db->db.snap);
 
+    /*
+     * 安装表打开器 —— 执行器只按顺序问这两个，谁先答上就用谁。
+     *
+     * ⚠️ `db_connect()` 另建连接时**也要装一遍**（见那处的注释），
+     * 否则第二个连接起两个 opener 都是 NULL ⇒ 所有表都报「表不存在」。
+     */
+    db->db.opener_catalog = &rel_table_opener;
+    db->db.opener_virtual = &spi_table_opener;
+
     *out = db;
     return DB_OK;
 }
@@ -792,6 +805,14 @@ db_err db_connect(DB *db, DB **out)
     conn->db.cur_xid = 0;
     conn->in_txn = false;
     conn->iso_level = ISO_READ_COMMITTED;   /* 默认 RC，对齐 PG */
+
+    /*
+     * ⚠️ 两个连接入口都要装 opener。
+     * 只装 db_open 会让 db_connect 出来的连接两个 opener 都是 NULL
+     * ⇒ **第二个连接起所有表都报「表不存在」**，而且现象很像"权限问题"。
+     */
+    conn->db.opener_catalog = &rel_table_opener;
+    conn->db.opener_virtual = &spi_table_opener;
 
     /* 新连接的初始快照：当前已提交的都可见 */
     mvcc_snapshot(&db->inst->txns, 0, &conn->db.snap);

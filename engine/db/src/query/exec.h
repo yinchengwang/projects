@@ -5,6 +5,7 @@
 #include "query/parser.h"
 #include "spi/registry.h"
 #include "spi/storage_am.h"
+#include "spi/table_opener.h"
 #include "storage/value.h"
 #include "txn/mvcc.h"
 #include "txn/txn.h"
@@ -44,6 +45,22 @@ typedef struct Db {
     SpiRegistry *reg;      /* 模态提供的虚拟表 */
     Snapshot     snap;
     u32          cur_xid;  /* 当前事务号；0 = 系统事务 */
+
+    /*
+     * 表打开器 —— **执行器只认这两个函数指针，不认任何模态**（硬规则 7）。
+     *
+     * opener_catalog：catalog 里的用户表（关系模态提供）
+     * opener_virtual：模态注册的虚拟表（SPI 注册表提供）
+     *
+     * 解析顺序：先 catalog，后注册表（用户显式建的东西优先）。
+     *
+     * 【为什么是"按顺序问"而不是"按类型分派"】
+     * 按类型分派要求执行器知道有哪几种类型 —— 那就还是认识模态。
+     * 按顺序问 + 约定好的错误码（E_NOTFOUND = 我没这个表）才是真正的脱钩：
+     * 加第 3 个 opener 只是数组从 2 变成 3，分派逻辑一行不改。
+     */
+    const TableOpener *opener_catalog;
+    const TableOpener *opener_virtual;
 } Db;
 
 /*

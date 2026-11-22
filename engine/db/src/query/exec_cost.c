@@ -79,7 +79,7 @@ void exec_cost_decide(i64 nrows, double sel, CostPlan *out)
     out->sel = sel;
     out->cost_seq = (double)nrows;                       /* 每行一次元组访问 */
     out->cost_idx = exec_cost_tree_height(nrows)
-                  + sel * (double)nrows * CBO_HEAP_FETCH;
+                  + sel * (double)nrows * CBO_REL_FETCH;
 
     /*
      * 【小表恒全扫】

@@ -2,7 +2,7 @@
 #define DB_QUERY_EXEC_INTERNAL_H
 
 #include "query/exec.h"
-#include "spi/heap_am.h"
+#include "spi/table_opener.h"
 
 /*
  * 执行器内部共享的东西。
@@ -39,46 +39,50 @@ int b_push(Builder *b, const DbValue *vals);
 /*
  * 一张表的执行期上下文。
  *
- * 【为什么关系模态要单独放 heap / am_ctx / am_storage】
- * 关系模态的 AM 是**每条查询现构造**的：它要绑定到具体的
- * 堆句柄 + 列定义 + 索引列表，而表是运行期动态创建的。
- * 所以 AM 本体和它的私有状态都放在 TableCtx（栈上）。
+ * 【v1.2 步骤 1：cols / idxs 是自持的副本】
  *
- * blob 的 AM 相反 —— 它是实例级的，挂在 DbInstance 上，
- * TableCtx 里只存一个指针。
+ * cols / idxs 原来直接指向 catalog 内部的数组。那是**真悬空**：
+ * catalog 建表时 realloc 表项数组、建索引时 realloc 索引数组 ——
+ * 另一个连接一改，指针就废了。
+ *
+ * 现在改成：打开表时把内容**拷进下面这两个缓冲区**，
+ * cols / idxs 一律指向自己的副本（由 opener 负责拷）。
+ *
+ * 缓冲区大小用 SQL_MAX_COLS（=32）：
+ *   - 列数上限就是 32（REC_MAX_COLS 是同一个数）
+ *   - 索引数上限也卡到 32（见 exec_create_index 的显式报错）
+ *
+ * 【v2.0 C-1：执行器不再持有模态的任何结构】
+ *
+ * 这里原来放的是关系模态的私有结构（堆句柄 + AM 上下文 + AM 本体）——
+ * 那是"执行器认得某种具体模态"的证据。现在换成两个不透明的东西：
+ *
+ *   - open_result   打开器的产物（执行器只读它的公共字段）
+ *   - priv          打开器的私有状态缓冲（字节数组，执行器不知道里面是什么）
+ *
+ * 私有状态里装什么由**提供 opener 的那一方**决定，执行器只负责
+ * 给它一块够大的地方（`SPI_OPENER_PRIV_MAX`）；虚拟表一个字节都不用。
+ *
+ * 关键判据：`src/query/` 里不该再出现任何具体模态的结构名。
  */
 typedef struct {
-    StorageAM    *am;          /* 这张表的 StorageAM */
-    const ColDesc *cols;
-    int           ncols;
-    u32           tid;         /* catalog 表 id；虚拟表为 0 */
-    bool          is_virtual;
+    StorageAM        *am;          /* 从 open_result 拷过来的便捷指针 */
+    const ColDesc    *cols;
+    int               ncols;
+    u32               tid;         /* catalog 表 id；虚拟表为 0 */
+    bool              is_virtual;
 
-    /*
-     * ---------------- v1.2 步骤 1：自持的副本 ----------------
-     *
-     * cols / idxs 原来直接指向 catalog 内部的数组。
-     * 那是**真悬空**：catalog 建表时 realloc 表项数组、
-     * 建索引时 realloc 索引数组 —— 另一个连接一改，指针就废了。
-     *
-     * 现在改成：解析表时把内容**拷进下面这两个缓冲区**，
-     * cols / idxs 一律指向自己的副本。
-     * 副本的代价是每条语句拷几十个字节，换来的是
-     * "catalog 之后怎么变都与本次执行无关"。
-     *
-     * 缓冲区大小用 SQL_MAX_COLS（=16）：
-     *   - 列数上限就是 16（parser 层已卡）
-     *   - 索引数上限也卡到 16（见 exec_create_index 的显式报错）
-     */
-    ColDesc       cols_buf[SQL_MAX_COLS];
-    IndexInfo     idxs_buf[SQL_MAX_COLS];
-    const IndexInfo *idxs;
-    int           nidx;
+    /* 自持的副本（v1.2 步骤 1，由 opener 写入） */
+    ColDesc           cols_buf[SQL_MAX_COLS];
+    IndexInfo         idxs_buf[SQL_MAX_COLS];
+    const IndexInfo  *idxs;
+    int               nidx;
 
-    /* 关系模态专用 */
-    Heap         *heap;
-    HeapAmCtx     am_ctx;
-    StorageAM     am_storage;
+    /* 打开器的产物（不透明） */
+    TableOpenResult   open_result;
+
+    /* 打开器的私有状态缓冲（不透明；容量见 SPI_OPENER_PRIV_MAX） */
+    unsigned char     priv[SPI_OPENER_PRIV_MAX];
 } TableCtx;
 
 /*

@@ -186,73 +186,44 @@ int eval_expr(Expr *e, const DbValue *row, DbValue *out)
  * 用户显式 CREATE 出来的表应该赢。
  * 如果模态的虚拟表能覆盖同名用户表，用户会困惑
  * "我建的表怎么查不到我的列"。
+ *
+ * 【为什么改成"按顺序问 opener"】
+ * 旧实现这里自己分两支：用户表那一支直接去要堆句柄并现搭 AM ——
+ * **执行器认得堆**，那是硬规则 7 的破窗。
+ * 现在执行器只知道"有两个 opener，谁先答上就用谁"，
+ * 它既不知道用户表那一侧用的是堆，也不知道虚拟表那一侧是谁注册的。
  */
 int resolve_table(Db *db, const char *name, TableCtx *tc,
                   char *err, int errcap)
 {
     memset(tc, 0, sizeof(*tc));
 
-    /* 1. 用户表（catalog） */
-    u32 tid = 0;
-    if (catalog_find_table(db->cat, name, &tid) == OK) {
-        tc->tid = tid;
-        tc->heap = catalog_heap(db->cat, tid);
-        if (!tc->heap)
-            return E_CORRUPT;
+    const TableOpener *ops[2];
+    void *owners[2];
+    ops[0]    = db->opener_catalog;
+    owners[0] = (void *)db->cat;
+    ops[1]    = db->opener_virtual;
+    owners[1] = (void *)db->reg;
 
-        /*
-         * 列定义 / 索引列表都**拷进 TableCtx 自带的缓冲区**（v1.2 步骤 1）。
-         * 拷贝之后，本次执行看到的表结构就是**这一份**，
-         * 别的连接随后建表 / 建索引都影响不到它。
-         */
-        int ncols = 0;
-        int rc = catalog_table_cols(db->cat, tid, tc->cols_buf, SQL_MAX_COLS, &ncols);
-        if (rc != OK)
+    for (int i = 0; i < 2; i++) {
+        if (!ops[i])
+            continue;
+        int rc = ops[i]->open(ops[i], owners[i], name, &tc->open_result,
+                              tc->cols_buf, tc->idxs_buf,
+                              tc->priv, sizeof(tc->priv));
+        if (rc == OK) {
+            tc->am         = tc->open_result.am;
+            tc->cols       = tc->open_result.cols;
+            tc->ncols      = tc->open_result.ncols;
+            tc->idxs       = tc->open_result.idxs;
+            tc->nidx       = tc->open_result.nidx;
+            tc->tid        = tc->open_result.tid;
+            tc->is_virtual = tc->open_result.is_virtual;
+            return OK;
+        }
+        /* E_NOTFOUND = "我没这张表" ⇒ 去问下一个；其它错误原样透传 */
+        if (rc != E_NOTFOUND)
             return rc;
-        tc->cols = tc->cols_buf;
-        tc->ncols = ncols;
-
-        int nidx = 0;
-        rc = catalog_table_indexes(db->cat, tid, tc->idxs_buf, SQL_MAX_COLS, &nidx);
-        if (rc != OK)
-            return rc;
-        tc->idxs = tc->idxs_buf;
-        tc->nidx = nidx;
-
-        rc = heap_am_build(tc->heap, tc->cols, tc->ncols, tc->idxs, tc->nidx,
-                           &tc->am_storage, &tc->am_ctx);
-        if (rc != OK)
-            return rc;
-
-        tc->am = &tc->am_storage;
-        tc->is_virtual = false;
-        return OK;
-    }
-
-    /* 2. 虚拟表（模态提供的表） */
-    StorageAM *am = spi_registry_find(db->reg, name);
-    if (am) {
-        tc->am = am;
-        tc->is_virtual = true;
-        tc->tid = 0;
-
-        /*
-         * 模态给的列定义是**模态自己的**数组（静态常量或实例级稳定），
-         * 本身不会悬空 —— 但还是拷一份，
-         * 这样"tc->cols 永远指向自己的缓冲区"这条规则就没有例外。
-         */
-        const ColDesc *vcols = NULL;
-        int vn = 0;
-        int rc = am->columns(am, &vcols, &vn);
-        if (rc != OK)
-            return rc;
-        if (vn > SQL_MAX_COLS)
-            return E_NOSPACE;
-        if (vn > 0 && vcols)
-            memcpy(tc->cols_buf, vcols, (size_t)vn * sizeof(ColDesc));
-        tc->cols = tc->cols_buf;
-        tc->ncols = vn;
-        return OK;
     }
 
     snprintf(err, (size_t)errcap, "表不存在: %s", name);
@@ -264,31 +235,23 @@ int resolve_table_id(Db *db, u32 tid, TableCtx *tc)
 {
     memset(tc, 0, sizeof(*tc));
 
-    tc->tid = tid;
-    tc->heap = catalog_heap(db->cat, tid);
-    if (!tc->heap)
-        return E_CORRUPT;
+    if (!db->opener_catalog)
+        return E_INVAL;
 
-    int ncols = 0;
-    int rc = catalog_table_cols(db->cat, tid, tc->cols_buf, SQL_MAX_COLS, &ncols);
-    if (rc != OK)
-        return rc;
-    tc->cols = tc->cols_buf;
-    tc->ncols = ncols;
-
-    int nidx = 0;
-    rc = catalog_table_indexes(db->cat, tid, tc->idxs_buf, SQL_MAX_COLS, &nidx);
-    if (rc != OK)
-        return rc;
-    tc->idxs = tc->idxs_buf;
-    tc->nidx = nidx;
-
-    rc = heap_am_build(tc->heap, tc->cols, tc->ncols, tc->idxs, tc->nidx,
-                       &tc->am_storage, &tc->am_ctx);
+    int rc = db->opener_catalog->open_by_id(db->opener_catalog, (void *)db->cat,
+                                            tid, &tc->open_result,
+                                            tc->cols_buf, tc->idxs_buf,
+                                            tc->priv, sizeof(tc->priv));
     if (rc != OK)
         return rc;
 
-    tc->am = &tc->am_storage;
+    tc->am         = tc->open_result.am;
+    tc->cols       = tc->open_result.cols;
+    tc->ncols      = tc->open_result.ncols;
+    tc->idxs       = tc->open_result.idxs;
+    tc->nidx       = tc->open_result.nidx;
+    tc->tid        = tc->open_result.tid;
+    tc->is_virtual = tc->open_result.is_virtual;
     return OK;
 }
 

@@ -44,7 +44,7 @@
 #define CBO_SMALL_TABLE 64
 
 /* 回表惩罚系数：索引给出 RID 后还要回堆取行，比顺序扫贵 */
-#define CBO_HEAP_FETCH 1.2
+#define CBO_REL_FETCH 1.2
 
 /* CostPlan 定义在 exec_internal.h（它要出现在 PushPlan 里，而 PushPlan 在那儿） */
 
