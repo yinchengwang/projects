@@ -13,7 +13,7 @@ projects:
     repo: https://github.com/Significant-Gravitas/AutoGPT
     license: NOASSERTION
     language: Python
-    stars: 188125
+    stars: 188127
     stars_as_of: 2026-11-22
   - name: browser-use
     model: ai/agent
@@ -85,7 +85,7 @@ projects:
     repo: https://github.com/vllm-project/vllm
     license: Apache-2.0
     language: Python
-    stars: 97325
+    stars: 97327
     stars_as_of: 2026-11-22
   - name: dify
     model: ai/rag
