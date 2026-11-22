@@ -265,8 +265,9 @@ test("loader B 的成功路径：卡目录产出的单元字段都对", function
   // path 相对内容根，带结尾斜杠（G42：必填且非空）
   assert.equal(unit.path, "scaffold/grokking/transaction/")
   assert.equal(unit.source, "grokking")
-  // 目录里有 main.py → status 判成 verified
-  assert.equal(unit.status, "verified")
+  // 补齐设计 §3.2：loader B 单独加载时最多给 draft。
+  // verified 只能由 loader C 的单元文件承载（它才是 verify 跑过执行器与变异测试的裁决）。
+  assert.equal(unit.status, "draft")
   assert.equal(unit.title, "事务卡")
 })
 

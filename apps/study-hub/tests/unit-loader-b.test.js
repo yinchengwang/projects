@@ -91,10 +91,13 @@ test("没有 NOTES.md 时只留 README", function () {
   assert.ok(res.unit.statement.indexOf("README 正文") !== -1)
 })
 
-test("README 与 main.py 都在 → verified", function () {
+test("README 与 main.py 都在 → draft（verified 只能由 verify 写回）", function () {
   const dir = makeCard("mvcc")
   const res = loaderB.parseCardDirectory(dir, { track: "database" })
-  assert.equal(res.unit.status, "verified")
+  // 补齐设计 §3.2：loader B 单独加载时最多给 draft。
+  // 断言脚本存在也证明不了断言有效（mvcc/index_design 实测就判 rejected），
+  // 所以 verified 一律由 loader C 的单元文件承载。
+  assert.equal(res.unit.status, "draft")
 })
 
 test("README 在、main.py 不在 → draft", function () {

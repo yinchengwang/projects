@@ -149,7 +149,7 @@ test("loader B 把 16 张数据库卡都读成能用的单元", function (t) {
     assert.strictEqual(out.unit.id, "db:" + stem)
     assert.strictEqual(out.unit.track, "database")
     assert.strictEqual(out.unit.kind, "card")
-    assert.strictEqual(out.unit.status, "verified")
+    assert.strictEqual(out.unit.status, "draft", stem + " 未经 verify 裁决只能是 draft")
     assert.strictEqual(out.unit.entry.graded, "script")
     assert.strictEqual(out.unit.entry.demo, "scaffold/grokking/" + stem + "/main.py")
     assert.strictEqual(out.unit.entry.script, "units/database/" + stem + ".assert.py")

@@ -80,7 +80,9 @@ function parseCardDirectory(dirAbs, opts) {
   const hasDemo = fs.existsSync(demoPath)
 
   // 断言脚本的期望落点。恒填——「脚本该放哪」是卡片的属性；
-  // 「脚本在不在」由 P2 的判题器判断（缺失 → compile_error）。
+  // 「脚本在不在」由 P2 的判题器判断（缺失 → compile_error），
+  // 「脚本对不对」由 P4 的 verify 判断（变异测试抓不住 → rejected）。
+  // **脚本存在不代表断言有效**，所以 loader B 不据此给 verified。
   const scriptRel = "units/" + track + "/" + stem + ".assert.py"
   if (options.unitsDir) {
     const scriptAbs = path.join(options.unitsDir, track, stem + ".assert.py")
@@ -120,7 +122,11 @@ function parseCardDirectory(dirAbs, opts) {
     topics: [],
     difficulty: "medium",
     source: "grokking",
-    status: hasDemo ? "verified" : "draft",
+    // status 由「能不能学」决定，不由「内容是不是教材」决定。
+    // verified 只能由 loader C 的单元文件承载（那是 verify 真跑过执行器与变异测试的裁决）。
+    // loader B 单独加载时最多给 draft：断言脚本在不在都不能证明断言有效。
+    // （补齐设计 §3.2；变更二：脚本存在但未经校验也不给 verified）
+    status: "draft",
     progress: "todo",
     reviewed: false,
     reviewed_at: "",
