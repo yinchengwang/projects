@@ -400,7 +400,7 @@ function createApp(opts) {
   // P2：三轨共用的单元索引（含 entry / asserts / statement）。
   // P0 的 refreshUnitIndex 只把**摘要**灌进 units 表，完整 Unit 只在内存里，
   // 判题接口要的就是那份。options.units 可注入（测试用）。
-  const units = options.units || loadUnitsIndex(learning, env, options, store)
+  const units = options.units || unitSnapshot.units || []
 
   /**
    * 解释器改了之后重扫单元索引。
@@ -431,10 +431,12 @@ function createApp(opts) {
     freshUnits.forEach(function (u) {
       supplyUnits.push(u)
     })
-    units.length = 0
-    freshUnits.forEach(function (u) {
-      units.push(u)
-    })
+    if (units !== supplyUnits) {
+      units.length = 0
+      freshUnits.forEach(function (u) {
+        units.push(u)
+      })
+    }
   }
 
   // P0：单元查询接口。独立文件（server/api-units.js），与其它里程碑零冲突。
@@ -515,8 +517,9 @@ function createApp(opts) {
     learning: learning,
     sendJson: sendJson,
     envProbe: options.envProbe,
-    // 会话提交带代码时要判题，判题要拿完整 Unit（含 entry 与 asserts）
-    units: units,
+    // 会话提交带代码时要判题，判题要拿完整 Unit（含 entry 与 asserts）。
+    // pickUnitForJudge 与 api-unit-run 共用映射口径；数组会导致判不到任何单元。
+    units: { byId: supplyUnitsById },
     envPython: resolvePythonOverride(env),
     // 解释器改了就重扫一次单元索引：loader 的 numpy 警告跟着解释器走。
     reloadUnits: reloadUnits,
@@ -530,7 +533,9 @@ function createApp(opts) {
     routes,
     require("./api-unit-run.js").buildUnitRunRoutes({
       store: store,
-      units: units,
+      // api-unit-run.pickUnit 读的是 { byId: UnitMap }；传数组会让所有单元都 404。
+      // supplyUnitsById 与 reloadUnits 共用同一个对象，解释器切换后原地刷新内容。
+      units: { byId: supplyUnitsById },
       llm: llm,
       learning: learning,
       sendJson: sendJson,
