@@ -29,7 +29,10 @@ const UNIT_FILE = [
   'reference: ""',
   "graded: script",
   "script: units/database/demo.assert.py",
-  "status: draft",
+  // 抽检只对已达标单元开放（补齐设计 §6.2 / R1 Task 5）：
+  // 要被抽检，单元必须是 verified。本文件测的是「写回 / 阻塞 / 参数校验」，
+  // 所以夹具直接给 verified——「未达标不能抽检」由 remediation-review.test.js 单独钉住。
+  "status: verified",
   "reviewed: false",
   'reviewed_at: ""',
   "subtracks: []",

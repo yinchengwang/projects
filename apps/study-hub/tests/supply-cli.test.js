@@ -150,35 +150,49 @@ const DEMO_VACUOUS = [
 ].join("\n")
 
 /** loader C 的单元文件（契约 §3.3 的 frontmatter 清单） */
-const UNIT_FILE = [
-  "---",
-  "id: db:demo",
-  "track: database",
-  "kind: card",
-  "title: 演示卡",
-  "difficulty: medium",
-  "topics: []",
-  "source: generated",
-  "language: python",
-  "demo: scaffold/grokking/demo/main.py",
-  'reference: ""',
-  "graded: script",
-  "script: units/database/demo.assert.py",
-  "status: draft",
-  "reviewed: false",
-  'reviewed_at: ""',
-  "subtracks: []",
-  "---",
-  "",
-  "## 讲解",
-  "",
-  "演示卡的讲解正文。",
-  "",
-  "## 关联",
-  "",
-  "- 轮次：R37 Grokking 数据库",
-  "",
-].join("\n")
+/**
+ * 造一份单元文件内容。
+ *
+ * status 可换：`review` 只对 verified 单元开放（补齐设计 §6.2 / R1 Task 5），
+ * 所以抽检相关的用例要传 `status: "verified"`；
+ * verify 相关的用例仍用默认的 draft（它们要验「draft → verified」的改判）。
+ * @param {{status?: string, explain?: string}} [opts]
+ * @returns {string}
+ */
+function buildUnitFile(opts) {
+  const o = opts || {}
+  return [
+    "---",
+    "id: db:demo",
+    "track: database",
+    "kind: card",
+    "title: 演示卡",
+    "difficulty: medium",
+    "topics: []",
+    "source: generated",
+    "language: python",
+    "demo: scaffold/grokking/demo/main.py",
+    'reference: ""',
+    "graded: script",
+    "script: units/database/demo.assert.py",
+    "status: " + String(o.status || "draft"),
+    "reviewed: false",
+    'reviewed_at: ""',
+    "subtracks: []",
+    "---",
+    "",
+    "## 讲解",
+    "",
+    String(o.explain || "演示卡的讲解正文。"),
+    "",
+    "## 关联",
+    "",
+    "- 轮次：R37 Grokking 数据库",
+    "",
+  ].join("\n")
+}
+
+const UNIT_FILE = buildUnitFile()
 
 /** 造一个假的 learning 仓（真的 git 仓，好查脏） */
 function makeRepo(opts) {
@@ -195,7 +209,12 @@ function makeRepo(opts) {
   if (o.withScript !== false) {
     fs.writeFileSync(path.join(unitsDir, "database", "demo.assert.py"), SCRIPT_TEXT, "utf8")
   }
-  fs.writeFileSync(path.join(unitsDir, "database", "demo.md"), UNIT_FILE, "utf8")
+  fs.writeFileSync(
+    path.join(unitsDir, "database", "demo.md"),
+    // 抽档案要 verified；其它案（generate / verify）保持 draft
+    o.status ? buildUnitFile({ status: o.status }) : UNIT_FILE,
+    "utf8"
+  )
   execFileSync("git", ["add", "-A"], { cwd: root, stdio: "ignore" })
   execFileSync("git", ["commit", "-m", "init"], { cwd: root, stdio: "ignore" })
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "supply-cli-state-"))
@@ -357,7 +376,7 @@ test("verify：变异抓不住 → 打回 rejected", async function () {
 })
 
 test("review：写回 reviewed: true 与 reviewed_at", async function () {
-  const repo = makeRepo({ withScript: true })
+  const repo = makeRepo({ withScript: true, status: "verified" })
   const ask = fakeAsk({ passed: true, note: "讲得清楚" })
   const res = await cli(["review", "--sample", "5"], {
     learningRoot: repo.root,
@@ -373,7 +392,7 @@ test("review：写回 reviewed: true 与 reviewed_at", async function () {
 })
 
 test("review：别人动过的文件一律阻塞写回（G14）", async function () {
-  const repo = makeRepo({ withScript: true })
+  const repo = makeRepo({ withScript: true, status: "verified" })
   const file = path.join(repo.unitsDir, "database", "demo.md")
   fs.writeFileSync(file, fs.readFileSync(file, "utf8") + "\n别人加的一行\n", "utf8")
   const ask = fakeAsk({ passed: true, note: "" })

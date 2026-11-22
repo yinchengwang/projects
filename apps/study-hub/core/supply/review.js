@@ -60,6 +60,9 @@ function pickReviewTargets(units, opts) {
   const list = (Array.isArray(units) ? units : [])
     .filter(function (unit) {
       if (only !== "" && String(unit.track || "") !== only) return false
+      // 抽检只对**已达标**的单元开放：verified（执行器与变异测试都过了）且还没被人看过。
+      // draft / todo / rejected 是「还没补齐」或「没过校验」，不是抽检对象。
+      if (String(unit.status || "") !== "verified") return false
       return unit.reviewed !== true
     })
     .slice()
@@ -94,6 +97,17 @@ function applyReview(opts) {
 
   function fail(code, reason) {
     return { ok: false, code: code, changed: false, reason: reason, diff: "", unit: null }
+  }
+
+  // 未达标的单元不配被抽检：人的一次点击不该覆盖执行器的裁决。
+  // 这一条必须排在 unitsDir / repoRoot 检查**之前**——
+  // 否则在非 git 的临时目录里，它会先被「读不到 git 状态」挡成 blocked，
+  // 掩盖掉「这个单元本来就不该被抽检」这个真正的理由。
+  if (String(unit.status || "") !== "verified") {
+    return fail(
+      "invalid",
+      "这个单元还没通过校验（当前状态：" + String(unit.status || "todo") + "），不能抽检"
+    )
   }
 
   if (unitsDir === "" || repoRoot === "") {
