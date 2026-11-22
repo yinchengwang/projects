@@ -116,6 +116,7 @@ int batch_ctx_init(BatchCtx *bc, const ColDesc *cols, int ncols, u64 needed)
                 return E_IO;
             break;
         case T_TEXT:
+        case T_JSON:
             col->toff = xcalloc(sizeof(u32) * VEC_BATCH);
             col->tlen = xcalloc(sizeof(u16) * VEC_BATCH);
             /* 文本池按最坏情况给：每行 VAL_TEXT_MAX-1 字节 */
@@ -203,7 +204,8 @@ int batch_add_row(BatchCtx *bc, const DbValue *row)
         case T_REAL:
             col->reals[i] = v->d;
             break;
-        case T_TEXT: {
+        case T_TEXT:
+        case T_JSON: {
             u16 n = v->len;
             if ((u32)col->tused + n > col->tcap)
                 return E_NOSPACE;
@@ -241,7 +243,10 @@ void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out)
     }
     if (bit_get(col->extflag, i)) {
         const AmExtRef *e = &col->exts[i];
-        val_external_text(out, e->key, e->off, e->fn, e->ctx);
+        if (col->type == T_JSON)
+            val_external_json(out, e->key, e->off, e->fn, e->ctx);
+        else
+            val_external_text(out, e->key, e->off, e->fn, e->ctx);
         return;
     }
 
@@ -250,7 +255,16 @@ void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out)
         val_real(out, col->reals[i]);
         break;
     case T_TEXT:
+    case T_JSON:
         val_text(out, (const char *)col->tpool + col->toff[i], col->tlen[i]);
+        if (col->type == T_JSON) {
+            out->type = T_JSON;
+            if (out->len > VAL_INLINE_MAX) {
+                const u8 *bytes = (const u8 *)col->tpool + col->toff[i];
+                val_external_json(out, (u64)(uintptr_t)bytes, out->len,
+                                  val_mem_detoast, (void *)bytes);
+            }
+        }
         break;
     case T_BOOL:
         val_bool(out, col->ints[i] != 0);

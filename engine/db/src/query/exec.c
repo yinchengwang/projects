@@ -197,16 +197,18 @@ int b_push(Builder *b, const DbValue *vals)
     for (int i = 0; i < b->r->ncols; i++) {
         char *cell = NULL;
 
-        if (vals[i].external) {
+        if (vals[i].type == T_JSON) {
+            char buf[512];
+            val_to_str(&vals[i], buf, (int)sizeof(buf));
+            cell = xstrdup(buf);
+            if (!cell)
+                return E_IO;
+        } else if (vals[i].external) {
             /*
-             * 外部值：物化成精确大小的缓冲。
+             * 普通外部文本值：物化成精确大小的缓冲。
              *
-             * 内容可能几 KB（一帧 4076 字节），
-             * 512 字节的栈缓冲装不下 → 自己分配。
-             *
-             * 【这是外部值唯一的物化点】
-             * 扫描、过滤、投影全程不物化 —— 所以
-             * "只查 blob_id" 不读帧页。
+             * T_JSON 的外部表示仍是 JSONB 二进制，不可走此路径直接拷出；
+             * 它先走上面的 val_to_str 分支，由注册渲染器转成 JSON 文本。
              */
             u8 *tmp = NULL;
             u32 n = 0;

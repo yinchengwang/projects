@@ -1331,32 +1331,12 @@ W-B 的第 5 处裁剪点（`#if DB_HAS_BLOB` 包住派发）就不用再包整�
   `value.h` 定义 `DbValue.type`（字段名也是 `type`）。
   如果是两套枚举，需要在值层加 `T_JSON` 并写清映射。
 
-  JSON 值的表示：
-  - 小文档：内联进 `DbValue.s[256]`（`VAL_TEXT_MAX` = 256）—— **装不下**。
-    ⇒ JSONB 必须走**外部值**（`ext_key` / `ext_fn` / `ext_ctx` 那套既有机制）。
-  - 大文档：外部值（PLAN-v1.6 判决 3）。
-
-  ⚠️ **`DbValue.s` 只有 256 字节** ⇒ JSONB 一律走外部值，
-  除非 JSONB ≤ 256 字节且**解码后**仍能装下。
-  ⇒ **决定**：JSONB 在 `DbValue` 里**一律用外部值**表示
-  （`is_external = true`，`ext_fn` = 读页链）。
-  这样 `DbValue` 的结构一个字都不用改 —— 只多一个 `ext_fn` 的实现。
+  当前已落地的实现已按用户确认改为三层值表示：≤255B 在 `DbValue.s[]` 内联，256–2048B 用指向当前记录缓冲的通用外部值，>2048B 留待 C5.3b-b 页链生命周期设计。以下原始草图中“一律外部值”仅作为历史方案，不再是实现要求；字段名实际为 `external`（不是 `is_external`）。
 
   ```c
-  /*
-   * 外部 JSONB 的读函数（签名照抄 storage/value.h 里 DetoastFn 的定义）。
-   *
-   * 【它读什么】
-   * 一条 JSONB 字节流。来源有两种：
-   *   - heap 行内联（小文档）：ext_key = 行内偏移
-   *   - 外置页链（大文档）：ext_key = 首页号
-   *
-   * 【为什么不改 DbValue 的结构】
-   * DbValue.s 只有 256 字节。JSONB 随便一个文档都超。
-   * 外部值机制就是为这个准备的（v0.9 设计 foresight）——
-   * 契约一行不改，换个 ext_fn 即可。
-   */
+  /* 历史接口草图：当前不要求 JSONB 一律走页链外部值 */
   ```
+
 
 - [ ] **C5.4 parser：加 `EX_FUNC` 表达式节点**
 
@@ -1663,7 +1643,55 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
   它可能是外部值（`ext_fn`），要 `val_detoast` 出来再解析。
   `val_detoast` 已有（`storage/value.h`）。
 
+- [ ] **C5.3b-a：≤2048B JSON 列端到端往返（页链所有权暂缓）**
+
+  **范围裁决（2026-11-22，用户批准）**：本子步先修复 JSON 列目前的假成功，
+  不接 `PT_JSON_OVF` 页链。实测当前行为：
+
+      CREATE TABLE t (id INT, doc JSON)       → OK
+      INSERT ... '{"a":5}'                   → OK（但原始文本字节被当 JSONB 存）
+      SELECT id FROM t                        → OK
+      SELECT doc FROM t                       → E_INVAL
+      SELECT json_extract(doc, '$.a') FROM t  → E_CORRUPT
+
+  本子步接受的输入仅为 SQL `TEXT`（JSON 文本）或 SQL `NULL`；`INT / REAL / BOOL`
+  不做隐式 JSON 标量转换，直接返回类型错误。`TEXT` 由 doc 模态注册的编码器
+  解析为 JSONB；编码后长度 `<= 2048` 才允许进入 heap 写路径；大于 2048、JSON
+  语法错误或编码器未注册时，必须在 heap 写入前失败，不能产生部分 tuple。
+  `NULL` 仍按 SQL NULL 保存，不写 JSONB `null`。
+
+  `JSONB → JSON 文本` 复用 C5.3 的 `jsonb_render` 注册钩子。该阶段的验收是
+  小文档与中等文档（包括 256–2048B、运行时 `DbValue.s[]` 放不下的记录内联 JSON）
+  可 SELECT、可 `json_extract` / `json_match`，并且内容完整。
+
+  **明确不在本子步实现**：超过 2048B 的页链写入、页链 tuple 所有权、事务 abort、
+  WAL/崩溃恢复、DELETE/VACUUM 回收。原因：当前 `json_ovf_write/read/free` 没有 WAL
+  或 tuple owner；现有 heap AM / vacuum / abort 接口不能保证资源生命周期。不得仅把
+  `json_ovf_write` 塞进 `val_to_record` 或 `heap_am_insert`。这些工作留给独立的
+  C5.3b-b 设计与实现，须先定义每个 heap tuple 版本独占页链的发布、补偿、恢复和回收协议。
+
+  本子步的实现边界：执行器 INSERT/UPDATE 在进入关系 Heap AM 前，将 JSON 列 TEXT
+  调值层注册的通用编码入口转成 `T_JSON`；值层/记录层不 include doc 模态；关系 AM
+  和 record 编码只接收已编码 JSONB。编码缓冲长度受 2048B 限制，转换失败不写 heap。
+
+- [ ] **C5.3b-b：`PT_JSON_OVF` 页链所有权与 MVCC 生命周期（待独立设计）**
+
+  用户已确认目标所有权模型：每个 heap tuple 版本独占一条页链；运行时 abort 回收本
+  事务创建且没有被已提交版本接管的链；DELETE 只标记 `xmax`；只有 VACUUM 在旧版本
+  确认对所有活跃快照不可见、并物理删除 tuple 时才释放其链。
+
+  此子步开始前，必须先独立设计并通过用户审阅：
+  1. tuple 内 overflow tag、chain head、长度的持久化格式（和 record 的变长区可兼容）；
+  2. chain 的写入发布顺序及 INSERT/UPDATE/索引失败后的补偿；
+  3. JSON 页链与 WAL / redo / undo / abort 的关系；`json_ovf.c` 当前直接改 Pager 页且明确不写 WAL；
+  4. VACUUM 在物理删 tuple 前后如何以可重试、幂等方式释放链，避免半释放 / double-free；
+  5. scan/read 两趟 detoast 与并发 VACUUM 的互斥/快照保护；
+  6. 启动恢复时如何找到孤儿链、以及 `DetoastFn` 的 `u16` 长度上限 65535 的公开语义。
+
+  在以上契约与故障注入测试获批前，禁止把 JSON 溢出页链接入生产 heap 写路径。
+
 - [ ] **C5.8 索引：路径索引（写时维护）**
+
 
   **这是 C-5 里最大的一块。** PLAN-v1.6 判决 2 已把路线定死：
   **写时同步维护**（文档更新 = 整替换 → 删旧键、插新键），不是"快照 + 兜底"。

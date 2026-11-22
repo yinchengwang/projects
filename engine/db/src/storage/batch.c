@@ -72,7 +72,8 @@ int val_batch_decode(const RecLayout *L, const ColDesc *cols, int ncols,
             }
 
             switch (cols[c].type) {
-            case T_TEXT: {
+            case T_TEXT:
+            case T_JSON: {
                 const u16 k = L->var_col_idx[c];
                 const u16 s = get_u16(buf + L->varoff_off + 2u * k);
                 const u16 e = (k + 1u < L->nvar)

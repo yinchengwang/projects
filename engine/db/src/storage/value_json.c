@@ -72,3 +72,26 @@ JsonRenderFn val_json_render(void)
 {
     return g_json_renderer;
 }
+
+/* T_JSON 写入编码器：SQL 文本 JSON → JSONB 字节（由 doc 模态注册） */
+static int (*g_json_encoder)(const char *text, u32 text_len,
+                             u8 *out, u32 cap, u32 *out_len) = NULL;
+
+int val_set_json_encoder(int (*fn)(const char *text, u32 text_len,
+                                   u8 *out, u32 cap, u32 *out_len))
+{
+    if (!fn)
+        return E_INVAL;
+    if (g_json_encoder)
+        return E_INVAL;
+    g_json_encoder = fn;
+    return OK;
+}
+
+int val_json_encode(const char *text, u32 text_len,
+                    u8 *out, u32 cap, u32 *out_len)
+{
+    if (!g_json_encoder)
+        return E_NOTSUP;
+    return g_json_encoder(text, text_len, out, cap, out_len);
+}

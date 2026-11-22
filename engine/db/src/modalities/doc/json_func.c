@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "modalities/doc/json_match.h"
+#include "modalities/doc/json_parse.h"
 #include "modalities/doc/json_path.h"
 #include "storage/value.h"
 
@@ -85,8 +86,20 @@ static int fn_json_extract(const DbValue *args, int nargs, DbValue *out)
 
     if (nargs != 2 || !out)
         return E_INVAL;
-    if (args[1].is_null || args[1].len == 0)
-        return E_INVAL;
+
+    /*
+     * SQL 三值逻辑：实参为 NULL ⇒ 结果就是 NULL，不是错误。
+     *
+     * 【为什么必须这样】
+     * JSON 列是可空的。`SELECT json_extract(doc, '$.a') FROM t`
+     * 一旦扫到 NULL 行就报 E_INVAL 的话，**整条查询都失败** ——
+     * 用户只是有一行没填文档而已。
+     * 与 SQLite 一致：标量函数对 NULL 输入返回 NULL。
+     */
+    if (args[0].is_null || args[1].is_null || args[1].len == 0) {
+        val_null(out);
+        return OK;
+    }
 
     {
         char expr[256];
@@ -131,8 +144,10 @@ static int fn_json_match(const DbValue *args, int nargs, DbValue *out)
 
     if (nargs != 2 || !out)
         return E_INVAL;
-    if (args[1].is_null || args[1].len == 0)
-        return E_INVAL;
+    if (args[0].is_null || args[1].is_null || args[1].len == 0) {
+        val_int(out, 0);          /* NULL 文档 ⇒ 不匹配（谓词层只看 0/1） */
+        return OK;
+    }
 
     {
         char text[256];
@@ -179,6 +194,10 @@ int db_json_init(void)
         worst = rc;
 
     rc = val_set_json_renderer(jsonb_render);
+    if (rc != OK && rc != E_INVAL)
+        worst = rc;
+
+    rc = val_set_json_encoder(json_parse_to_jsonb);
     if (rc != OK && rc != E_INVAL)
         worst = rc;
 

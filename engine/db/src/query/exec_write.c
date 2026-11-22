@@ -132,6 +132,30 @@ int exec_insert(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
             rc = eval_expr(st->vals[i][c], NULL, &row[c]);
             if (rc != OK)
                 goto fail;
+            if (tc.cols[c].type == T_JSON && !row[c].is_null) {
+                if (row[c].type != T_TEXT) {
+                    snprintf(err, (size_t)errcap,
+                             "JSON 列 %s 只接受 JSON 文本或 NULL",
+                             tc.cols[c].name);
+                    rc = E_INVAL;
+                    goto fail;
+                }
+                u8 jsonb[2048];
+                u32 jsonb_len = 0;
+                rc = val_json_encode(row[c].s, row[c].len,
+                                     jsonb, sizeof(jsonb), &jsonb_len);
+                if (rc != OK) {
+                    snprintf(err, (size_t)errcap,
+                             "JSON 列 %s 文本无效或编码后超过 2048 字节",
+                             tc.cols[c].name);
+                    goto fail;
+                }
+                val_null(&row[c]);
+                row[c].is_null = false;
+                row[c].type = T_JSON;
+                row[c].len = (u16)jsonb_len;
+                memcpy(row[c].s, jsonb, jsonb_len);
+            }
             if (row[c].is_null && !tc.cols[c].nullable) {
                 snprintf(err, (size_t)errcap, "列 %s 不允许 NULL", tc.cols[c].name);
                 rc = E_INVAL;
@@ -355,6 +379,32 @@ int exec_update(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
         rc = eval_expr(st->set_expr, row, &nv);
         if (rc != OK)
             continue;
+        if (tc.cols[set_idx].type == T_JSON && !nv.is_null) {
+            if (nv.type != T_TEXT) {
+                snprintf(err, (size_t)errcap,
+                         "JSON 列 %s 只接受 JSON 文本或 NULL",
+                         tc.cols[set_idx].name);
+                free(rids);
+                qr_free(r);
+                return E_INVAL;
+            }
+            u8 jsonb[2048];
+            u32 jsonb_len = 0;
+            rc = val_json_encode(nv.s, nv.len, jsonb, sizeof(jsonb), &jsonb_len);
+            if (rc != OK) {
+                snprintf(err, (size_t)errcap,
+                         "JSON 列 %s 文本无效或编码后超过 2048 字节",
+                         tc.cols[set_idx].name);
+                free(rids);
+                qr_free(r);
+                return rc;
+            }
+            val_null(&nv);
+            nv.is_null = false;
+            nv.type = T_JSON;
+            nv.len = (u16)jsonb_len;
+            memcpy(nv.s, jsonb, jsonb_len);
+        }
         if (nv.is_null && !tc.cols[set_idx].nullable)
             continue;
 

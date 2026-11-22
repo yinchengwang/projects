@@ -217,6 +217,17 @@ bool val_json_renderer_is(JsonRenderFn fn);
 JsonRenderFn val_json_render(void);
 
 /*
+ * JSON 文本编码器注册（SQL T_TEXT → T_JSON 写入使用）。
+ *
+ * storage 值层不依赖 json_parse / doc 模态；只通过这两个入口调用注册的编码器。
+ * 输入是带显式长度的 UTF-8 JSON 文本；out 缓冲输出 JSONB 字节。
+ */
+int  val_set_json_encoder(int (*fn)(const char *text, u32 text_len,
+                                     u8 *out, u32 cap, u32 *out_len));
+int  val_json_encode(const char *text, u32 text_len,
+                     u8 *out, u32 cap, u32 *out_len);
+
+/*
  * 物化：把值的内容读进新分配的缓冲。
  *
  * 内联值 → 拷一份出来。
