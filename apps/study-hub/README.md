@@ -48,6 +48,21 @@ STUDY_HUB_LEARNING_ROOT=/path/to/learning node server/main.js
 层次有回归闸门：`tests/ui-hierarchy.test.js` 断言每页有且只有一个页头、
 主行动在主卡里、状态是中文药丸。
 
+## 配置：`.env` 与 `.env.example`
+
+本机路径与 LLM 密钥可以放在 `.env` 里。仓库提供了一份**不含真实值**的模板
+[`.env.example`](.env.example)，复制成 `.env` 后再填：
+
+```bash
+cp .env.example .env
+```
+
+- `.env` 会由 `server/main.js` 启动时自动读取；不需要手动加载。
+- `.env` 已被 `projects/.gitignore` 忽略，不会进 git；**真实密钥只放 `.env` 或环境变量**，不要写进代码、SQLite 设置、单元文件或生成产物。
+- **已存在的环境变量优先**：`.env` 不覆盖命令行已传入的值。
+- 本机若装了多个 Python，建议在 `.env` 里设置 `STUDY_HUB_PYTHON=py -3`（本机实测：`python` 是 Python 3.11 没有 numpy，`py -3` 是 Python 3.12 且有 numpy 2.5.5）。
+- 不用 LLM 时，密钥保持空白；离线学习、判题与复习功能不受影响。
+
 ## 环境变量
 
 | 变量 | 说明 | 默认 |
