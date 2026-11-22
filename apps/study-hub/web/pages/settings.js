@@ -74,12 +74,22 @@
     Object.keys(f.enabled || {}).forEach(function (code) {
       enabled[code] = f.enabled[code] === true
     })
-    return {
+    const payload = {
       session_count: Number(f.session_count),
       count_trigger_k: Number(f.count_trigger_k),
       track_weights: weights,
       track_enabled: enabled,
     }
+    // 判题解释器：只有用户真填了才发。
+    // 留空 = 「不动这一项」（可能本来就是自动探测，也可能是没填过）——
+    // 不能发空字符串上去，那会被服务端当成「把解释器设成空白」而整单拒掉。
+    const pythonCmd = f.python_cmd === undefined || f.python_cmd === null
+      ? ""
+      : String(f.python_cmd).trim()
+    if (pythonCmd !== "") {
+      payload.python_cmd = pythonCmd
+    }
+    return payload
   }
 
   /**
@@ -112,6 +122,14 @@
         errors.push("轨开关必须是布尔值")
       }
     })
+    // 判题解释器：只有真填了才校验。
+    // 留空 = 「不动这一项」，不是「设成空白」——所以空值直接跳过，不进 errors。
+    const pythonCmd = p.python_cmd === undefined || p.python_cmd === null
+      ? ""
+      : String(p.python_cmd).trim()
+    if (pythonCmd !== "" && !/^[A-Za-z0-9_:.\-\\/ ]+$/.test(pythonCmd)) {
+      errors.push("判题解释器只能是解释器命令（如 python3 / python / py -3），不要带引号或管道")
+    }
     return errors
   }
 
@@ -142,6 +160,43 @@
     return el("section", { class: "panel" }, [
       el("h2", { text: title }),
       el("p", { class: "error", text: String((err && err.message) || err) }),
+    ])
+  }
+
+  /**
+   * 判题解释器输入框。
+   *
+   * 本机可能装了好几个 Python（实测：默认探测到的 python 3.11 没有 numpy，
+   * py -3 是 3.12 带 numpy 2.5.5），所以要让人能改，
+   * 并把「当前生效的解释器 + numpy 版本」直接摆在旁边——
+   * 光看「Python 解释器 ✅」分不出是哪一个，AI 轨能不能跑就赌在这一行上。
+   * @param {object} env GET /api/settings 的 env 段
+   * @param {object} fields 表单状态（会被就地读写）
+   * @returns {HTMLElement}
+   */
+  function pythonRow(env, fields) {
+    const e = env || {}
+    const detail = e.python || {}
+    const numpy = e.numpy || {}
+    const input = el("input", {
+      type: "text",
+      id: "setting-python-cmd",
+      "data-field": "python_cmd",
+      class: "setting-input",
+      placeholder: "留空 = 自动探测（python3 / python / py -3）",
+    })
+    input.value = String(fields.python_cmd || "")
+    input.addEventListener("change", function () {
+      fields.python_cmd = String(input.value).trim()
+    })
+    const nowText = detail.cmd
+      ? "当前：" + String(detail.detail || detail.cmd) +
+        (numpy.ok ? "（numpy " + String(numpy.version || "可用") + "）" : "（无 numpy）")
+      : "当前：自动探测"
+    return el("div", { class: "setting-row" }, [
+      el("span", { class: "setting-name", text: "判题解释器" }),
+      input,
+      el("span", { class: "setting-hint", id: "setting-python-hint", text: nowText }),
     ])
   }
 
@@ -197,6 +252,9 @@
       count_trigger_k: Number(reviewCfg.count_trigger_k || 5),
       weights: {},
       enabled: {},
+      // 初值取「当前生效的解释器」：留空表示走自动探测。
+      // env.python.cmd 是 R1 Task 6 加的字段（服务端 probeEnv 回带）。
+      python_cmd: String((cfg.env && cfg.env.python && cfg.env.python.cmd) || ""),
     }
     tracks.forEach(function (track) {
       fields.weights[track.code] = track.weight
@@ -344,10 +402,13 @@
         el("span", { class: "setting-hint", text: row.detail }),
       ])
     })
+    // 解释器输入框放最前面：它是「为什么 Python 那行是这个结论」的直接答案。
+    envChildren.unshift(pythonRow(cfg.env, fields))
     envChildren.push(
       el("p", {
         class: "faint",
-        text: "缺 NumPy 时 AI 轨整轨跳过，不影响算法轨与数据库轨。",
+        text: "缺 NumPy 时 AI 轨整轨跳过，不影响算法轨与数据库轨。本机若装了多个 Python，"
+          + "在上面的输入框里指定带 numpy 的那个（如 py -3），保存后单元列表会按新解释器重扫。",
       })
     )
     view.appendChild(UI.panel({ title: "环境自检", className: "quiet", children: envChildren }))
@@ -366,6 +427,7 @@
       buildPayload: buildPayload,
       validatePayload: validatePayload,
       envRows: envRows,
+      pythonRow: pythonRow,
       render: render,
     }
   }

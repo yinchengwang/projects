@@ -198,3 +198,101 @@ test("CLI 的 loadUnits 与 verifyBatch 都带上同一个 pythonOverride", func
   const batchBlock = src.slice(batchAt, batchAt + 600)
   assert.ok(batchBlock.indexOf("pythonOverride") !== -1, "verifyBatch 没传 pythonOverride")
 })
+
+/* ---------- 前端：设置页的解释器输入框 ---------- */
+
+const stub = require("./helpers/dom-stub.js")
+
+// 必须在 require web/app.js 之前把 document / window 铺好
+const dom = stub.createDocument()
+global.document = dom.document
+global.window = global
+require("../web/app.js")
+const settingsPage = require("../web/pages/settings.js")
+
+test("buildPayload 把 python_cmd 一起发出去", function () {
+  const payload = settingsPage.buildPayload({
+    session_count: 3,
+    count_trigger_k: 5,
+    weights: {},
+    enabled: {},
+    python_cmd: "py -3",
+  })
+  assert.strictEqual(payload.python_cmd, "py -3")
+})
+
+test("没填 python_cmd 时请求体里就没有这个字段（不误清空服务端设置）", function () {
+  const payload = settingsPage.buildPayload({
+    session_count: 3,
+    count_trigger_k: 5,
+    weights: {},
+    enabled: {},
+  })
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(payload, "python_cmd"), false)
+})
+
+test("解释器为空白时按「不动这一项」处理，不发进请求体", function () {
+  const payload = settingsPage.buildPayload({
+    session_count: 3,
+    count_trigger_k: 5,
+    weights: {},
+    enabled: {},
+    python_cmd: "   ",
+  })
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(payload, "python_cmd"),
+    false,
+    "空白解释器不发进请求体（留空 = 不动这一项）"
+  )
+})
+
+test("解释器的空白不会让整单校验失败", function () {
+  const errors = settingsPage.validatePayload({
+    session_count: 3,
+    count_trigger_k: 5,
+    track_weights: {},
+    track_enabled: {},
+    python_cmd: "   ",
+  })
+  assert.deepStrictEqual(errors, [], "留空不该拦住保存：" + errors.join("/"))
+})
+
+test("解释器带管道 / 引号时校验拦下", function () {
+  const errors = settingsPage.validatePayload({
+    session_count: 3,
+    count_trigger_k: 5,
+    track_weights: {},
+    track_enabled: {},
+    python_cmd: "py -3 | rm -rf /",
+  })
+  assert.ok(errors.length > 0, "带管道要拦：" + errors.join("/"))
+})
+
+test("合法的解释器能通过校验", function () {
+  ;["py -3", "python", "python3", "C:\\Python312\\python.exe"].forEach(function (cmd) {
+    const errors = settingsPage.validatePayload({
+      session_count: 3,
+      count_trigger_k: 5,
+      track_weights: {},
+      track_enabled: {},
+      python_cmd: cmd,
+    })
+    assert.deepStrictEqual(errors, [], cmd + " 应该通过：" + errors.join("/"))
+  })
+})
+
+test("pythonRow 显示当前生效的解释器与 numpy 版本", function () {
+  const fields = { python_cmd: "py -3" }
+  const row = settingsPage.pythonRow(
+    {
+      python: { ok: true, detail: "py -3", cmd: "py", args: ["-3"] },
+      numpy: { ok: true, detail: "numpy 可用", version: "2.5.5" },
+    },
+    fields
+  )
+  // 行里应有：名字 + 输入框 + 当前值提示
+  const text = String(row.textContent || "")
+  assert.ok(text.indexOf("判题解释器") !== -1, text)
+  assert.ok(text.indexOf("numpy") !== -1, text)
+  assert.ok(text.indexOf("2.5.5") !== -1, "要显示 numpy 版本：" + text)
+})
