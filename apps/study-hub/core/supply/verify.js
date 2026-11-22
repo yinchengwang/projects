@@ -26,6 +26,7 @@ const {
   writeFileChecked,
   unitFilePath,
   stemOf,
+  EMPTY_EXPLAIN,
 } = require("./unit-file.js")
 
 /** 供给结论（不是 verdict；verdict 五类冻结，G20） */
@@ -206,8 +207,13 @@ function writeVerdict(unit, status, p) {
     reviewed_at: "",
     subtracks: Array.isArray(unit.subtracks) ? unit.subtracks : [],
   }
+  // 讲解段一律写占位符，**不写 unit.statement**。
+  // unit.statement 是 README + NOTES 的**教材原文**（loader B 拼出来的），
+  // 塞进「## 讲解」会让 plan 的 EMPTY_EXPLAIN 判定失效——
+  // 缺口页再也不会报「缺讲解正文」，人也就不会去补真正的学习讲解。
+  // 补讲解走 generate 的 write-explain 场景，它只替换「## 讲解」小节。
   const content = renderUnitFile(fields, {
-    explain: String(unit.statement || ""),
+    explain: EMPTY_EXPLAIN,
     related: [],
   })
   return writeFileChecked(file, content, opts)

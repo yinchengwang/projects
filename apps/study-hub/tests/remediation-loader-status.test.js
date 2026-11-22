@@ -51,3 +51,31 @@ test("status 仍然只能是四档里的合法值", function () {
   const res = loaderB.parseCardDirectory(card.dir, { track: "database", unitsDir: card.unitsDir })
   assert.ok(["todo", "draft", "verified", "rejected"].indexOf(res.unit.status) !== -1)
 })
+
+const verify = require("../core/supply/verify.js")
+const unitFile = require("../core/supply/unit-file.js")
+
+test("verify 新建单元文件时讲解段是占位符，不是教材原文", function () {
+  const root = tmpDir("study-hub-writeverdict-")
+  const unitsDir = path.join(root, "units")
+  fs.mkdirSync(path.join(unitsDir, "database"), { recursive: true })
+  const unit = {
+    id: "db:mvcc",
+    track: "database",
+    kind: "card",
+    title: "MVCC",
+    statement: "# MVCC\n\n这是 README 原文，不该进讲解段。\n",
+    entry: { demo: "scaffold/grokking/mvcc/main.py", script: "units/database/mvcc.assert.py", language: "python" },
+    source: "grokking",
+  }
+  const written = verify.writeVerdict(unit, "verified", {
+    unitsDir: unitsDir,
+    repoRoot: root,
+    stateFile: path.join(root, ".self-written.json"),
+  })
+  assert.ok(written.ok, written.reason)
+  const text = fs.readFileSync(path.join(unitsDir, "database", "mvcc.md"), "utf8")
+  assert.ok(text.indexOf("README 原文") === -1, "教材原文不该塞进讲解段")
+  assert.ok(text.indexOf(unitFile.EMPTY_EXPLAIN) !== -1, "讲解段应是占位符")
+  assert.ok(/^status: verified$/m.test(text), "status 要写回 verified")
+})

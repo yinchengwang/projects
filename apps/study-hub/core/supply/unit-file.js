@@ -44,6 +44,14 @@ const FRONTMATTER_ORDER = [
 /** 「自己写过」清单的文件名 */
 const SELF_WRITTEN_FILE = "supply-self-written.json"
 
+/**
+ * 单元文件里「讲解还没生成」的占位符。
+ *
+ * 与 `core/supply/plan.js` 的同名常量必须一致——plan 靠它判断「缺讲解正文」这个缺口。
+ * 由本文件导出、plan.js 与 verify.js 共用，别再各写一份。
+ */
+const EMPTY_EXPLAIN = "（讲解正文还没生成）"
+
 /** 单元的短名：id 形如 db:mvcc，取冒号后面那段 */
 function stemOf(unit) {
   const id = String((unit && unit.id) || "")
@@ -438,6 +446,7 @@ function patchUnitFile(absPath, patch, opts) {
 module.exports = {
   FRONTMATTER_ORDER: FRONTMATTER_ORDER,
   SELF_WRITTEN_FILE: SELF_WRITTEN_FILE,
+  EMPTY_EXPLAIN: EMPTY_EXPLAIN,
   formatFieldValue: formatFieldValue,
   stemOf: stemOf,
   unitFilePath: unitFilePath,
