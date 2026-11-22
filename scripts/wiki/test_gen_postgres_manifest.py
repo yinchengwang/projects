@@ -1,258 +1,264 @@
 # -*- coding: utf-8 -*-
-"""postgres 332 篇 manifest 生成器测试。
+"""postgres 机制 manifest 生成器测试。
 
-关键约束：332 这个数字不是随便定的，它等于 A–K 十一组实测篇数之和；
-每条 refs 必须命中真实源码。因此这里既测「数量与分组」，也测「符号提取
-只认函数定义」，还要用真实 postgres 源码做一次端到端校验（源码不存在则跳过）。
+P1 的生成器按「`.c` 文件体积降序、一个文件一页」产出，篇数被写死成 332，
+结果 78% 标题退化成「<文件名> 模块」，还出现跨组重复与测试辅助符号当主题。
+P2a 把生成源换成人工审核的机制清单，因此这里的断言重点整体换了方向：
+
+- 篇数跟着清单走，不是跟着目录文件数走；
+- 每页都能说出机制边界（`boundary`），标题不许退化成文件名；
+- refs 是机制证据而不是文件枚举，同一机制允许跨文件；
+- 清单层面能挡住重复、伪标题、缩写路径、空 refs 这些已知病症。
 """
 import os
-import re
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import gen_postgres_manifest as gen
+import postgres_mechanism_specs as specs_module
 from wiki_manifest import load_manifest
 from wiki_manifest_lint import lint_manifest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".cache", "repos", "postgres"))
 
-# 设计文档实测枚举：A–K 十一组，逐组篇数是硬约束。
+
+def _repo_root():
+    """定位 postgres 源码缓存。
+
+    `.cache/` 是每个工作树自己的运行时目录，所以主仓有缓存、worktree 不一定有。
+    依次试「本工作树」和「主仓 projects」，任一命中即可；都不在就跳过真实源码
+    相关用例，而不是让整个套件失败。
+    """
+    candidates = [
+        os.path.normpath(os.path.join(HERE, "..", "..", ".cache", "repos", "postgres")),
+        # worktree 场景：C:\code\.worktrees\<name>\scripts\wiki → C:\code\projects
+        os.path.normpath(os.path.join(HERE, "..", "..", "..", "..", "projects",
+                                      ".cache", "repos", "postgres")),
+    ]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0]
+
+
+REPO_ROOT = _repo_root()
+
+# 评审定稿的分组与篇数：这是盘点结果，不是给源码文件数留的配额。
 EXPECTED_COUNTS = {
-    "A-存储基础": 29,
-    "B-事务与WAL": 28,
-    "C-堆表与元组": 35,
-    "D-索引族": 33,
-    "E-优化器": 39,
-    "F-执行器": 41,
-    "G-目录与缓存": 28,
-    "H-内存与排序": 28,
-    "I-复制与高可用": 22,
-    "J-服务端与命令面": 35,
-    "K-横切主题": 14,
+    "A-存储与IPC": 20,
+    "B-事务与WAL": 19,
+    "C-堆表与元组": 15,
+    "D-索引族": 17,
+    "E-优化器": 13,
+    "F-执行器": 13,
+    "G-目录与缓存": 7,
+    "H-内存与排序": 5,
+    "I-复制与高可用": 10,
+    "J-服务端与命令面": 12,
+    "K-SQL处理与安全": 11,
+    "L-SQL类型与内建函数": 9,
 }
 
 
-class TestGroupSpecs(unittest.TestCase):
-    def test_eleven_groups(self):
-        self.assertEqual(len(gen.GROUP_SPECS), 11)
+class TestGroupOrder(unittest.TestCase):
+    def test_groups_match_reviewed_labels(self):
+        self.assertEqual(list(specs_module.GROUP_ORDER), list(EXPECTED_COUNTS))
 
-    def test_group_labels_match_expected(self):
-        labels = [spec["label"] for spec in gen.GROUP_SPECS]
-        self.assertEqual(labels, list(EXPECTED_COUNTS))
+    def test_every_group_has_mechanisms(self):
+        counts = gen.group_counts(gen.build_manifest())
+        for label in specs_module.GROUP_ORDER:
+            self.assertGreater(counts[label], 0, label)
 
-    def test_counts_match_expected(self):
-        actual = {spec["label"]: spec["count"] for spec in gen.GROUP_SPECS}
-        self.assertEqual(actual, EXPECTED_COUNTS)
+    def test_group_counts_match_reviewed_inventory(self):
+        self.assertEqual(gen.group_counts(gen.build_manifest()), EXPECTED_COUNTS)
 
-    def test_total_is_332(self):
-        self.assertEqual(sum(spec["count"] for spec in gen.GROUP_SPECS), 332)
-
-    def test_every_group_has_dirs(self):
-        for spec in gen.GROUP_SPECS:
-            self.assertTrue(spec["dirs"], spec)
-            for rel in spec["dirs"]:
-                self.assertTrue(rel.startswith("src/backend/"), spec)
-
-
-class TestExtractSymbols(unittest.TestCase):
-    def _write(self, text):
-        handle = tempfile.NamedTemporaryFile(
-            "w", suffix=".c", delete=False, encoding="utf-8", newline="\n"
-        )
-        handle.write(text)
-        handle.close()
-        self.addCleanup(os.unlink, handle.name)
-        return handle.name
-
-    def test_finds_function_definitions(self):
-        path = self._write(
-            "void Foo(int x)\n{\n    return;\n}\n\nstatic int Bar(void)\n{\n    return 1;\n}\n"
-        )
-        self.assertEqual(gen.extract_symbols(path), ["Foo", "Bar"])
-
-    def test_skips_declarations_with_semicolon(self):
-        path = self._write("void Foo(int x);\nint Bar(void);\nvoid Baz(void)\n{\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["Baz"])
-
-    def test_skips_control_keywords(self):
-        path = self._write("if (x)\n{\n}\nfor (i = 0)\n{\n}\nReal(void)\n{\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["Real"])
-
-    def test_deduplicates(self):
-        path = self._write("void Foo(void)\n{\n}\nvoid Foo(void)\n{\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["Foo"])
-
-    def test_respects_limit(self):
-        text = "".join("void Func%d(void)\n{\n}\n" % i for i in range(10))
-        path = self._write(text)
-        self.assertEqual(len(gen.extract_symbols(path, limit=4)), 4)
-
-    def test_rejects_macro_names(self):
-        """全大写的标识符是宏，不是函数。"""
-        path = self._write("LOCK_DEBUG_ENABLED(void)\n{\n}\nRealFunc(void)\n{\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["RealFunc"])
-
-    def test_rejects_too_short_names(self):
-        path = self._write("Ab(void)\n{\n}\nRealFunc(void)\n{\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["RealFunc"])
-
-    def test_skips_indented_lines(self):
-        """定义在列 0；缩进行里的调用点不算。"""
-        path = self._write("RealFunc(void)\n{\n    Helper(1);\n}\n")
-        self.assertEqual(gen.extract_symbols(path), ["RealFunc"])
-
-    def test_prefers_declared_symbols(self):
-        """给了头文件声明集合时，优先返回对外接口而非内部小工具。"""
-        path = self._write(
-            "InternalHelper(void)\n{\n}\nPublicApi(void)\n{\n}\n"
-        )
-        symbols = gen.extract_symbols(path, declared={"PublicApi"})
-        self.assertEqual(symbols, ["PublicApi"])
-
-    def test_empty_file_returns_empty(self):
-        self.assertEqual(gen.extract_symbols(self._write("")), [])
-
-
-class TestSlugAndTitle(unittest.TestCase):
-    def test_slug_from_filename(self):
+    def test_total_equals_mechanism_count(self):
         self.assertEqual(
-            gen._slug_for("src/backend/storage/buffer/buf_init.c"), "buf-init"
+            len(gen.build_manifest()["pages"]),
+            len(specs_module.MECHANISM_SPECS),
         )
-
-    def test_slug_is_lowercase_with_dashes(self):
-        slug = gen._slug_for("src/backend/catalog/pg_class.c")
-        self.assertEqual(slug, "pg-class")
-        self.assertNotIn("_", slug)
-
-    def test_known_title_is_chinese(self):
-        self.assertEqual(gen._title_for("bufmgr"), "Buffer Pool 主体")
-
-    def test_unknown_title_falls_back(self):
-        self.assertEqual(gen._title_for("zzz_unknown"), "zzz_unknown 模块")
 
 
 class TestManifestShape(unittest.TestCase):
-    """不依赖真实源码：用临时造的小仓验证结构与门禁。"""
+    def test_manifest_has_project_and_schema_version(self):
+        manifest = gen.build_manifest()
+        self.assertEqual(manifest["project"], "postgres")
+        self.assertEqual(manifest["schema_version"], 1)
 
-    def _build_fake_repo(self, root):
-        # 只造 A 组够用的文件，其余组用空目录触发错误——这里只测 A 组切片。
-        target = os.path.join(root, "src", "backend", "storage", "buffer")
-        os.makedirs(target)
-        for index in range(3):
-            path = os.path.join(target, "f%d.c" % index)
-            with open(path, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write("void Sym%d(void)\n{\n}\n" % index)
+    def test_features_are_unique(self):
+        features = [page["feature"] for page in gen.build_manifest()["pages"]]
+        self.assertEqual(len(features), len(set(features)))
 
-    def test_collect_group_pages_shape(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._build_fake_repo(tmp)
-            spec = {"group": "A", "label": "A-存储基础", "count": 3,
-                    "dirs": ["src/backend/storage"]}
-            pages = gen.collect_group_pages(tmp, spec)
-        self.assertEqual(len(pages), 3)
-        self.assertEqual(pages[0]["feature_group"], "A-存储基础")
-        self.assertTrue(pages[0]["page_file"].startswith("a01-"))
-        self.assertEqual(pages[0]["refs"][0]["symbols"], ["Sym0"])
-
-    def test_page_file_tail_matches_feature(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._build_fake_repo(tmp)
-            spec = {"group": "A", "label": "A-存储基础", "count": 2,
-                    "dirs": ["src/backend/storage"]}
-            pages = gen.collect_group_pages(tmp, spec)
-        for page in pages:
-            stem = os.path.splitext(page["page_file"])[0]
-            tail = stem.split("-", 1)[1]
-            self.assertEqual(tail, page["feature"])
-
-    def test_insufficient_files_raises(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._build_fake_repo(tmp)
-            spec = {"group": "A", "label": "A-存储基础", "count": 99,
-                    "dirs": ["src/backend/storage"]}
-            with self.assertRaises(gen.ManifestGenError):
-                gen.collect_group_pages(tmp, spec)
-
-    def test_missing_dir_raises(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            spec = {"group": "Z", "label": "Z-空", "count": 1,
-                    "dirs": ["src/backend/nonexistent"]}
-            with self.assertRaises(gen.ManifestGenError):
-                gen.collect_group_pages(tmp, spec)
-
-
-@unittest.skipUnless(
-    os.path.isdir(os.path.join(REPO_ROOT, "src")),
-    "需要真实 postgres 源码（.cache/repos/postgres）",
-)
-class TestAgainstRealPostgres(unittest.TestCase):
-    """端到端：真实源码上生成 332 页，且每条 refs 命中。"""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.manifest = gen.build_manifest(REPO_ROOT)
-
-    def test_page_count_is_332(self):
-        self.assertEqual(len(self.manifest["pages"]), 332)
-
-    def test_project_and_version(self):
-        self.assertEqual(self.manifest["project"], "postgres")
-        self.assertEqual(self.manifest["schema_version"], 1)
-
-    def test_group_distribution_matches(self):
-        actual = {}
-        for page in self.manifest["pages"]:
-            label = page["feature_group"]
-            actual[label] = actual.get(label, 0) + 1
-        self.assertEqual(actual, EXPECTED_COUNTS)
-
-    def test_feature_slugs_unique(self):
-        slugs = [page["feature"] for page in self.manifest["pages"]]
-        self.assertEqual(len(slugs), len(set(slugs)))
-
-    def test_page_files_unique(self):
-        files = [page["page_file"] for page in self.manifest["pages"]]
+    def test_page_files_are_unique(self):
+        files = [page["page_file"] for page in gen.build_manifest()["pages"]]
         self.assertEqual(len(files), len(set(files)))
 
-    def test_every_page_file_ends_with_feature(self):
-        for page in self.manifest["pages"]:
+    def test_page_file_tail_equals_feature(self):
+        """契约要求 feature 与文件名尾段一致，否则 wiki_lint 会拒。"""
+        for page in gen.build_manifest()["pages"]:
             stem = os.path.splitext(page["page_file"])[0]
             tail = stem.split("-", 1)[1]
-            self.assertEqual(tail, page["feature"], page)
+            self.assertEqual(tail, page["feature"], page["page_file"])
 
-    def test_every_ref_path_exists(self):
-        for page in self.manifest["pages"]:
-            for ref in page["refs"]:
-                full = os.path.join(REPO_ROOT, ref["path"].replace("/", os.sep))
-                self.assertTrue(os.path.isfile(full), ref["path"])
+    def test_page_files_are_numbered_from_one_within_group(self):
+        """组内序号从 01 起连续，便于索引排序与失败页定位。"""
+        seen = {}
+        for page in gen.build_manifest()["pages"]:
+            prefix, _tail = page["page_file"].split("-", 1)
+            letter, number = prefix[0], int(prefix[1:])
+            self.assertEqual(letter, page["feature_group"][0].lower())
+            expected = seen.get(letter, 0) + 1
+            self.assertEqual(number, expected, page["page_file"])
+            seen[letter] = expected
 
-    def test_every_symbol_hits_real_source(self):
-        failures = gen.verify_refs(self.manifest, REPO_ROOT)
+    def test_every_page_has_refs(self):
+        for page in gen.build_manifest()["pages"]:
+            self.assertTrue(page["refs"], page["feature"])
+
+
+class TestMechanismQuality(unittest.TestCase):
+    def test_no_generic_module_titles(self):
+        """P1 的 78% 伪标题不许回来。"""
+        bad = [p["feature"] for p in gen.build_manifest()["pages"]
+               if p["title"].endswith(" 模块")]
+        self.assertEqual(bad, [])
+
+    def test_every_mechanism_has_boundary(self):
+        for spec in specs_module.MECHANISM_SPECS:
+            self.assertTrue(spec["boundary"].strip(), spec["feature"])
+
+    def test_titles_are_unique_per_group(self):
+        seen = {}
+        for spec in specs_module.MECHANISM_SPECS:
+            key = (spec["feature_group"], spec["title"])
+            self.assertNotIn(key, seen, spec["feature"])
+            seen[key] = spec["feature"]
+
+    def test_no_test_helper_symbols_as_evidence(self):
+        """`pgaio_worker_pm_test_grow*` 这类测试辅助函数不能当机制主题。"""
+        symbols = {s for p in gen.build_manifest()["pages"]
+                   for ref in p["refs"] for s in ref["symbols"]}
+        offenders = {s for s in symbols if "test_grow" in s or s.startswith("test_")}
+        self.assertEqual(offenders, set())
+
+    def test_rmgrdesc_mechanism_owns_description_files(self):
+        """rmgrdesc 只归一个机制页，不再在 B/C 各收一遍。"""
+        owners = [p["feature"] for p in gen.build_manifest()["pages"]
+                  if any("rmgrdesc/" in ref["path"] for ref in p["refs"])]
+        self.assertEqual(owners, ["wal-rmgr-description"])
+
+    def test_aio_backends_are_one_mechanism(self):
+        """worker / io_uring 是 AIO 的实现后端，不再按文件拆三页。"""
+        owners = [p["feature"] for p in gen.build_manifest()["pages"]
+                  if any("storage/aio/" in ref["path"] for ref in p["refs"])]
+        self.assertIn("aio-io-methods", owners)
+        self.assertNotIn("method-worker", owners)
+        self.assertNotIn("method-io-uring", owners)
+
+    def test_local_buffer_is_its_own_mechanism(self):
+        """共享缓冲池与 backend-local 池的并发语义不同，分开成页。"""
+        owners = [p["feature"] for p in gen.build_manifest()["pages"]
+                  if any("buffer/localbuf.c" in ref["path"] for ref in p["refs"])]
+        self.assertEqual(owners, ["local-buffer-pool"])
+
+    def test_refs_may_span_multiple_files(self):
+        """一个机制跨多个文件实现是常态，不再一文件一页。"""
+        multi = [p for p in gen.build_manifest()["pages"] if len(p["refs"]) > 1]
+        self.assertGreater(len(multi), 20)
+
+
+class TestCheckSpecs(unittest.TestCase):
+    def _spec(self, **overrides):
+        spec = {
+            "feature_group": "A-存储与IPC",
+            "feature": "buffer-pool",
+            "title": "共享缓冲池",
+            "page_file": "a01-buffer-pool.md",
+            "boundary": "共享 buffer 分配与替换",
+            "refs": [{"path": "src/backend/storage/buffer/bufmgr.c",
+                      "symbols": ["ReadBufferExtended"]}],
+        }
+        spec.update(overrides)
+        return spec
+
+    def test_good_spec_passes(self):
+        self.assertEqual(gen.check_specs([self._spec()]), [])
+
+    def test_duplicate_feature_is_rejected(self):
+        problems = gen.check_specs([self._spec(), self._spec(page_file="a02-x.md")])
+        self.assertTrue(any("feature 重复" in p for p in problems))
+
+    def test_duplicate_page_file_is_rejected(self):
+        problems = gen.check_specs([
+            self._spec(),
+            self._spec(feature="other", title="别的机制"),
+        ])
+        self.assertTrue(any("page_file 重复" in p for p in problems))
+
+    def test_generic_title_is_rejected(self):
+        problems = gen.check_specs([self._spec(title="bufmgr 模块")])
+        self.assertTrue(any("文件名兜底" in p for p in problems))
+
+    def test_empty_boundary_is_rejected(self):
+        problems = gen.check_specs([self._spec(boundary="  ")])
+        self.assertTrue(any("boundary" in p for p in problems))
+
+    def test_empty_refs_is_rejected(self):
+        problems = gen.check_specs([self._spec(refs=[])])
+        self.assertTrue(any("refs 为空" in p for p in problems))
+
+    def test_empty_symbols_is_rejected(self):
+        problems = gen.check_specs([self._spec(
+            refs=[{"path": "src/backend/storage/buffer/bufmgr.c", "symbols": []}])])
+        self.assertTrue(any("symbols 为空" in p for p in problems))
+
+    def test_abbreviated_path_is_rejected(self):
+        problems = gen.check_specs([self._spec(
+            refs=[{"path": "src/backend/storage/.../bufmgr.c",
+                   "symbols": ["ReadBufferExtended"]}])])
+        self.assertTrue(any("缩写" in p for p in problems))
+
+    def test_absolute_path_is_rejected(self):
+        problems = gen.check_specs([self._spec(
+            refs=[{"path": "C:/code/postgres/src/backend/x.c", "symbols": ["Foo"]}])])
+        self.assertTrue(any("src/ 开头" in p for p in problems))
+
+    def test_unknown_group_is_rejected(self):
+        problems = gen.check_specs([self._spec(feature_group="Z-不存在")])
+        self.assertTrue(any("feature_group" in p for p in problems))
+
+    def test_bad_slug_is_rejected(self):
+        problems = gen.check_specs([self._spec(feature="Buffer_Pool")])
+        self.assertTrue(any("feature 非法" in p for p in problems))
+
+
+class TestRealSpecsAreClean(unittest.TestCase):
+    def test_shipped_specs_pass_self_check(self):
+        self.assertEqual(gen.check_specs(), [])
+
+    def test_shipped_manifest_passes_lint(self):
+        self.assertEqual(lint_manifest(gen.build_manifest()), [])
+
+
+@unittest.skipUnless(os.path.isdir(REPO_ROOT), "需要本地 postgres 源码缓存")
+class TestAgainstRealPostgres(unittest.TestCase):
+    def test_every_ref_hits_real_source(self):
+        failures = gen.verify_refs(gen.build_manifest(), REPO_ROOT)
         self.assertEqual(failures, [])
 
-    def test_manifest_passes_lint(self):
-        self.assertEqual(lint_manifest(self.manifest), [])
-
-    def test_written_manifest_loads_back_identical(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "_manifest.yml")
-            gen.write_manifest(self.manifest, path)
-            again = load_manifest(path)
-        self.assertEqual(len(again["pages"]), 332)
-        self.assertEqual(again["pages"][0]["refs"][0]["symbols"],
-                         self.manifest["pages"][0]["refs"][0]["symbols"])
-
-    def test_written_manifest_is_lf(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "_manifest.yml")
-            gen.write_manifest(self.manifest, path)
-            with open(path, "rb") as handle:
-                data = handle.read()
-        self.assertNotIn(b"\r\n", data)
-        self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+    def test_shipped_manifest_matches_generator_output(self):
+        """仓库里的 `_manifest.yml` 必须与生成器输出同构，防止手改漂移。"""
+        path = os.path.join(HERE, "..", "..", "docs", "wiki", "projects",
+                            "postgres", "_manifest.yml")
+        shipped = load_manifest(path)
+        generated = gen.build_manifest()
+        self.assertEqual(len(shipped["pages"]), len(generated["pages"]))
+        self.assertEqual([p["page_file"] for p in shipped["pages"]],
+                         [p["page_file"] for p in generated["pages"]])
+        self.assertEqual([p["feature"] for p in shipped["pages"]],
+                         [p["feature"] for p in generated["pages"]])
 
 
 if __name__ == "__main__":
