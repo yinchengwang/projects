@@ -16,7 +16,8 @@ test("静态首页可访问且返回 200", async function () {
     const res = await fetch("http://127.0.0.1:" + port + "/")
     assert.strictEqual(res.status, 200)
     const body = await res.text()
-    assert.ok(body.indexOf("算法能力计划") !== -1, "首页应包含标题")
+    // 补齐设计 §6.2：应用已改名「学习中枢」，标题不再是「算法能力计划」。
+    assert.ok(body.indexOf("学习中枢") !== -1, "首页应包含标题")
   } finally {
     await app.close()
   }
