@@ -34,7 +34,8 @@ typedef enum {
     EX_COL,
     EX_BIN,
     EX_UN,
-    EX_AGG                    /* v1.1 步骤 3：聚合函数调用 */
+    EX_AGG,                   /* v1.1 步骤 3：聚合函数调用 */
+    EX_FUNC                   /* v1.6：通用标量函数调用（值层函数表按名字查） */
 } ExprKind;
 
 /* 聚合函数（v1.1 步骤 3） */
@@ -56,15 +57,41 @@ typedef enum {
 #define EX_OP_NEG      105
 /* 比较和算术直接用字符：'=' '<' '>' 'L'(<=) 'G'(>=) 'N'(<>) '+' '-' */
 
+/*
+ * 函数调用的实参个数上限。
+ *
+ * 【为什么 8】
+ * 值层函数签名是 `(args[], nargs, out)`，实参数组在**栈上**放在求值入口里。
+ * 8 个 DbValue = 8 × 272 ≈ 2.2 KB，栈安全；再多就该走堆分配了，
+ * 而目前没有任何函数需要超过 2 个实参（`json_match(doc, spec)`、
+ * `json_extract(doc, path)` 都是 2 个）。
+ *
+ * 超了返回 E_NOSPACE —— 明确报错，不静默截断实参（截断 = 给错答案）。
+ */
+#define EX_FUNC_MAX_ARGS 8
+
 typedef struct Expr Expr;
 struct Expr {
     ExprKind kind;
     int      op;                   /* EX_AGG 时是 AggKind */
-    char     name[SQL_NAME_MAX];   /* EX_COL 的列名；EX_AGG 的函数名 */
+    char     name[SQL_NAME_MAX];   /* EX_COL 的列名；EX_AGG / EX_FUNC 的函数名 */
     int      col_idx;              /* 绑定期填 */
     DbValue  lit;                  /* EX_LIT */
     Expr    *l;                    /* EX_AGG：聚合的参数（COUNT(*) 为 NULL）*/
     Expr    *r;
+
+    /*
+     * EX_FUNC 的实参。
+     *
+     * 【为什么用指针数组而不是直接塞进 l / r】
+     * 标量函数的实参个数是可变的（0~EX_FUNC_MAX_ARGS），l / r 只够两个。
+     * 指针数组让"函数机制"与"二元运算机制"互不干扰 ——
+     * l / r 的既有语义一个字都不用改。
+     *
+     * 所有权：args 数组与每个 args[i] 都归这个 Expr，释放时必须递归。
+     */
+    Expr   **args;
+    int      nargs;
 };
 
 typedef enum {
@@ -160,5 +187,13 @@ typedef struct {
 int  parse_sql(const char *sql, Stmt *out, char *errbuf, int errcap);
 
 void free_stmt(Stmt *st);
+
+/*
+ * 递归释放一整棵表达式树（含 EX_FUNC 的 args）。
+ *
+ * free_stmt 内部用的就是它；单独暴露出来是给"解析到一半失败"的路径用的
+ * （那些地方手里只有一个 Expr*，没有 Stmt）。
+ */
+void free_expr(Expr *e);
 
 #endif /* DB_QUERY_PARSER_H */

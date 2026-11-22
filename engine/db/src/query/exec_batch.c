@@ -261,6 +261,35 @@ void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out)
     }
 }
 
+/*
+ * 把批里第 i 行物化成一整行 DbValue。
+ *
+ * 【只有 EX_FUNC 走这条路】普通列式求值不需要整行 —— 它按列扫。
+ * 之所以必须提供这个，是因为值层函数的签名是按行的。
+ *
+ * 【未被用到的列要置 NULL】
+ * batch_ctx_init 只给 used 的列分配了数组；没 used 的列 batch_cell
+ * 会读到空指针。函数实参如果引用了没用到的列（比如 WHERE 里只出现一次
+ * 的列没进 needed 位图），那本来就是 bug —— 但这里置 NULL 至少让它
+ * 表现为"值是 NULL"，而不是踩空指针。
+ */
+int batch_row_at(const BatchCtx *bc, const ColDesc *cols, int ncols,
+                 u32 i, DbValue *row_out)
+{
+    if (!bc || !row_out || i >= bc->nrows)
+        return E_INVAL;
+
+    for (int c = 0; c < ncols && c < SQL_MAX_COLS; c++) {
+        if (!bc->col[c].used) {
+            (void)cols;
+            val_null(&row_out[c]);
+            continue;
+        }
+        batch_cell(bc, c, i, &row_out[c]);
+    }
+    return OK;
+}
+
 /* ---------------- 投影 ---------------- */
 
 /*

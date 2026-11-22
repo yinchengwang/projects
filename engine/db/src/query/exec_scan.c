@@ -34,10 +34,81 @@ int bind_expr(Expr *e, const ColDesc *cols, int ncols,
     int rc = bind_expr(e->l, cols, ncols, err, errcap);
     if (rc != OK)
         return rc;
-    return bind_expr(e->r, cols, ncols, err, errcap);
+    rc = bind_expr(e->r, cols, ncols, err, errcap);
+    if (rc != OK)
+        return rc;
+
+    /*
+     * EX_FUNC 的实参**必须递归绑定**。
+     *
+     * 不绑的后果：`json_match(doc, '$.a')` 里 `doc` 那一列的 col_idx
+     * 停在初值 -1 ⇒ 求值时取不到值 ⇒ 结果静默错误（看着像"文档里没这个字段"）。
+     * 这类错最难查，因为查询本身不报错。
+     */
+    if (e->kind == EX_FUNC) {
+        /*
+         * 顺便在这里检查函数是否已注册。
+         *
+         * 【为什么在绑定期而不是解析期】
+         * 解析期查表会让 parser 依赖值层的注册表状态 —— 不必要的耦合。
+         * 绑定期已经要拿 err 缓冲写列名错误了，顺手报"函数不存在"最自然。
+         *
+         * 【为什么不能只在求值期报】
+         * 求值期拿不到 err 缓冲（签名是 (e, row, out)），错误信息只能退化成
+         * 一个光秃秃的 E_NOTSUP —— 用户看不出是哪个函数没注册。
+         * 而这条错误在**扫第一行之前**就能确定，本来就不该等到求值。
+         */
+        if (!val_func_find(e->name)) {
+            snprintf(err, (size_t)errcap, "不支持的函数: %s", e->name);
+            return E_NOTSUP;
+        }
+    }
+
+    for (int i = 0; i < e->nargs; i++) {
+        rc = bind_expr(e->args[i], cols, ncols, err, errcap);
+        if (rc != OK)
+            return rc;
+    }
+    return OK;
 }
 
 /* ---------------- 表达式求值 ---------------- */
+
+/*
+ * 通用标量函数调用的**公共求值体**。
+ *
+ * 【为什么抽成公共函数而不是两路各写一遍】
+ * 执行器有两条平行的求值路径：逐行（`eval_expr`）与列式（`eval_where`）。
+ * 两边都要支持 `EX_FUNC`。如果各写一遍，两份实现迟早会漂移 ——
+ * 而 A3 的验收判据正是"两路全等"。抽到这里，两路调的是**同一份**代码，
+ * 全等在结构上就成立了，不靠人对齐。
+ *
+ * 【为什么这里可以没有模态知识】
+ * 函数名由 AST 带过来，实现从**值层的函数表**按名字查。
+ * 执行器只做"查表 + 调用某个函数指针"，它不知道 json_match 是什么。
+ * 这是 A7 审计清单里落点 ② 的全部内容。
+ */
+int eval_func_common(const Expr *e, const DbValue *row, DbValue *out)
+{
+    DbValue args[EX_FUNC_MAX_ARGS];
+
+    if (!e || e->kind != EX_FUNC || !out)
+        return E_INVAL;
+    if (e->nargs > EX_FUNC_MAX_ARGS)
+        return E_NOSPACE;
+
+    for (int i = 0; i < e->nargs; i++) {
+        int rc = eval_expr(e->args[i], row, &args[i]);
+        if (rc != OK)
+            return rc;
+    }
+
+    ValFunc fn = val_func_find(e->name);
+    if (!fn)
+        return E_NOTSUP;     /* 函数没注册 —— 明确报错，不静默给 0 */
+
+    return fn(args, e->nargs, out);
+}
 
 int eval_expr(Expr *e, const DbValue *row, DbValue *out)
 {
@@ -169,6 +240,9 @@ int eval_expr(Expr *e, const DbValue *row, DbValue *out)
             return OK;
         }
     }
+
+    case EX_FUNC:
+        return eval_func_common(e, row, out);
 
     default:
         return E_INVAL;

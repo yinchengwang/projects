@@ -162,4 +162,38 @@ int  val_from_record_layout(const RecLayout *L, const ColDesc *cols, int ncols,
 int  val_to_record(const ColDesc *cols, int ncols, const DbValue *vals,
                    u8 *buf, u16 cap, u16 *out_len);
 
+/*
+ * ==================== 通用值层函数表（v1.6） ====================
+ *
+ * 【它是什么】
+ * 一个"名字 → 实现"的注册表。SQL 里的函数调用表达式（`EX_FUNC`）
+ * 按名字在这里查表执行。
+ *
+ * 【为什么放在值层而不是 query 层】
+ * 值层是"通用标量 + 外部值"的地方，是所有模态的公共词汇表。
+ * 函数表放这里 ⇒ query 层只做一次查表，**不认识任何具体函数**。
+ * 这与硬规则 7（执行器不许知道模态）是同一条纪律，只是换了个对象。
+ *
+ * 【谁注册】
+ * 提供这个函数的模态在自己的初始化入口注册
+ * （例：文档模态在 `db_json_init()` 里注册 `json_match` / `json_extract`）。
+ *
+ * 【并发与生命周期】
+ * 它是**进程级只读全局**：注册发生在 `db_open` 里，任何查询开始之前；
+ * 之后只读不写 ⇒ 并发读安全。
+ *
+ * 【为什么函数签名里没有 DbValue 之外的东西】
+ * 签名 `(args, nargs, out)` 是**按行**的、无上下文的 —— 这样执行器
+ * 不需要知道函数的任何语义，也不需要给它传实例状态。
+ * 需要外部状态的函数（如读页链）通过 `DbValue` 的外部值机制拿
+ * （`val_detoast`），不需要额外参数。
+ */
+typedef int (*ValFunc)(const DbValue *args, int nargs, DbValue *out);
+
+/* 注册一个函数。同名返回 E_INVAL（不覆盖已有实现）。 */
+int  val_func_register(const char *name, ValFunc fn);
+
+/* 查一个函数。找不到返回 NULL。 */
+ValFunc val_func_find(const char *name);
+
 #endif /* DB_STORAGE_VALUE_H */

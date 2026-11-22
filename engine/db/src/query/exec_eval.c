@@ -124,6 +124,20 @@ bool where_supported(const Expr *e, const ColDesc *cols, int ncols,
             *need_depth = depth + 3;
         return true;
 
+    case EX_FUNC:
+        /*
+         * 通用函数调用可以列式求值 —— 代价是逐行物化（见 eval_where 的注释）。
+         *
+         * 【但它的实参要能求值】
+         * 实参在本路径里会被 eval_func_common 用**逐行**方式求值，
+         * 所以这里不需要检查实参的形状 —— 逐行路径什么形状都认。
+         *
+         * 【need_depth 不加】
+         * 本分支不递归用 marks 层栈（eval_where 里每个 EX_FUNC 只用 dst），
+         * 所以不占额外深度。
+         */
+        return true;
+
     default:
         return false;
     }
@@ -264,6 +278,38 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols, int ncols,
         return OK;
     }
 
+    case EX_FUNC:
+        /*
+         * 通用标量函数调用。
+         *
+         * 【为什么这里要物化整行】
+         * 值层函数的签名是 `(args[], nargs, out)` —— 按行的。
+         * 列式路径本身按列扫，没有"一整行"这个东西，所以先拼一行出来，
+         * 再交给**与逐行路径完全相同**的 eval_func_common。
+         * 共用一份实现 ⇒ A3「两路全等」在结构上成立，不靠两处手写对齐。
+         *
+         * 【代价】
+         * EX_FUNC 出现在 WHERE 里时，这一批退化为逐行求值。
+         * 有意接受：通用函数带不走向量化收益，而这类谓词占比很小。
+         */
+        {
+            DbValue row[SQL_MAX_COLS];
+            DbValue v;
+
+            for (u32 i = 0; i < bc->nrows; i++) {
+                int rc = batch_row_at(bc, cols, ncols, i, row);
+                if (rc != OK)
+                    return rc;
+                rc = eval_func_common(e, row, &v);
+                if (rc != OK)
+                    return rc;
+
+                int t = val_truth(&v);
+                dst[i] = (t < 0) ? M_NULL : (t == 0 ? M_FALSE : M_TRUE);
+            }
+            return OK;
+        }
+
     default:
         return E_NOTSUP;
     }
@@ -286,6 +332,11 @@ void collect_needed(const Expr *e, u64 *needed)
     case EX_BIN:
         collect_needed(e->l, needed);
         collect_needed(e->r, needed);
+        break;
+    case EX_FUNC:
+        /* 实参里引用的列也要进批 —— 否则物化整行时那些列是空的 */
+        for (int i = 0; i < e->nargs; i++)
+            collect_needed(e->args[i], needed);
         break;
     default:
         break;

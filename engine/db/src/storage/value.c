@@ -503,3 +503,60 @@ int val_to_record(const ColDesc *cols, int ncols, const DbValue *vals,
     }
     return rec_encode(cols, ncols, tmp, buf, cap, out_len);
 }
+
+/*
+ * ==================== 通用值层函数表（v1.6） ====================
+ *
+ * 实现极简：一个静态数组 + 线性查找。
+ *
+ * 【为什么不做哈希表】
+ * 函数数量是个位数（目前 2 个）。哈希表在这里是纯负担 ——
+ * 多 100 行代码、多一处可能出错的地方，换来的性能差异在
+ * 「每条查询查几次」这个量级上根本测不出来。
+ *
+ * 【为什么是进程级静态数组而不是实例级】
+ * 函数表是**纯代码目录**，不持有任何状态。
+ * 挂在实例上会让「函数表」与「实例」的生命周期搅在一起 ——
+ * 两个实例注册同一个函数还会互相看不见。
+ *
+ * 【为什么名字用 const char* 不拷贝】
+ * 注册方传的都是字符串字面量（静态存储期），拷贝反而是多一次分配
+ * 与"谁负责 free"的麻烦。这条隐含约定写在契约注释里。
+ */
+#define VAL_FUNC_MAX 16
+
+static struct {
+    const char *name;
+    ValFunc     fn;
+} g_val_funcs[VAL_FUNC_MAX];
+static int g_val_func_count = 0;
+
+int val_func_register(const char *name, ValFunc fn)
+{
+    if (!name || !*name || !fn)
+        return E_INVAL;
+
+    /* 同名不许重复注册（不覆盖已有实现 —— 覆盖是静默换行为） */
+    for (int i = 0; i < g_val_func_count; i++) {
+        if (strcmp(g_val_funcs[i].name, name) == 0)
+            return E_INVAL;
+    }
+    if (g_val_func_count >= VAL_FUNC_MAX)
+        return E_NOSPACE;
+
+    g_val_funcs[g_val_func_count].name = name;
+    g_val_funcs[g_val_func_count].fn = fn;
+    g_val_func_count++;
+    return OK;
+}
+
+ValFunc val_func_find(const char *name)
+{
+    if (!name || !*name)
+        return NULL;
+    for (int i = 0; i < g_val_func_count; i++) {
+        if (strcmp(g_val_funcs[i].name, name) == 0)
+            return g_val_funcs[i].fn;
+    }
+    return NULL;
+}

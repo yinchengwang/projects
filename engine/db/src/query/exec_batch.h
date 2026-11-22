@@ -58,6 +58,25 @@ void batch_reset(BatchCtx *bc);
 int  batch_add_row(BatchCtx *bc, const DbValue *row);
 void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out);
 
+/*
+ * 把批里第 i 行**物化成一整行 DbValue 数组**。
+ *
+ * 【为什么需要它】
+ * 列式求值按列扫，天然拿不到「一整行」。但通用函数调用（EX_FUNC）的
+ * 实参可能是任意表达式，而值层的函数签名是 `(args[], nargs, out)` ——
+ * 它是**按行**的。所以列式路径遇到 EX_FUNC 时必须能把那一行拼出来。
+ *
+ * 【代价（有意接受）】
+ * EX_FUNC 出现在 WHERE 里时，列式路径退化为逐行物化。
+ * 通用函数本来就带不走列式向量化的好处；而这类函数占比很小，
+ * 不值得为它把列式框架重构一遍。
+ *
+ * row_out 至少要有 SQL_MAX_COLS 项空间；本函数只写 [0, ncols)。
+ * 已用到的列之外的单元格会被置为 NULL（免得调用方读到脏值）。
+ */
+int  batch_row_at(const BatchCtx *bc, const ColDesc *cols, int ncols,
+                  u32 i, DbValue *row_out);
+
 /* ---------------- 列式求值（exec_eval.c） ---------------- */
 
 /*

@@ -98,6 +98,16 @@ int resolve_table_id(Db *db, u32 tid, TableCtx *tc);
 int bind_expr(Expr *e, const ColDesc *cols, int ncols, char *err, int errcap);
 int eval_expr(Expr *e, const DbValue *row, DbValue *out);
 
+/*
+ * 通用标量函数调用的公共求值体（EX_FUNC）。
+ *
+ * 【为什么两条求值路径都调它】
+ * 执行器有逐行（`exec_scan.c::eval_expr`）与列式（`exec_eval.c::eval_where`）
+ * 两条平行实现，两边都要支持函数调用。各写一遍 ⇒ 两份实现迟早漂移，
+ * 而 A3 的验收判据正是"两路全等"。共用这一份，全等在结构上成立。
+ */
+int eval_func_common(const Expr *e, const DbValue *row, DbValue *out);
+
 /* ---------------- 扫描 ---------------- */
 
 /* ---------------- 代价与下推计划（v1.1 步骤 4） ---------------- */

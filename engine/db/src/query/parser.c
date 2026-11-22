@@ -117,17 +117,44 @@ Expr *p_expr_new(ExprKind k)
     return e;
 }
 
+/*
+ * 递归释放一棵表达式树。
+ *
+ * 【为什么现在必须有它】
+ * 加入 EX_FUNC（通用函数调用）之后，Expr 可能挂着 `args[]` 指针数组，
+ * 每个元素又是一棵独立的子树。原来 free_stmt 只对顶层 `free()`，
+ * 加入 args 之后每次函数调用都会泄漏「实参数组 + 全部实参子树」。
+ *
+ * 【为什么连 EX_BIN / EX_UN / EX_AGG 也一起释放】
+ * 它们本来也只在顶层被 free()，子树一律泄漏 —— 这是既有缺陷。
+ * 既然要为 EX_FUNC 引入递归释放，顺手把同一函数里的其它分支补全，
+ * 否则"有的分支递归、有的分支不递归"是更难解释的半吊子状态。
+ * 语义不变（释放本来就没人再用的内存），只是不再漏。
+ */
+void free_expr(Expr *e)
+{
+    if (!e)
+        return;
+
+    free_expr(e->l);
+    free_expr(e->r);
+
+    for (int i = 0; i < e->nargs; i++)
+        free_expr(e->args[i]);
+    free(e->args);
+
+    free(e);
+}
+
 void free_stmt(Stmt *st)
 {
     if (!st)
         return;
 
-    for (int i = 0; i < st->ntargets; i++) {
-        /* 递归释放太琐碎，这里只释放顶层（学习项目可接受） */
-        free(st->targets[i]);
-    }
+    for (int i = 0; i < st->ntargets; i++)
+        free_expr(st->targets[i]);
     for (int i = 0; i < st->ngroupby; i++)
-        free(st->groupby[i]);
+        free_expr(st->groupby[i]);
 
     /*
      * INSERT 值矩阵：行数动态（见 Stmt.vals 的注释）。
@@ -139,21 +166,21 @@ void free_stmt(Stmt *st)
      *
      * 行内只有前 ncols 个槽是有效的；但列数不一致的行可能在更靠前的
      * 槽就填过值（之后才报"各行的值个数不一致"），所以按 SQL_MAX_COLS
-     * 全宽扫一遍最稳，代价是每行 16 次判空。
+     * 全宽扫一遍最稳，代价是每行 32 次判空。
      */
     if (st->vals) {
         for (int r = 0; r < st->vals_cap; r++) {
             if (!st->vals[r])
                 continue;
             for (int c = 0; c < SQL_MAX_COLS; c++)
-                free(st->vals[r][c]);
+                free_expr(st->vals[r][c]);
             free(st->vals[r]);
         }
         free(st->vals);
     }
 
-    free(st->where);
-    free(st->set_expr);
+    free_expr(st->where);
+    free_expr(st->set_expr);
     memset(st, 0, sizeof(*st));
 }
 
@@ -214,6 +241,71 @@ static Expr *parse_agg_call(Parser *p, const char *fname)
 
     if (!p_expect_punct(p, ")"))
         return NULL;
+    return e;
+}
+
+/*
+ * 通用标量函数调用：`name(arg1, arg2, ...)`。
+ *
+ * 【与 parse_agg_call 的区别】
+ * 聚合（COUNT / SUM / AVG / MIN / MAX）是**已知的五个**，走 EX_AGG，
+ * 有专门的聚合求值路径；这里是**任意名字**的标量函数，走 EX_FUNC，
+ * 逐行求值时去值层的函数表按名字查 —— 执行器不认识任何具体函数名。
+ *
+ * 【为什么不在解析期检查函数名是否已注册】
+ * 注册发生在 db_open 里，而解析可能在任何时刻。解析期查表会把
+ * "函数不存在"从**运行期明确报错**变成"解析期报错"，两者都对；
+ * 但解析期会让 parser 依赖值层的注册表状态 —— 那是不必要的耦合。
+ * ⇒ 保持解析期只做语法，未注册的名字在求值期返回 E_NOTSUP。
+ */
+static Expr *parse_func_call(Parser *p, const char *fname)
+{
+    Expr *e = p_expr_new(EX_FUNC);
+    if (!e) {
+        p_fail(p, "内存不足");
+        return NULL;
+    }
+    snprintf(e->name, sizeof(e->name), "%s", fname);
+
+    /*
+     * 实参数组：先按上限分配，解析完再把 nargs 定下来。
+     * 不 realloc —— 上限只有 8，固定分配简单且没有失败路径的复杂度。
+     */
+    e->args = calloc(EX_FUNC_MAX_ARGS, sizeof(Expr *));
+    if (!e->args) {
+        p_fail(p, "内存不足");
+        free_expr(e);
+        return NULL;
+    }
+
+    if (p_accept_punct(p, ")"))
+        return e;                    /* 零实参函数 */
+
+    for (;;) {
+        if (e->nargs >= EX_FUNC_MAX_ARGS) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "函数实参超过 %d 个: %s",
+                     EX_FUNC_MAX_ARGS, fname);
+            p_fail(p, msg);
+            free_expr(e);
+            return NULL;
+        }
+        Expr *arg = p_parse_expr(p);
+        if (!arg) {
+            free_expr(e);
+            return NULL;
+        }
+        e->args[e->nargs++] = arg;
+
+        if (p_accept_punct(p, ","))
+            continue;
+        break;
+    }
+
+    if (!p_expect_punct(p, ")")) {
+        free_expr(e);
+        return NULL;
+    }
     return e;
 }
 
@@ -334,9 +426,18 @@ static Expr *parse_primary(Parser *p)
         copy_name(fname, p->cur.text);
         p_advance(p);
 
-        /* 后面紧跟 "(" → 函数调用（目前只有聚合函数） */
-        if (p_accept_punct(p, "("))
-            return parse_agg_call(p, fname);
+        /*
+         * 后面紧跟 "(" → 函数调用。
+         *
+         * 已知的五个聚合函数走 EX_AGG（有专门求值路径）；
+         * 其余名字一律走**通用的** EX_FUNC —— 按名字查值层函数表。
+         * 解析器不认识 json_match，也不需要认识。
+         */
+        if (p_accept_punct(p, "(")) {
+            if (agg_kind_of(fname) != AGG_NONE)
+                return parse_agg_call(p, fname);
+            return parse_func_call(p, fname);
+        }
 
         e = p_expr_new(EX_COL);
         if (!e) { p_fail(p, "内存不足"); return NULL; }
