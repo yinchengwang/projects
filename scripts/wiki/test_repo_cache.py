@@ -159,6 +159,28 @@ class TestEnsureRepo(unittest.TestCase):
             with self.assertRaises(RepoCacheError):
                 ensure_repo(other, "demo", cache_dir=cache)
 
+    def test_git_suffix_is_treated_as_same_repo(self):
+        # 同一个 GitHub 仓库既可写成 ...://x/y，也可写成 ...://x/y.git。
+        # 缓存里存的是调用者给的写法，判断「同一仓库」时必须抹掉 .git 后缀，
+        # 否则本地已有缓存会被误判成 origin 不匹配。
+        with tempfile.TemporaryDirectory() as d:
+            url = _make_upstream(d)
+            cache = os.path.join(d, 'cache')
+            ensure_repo(url, 'demo', cache_dir=cache)
+            self.assertEqual(ensure_repo(url + '.git', 'demo', cache_dir=cache),
+                             os.path.join(cache, 'demo'))
+
+    def test_normalize_repo_url_strips_git_suffix(self):
+        from repo_cache import _normalize_repo_url
+        self.assertEqual(
+            _normalize_repo_url('https://github.com/x/y.git'),
+            _normalize_repo_url('https://github.com/x/y'),
+        )
+        self.assertEqual(
+            _normalize_repo_url('https://GitHub.com/X/Y.git/'),
+            'https://github.com/x/y',
+        )
+
     def test_clones_when_absent(self):
         with tempfile.TemporaryDirectory() as d:
             url = _make_upstream(d)

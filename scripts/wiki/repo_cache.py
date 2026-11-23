@@ -42,7 +42,17 @@ def repo_path(cache_dir: str, name: str) -> str:
 
 
 def _normalize_repo_url(url: str) -> str:
-    return url.rstrip("/").replace("\\", "/").lower()
+    """归一化仓库 URL，用于「同一仓库」判断。
+
+    除大小写、反斜杠、尾部斜杠外，还要抹掉末尾的 ``.git``：
+    同一个 GitHub 仓库既可写成 ``https://github.com/x/y``，
+    也可写成 ``https://github.com/x/y.git``，git clone 会存留调用者给的写法，
+    不归一化会让「已有缓存 origin 与 repo_url 不匹配」把同一仓库误判成不同仓库。
+    """
+    text = url.rstrip("/").replace("\\", "/").lower()
+    if text.endswith(".git"):
+        text = text[:-4]
+    return text.rstrip("/")
 
 
 def _git_detail(proc) -> str:

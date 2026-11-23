@@ -1,0 +1,137 @@
+# wiki 门禁 CI
+#
+# 只验证「wiki 文档与工装」，不参与 C/C++ 构建。四个 job：
+#   wiki-lint      结构门禁（六个必含章节 + 条件章节 + front-matter 键）
+#   wiki-manifest  manifest 与机制的契约一致性
+#   wiki-refs      引用门禁（符号必须在 refs 声明的文件里真实出现）
+#   wiki-tests     工装层的单元测试（含 151 页契约测试）
+#
+# 路径说明（2026-11-23 实测）：
+#   `docs/wiki/` 根下还有 `wiki-schema.md`（契约文档，无 front-matter）、
+#   `p2-pilot-report.md`、`p3-full-report.md`（报告，不是机制页）。
+#   这三个文件被 wiki_lint 判 FAIL，所以门禁范围必须是 `docs/wiki/projects`
+#   —— 即「页面树」，不含契约文档与报告。
+#
+# refs 门禁需要该库的本地源码。CI 里没有 `.cache/repos/postgres`，
+# 所以先由 repo_cache.ensure_repo 浅克隆，再跑 refs。
+# clone 失败即 job 失败并打印库名，不静默跳过。
+
+name: wiki
+
+on:
+  push:
+    branches: [main, project]
+    paths:
+      - "docs/wiki/**"
+      - "scripts/wiki/**"
+      - "apps/wiki-rag/**"
+      - ".github/workflows/wiki.yml"
+  pull_request:
+    branches: [main, project]
+    paths:
+      - "docs/wiki/**"
+      - "scripts/wiki/**"
+      - "apps/wiki-rag/**"
+      - ".github/workflows/wiki.yml"
+
+jobs:
+  # ============ 结构门禁：六个必含章节 + 条件章节 + front-matter ============
+  wiki-lint:
+    name: Wiki 结构门禁
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 门禁脚本只用标准库，不装任何第三方包。
+      - name: 结构门禁
+        working-directory: projects
+        run: python scripts/wiki/wiki_lint.py docs/wiki/projects --quiet
+
+  # ============ manifest 门禁 ============
+  wiki-manifest:
+    name: Wiki manifest 门禁
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: manifest 门禁
+        working-directory: projects
+        run: python scripts/wiki/wiki_manifest_lint.py docs/wiki/projects/postgres/_manifest.yml
+
+  # ============ 引用门禁（需要 postgres 浅克隆）============
+  wiki-refs:
+    name: Wiki 引用门禁
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 缓存键用 refs 里引用的 postgres 提交（仓内记录为 9b5d4e33）。
+      # 换库或换 checkout 时需要手动改这个键，避免用到旧源码导致 refs 误判。
+      - name: 缓存 postgres 浅克隆
+        uses: actions/cache@v4
+        with:
+          path: projects/.cache/repos/postgres
+          key: wiki-repo-postgres-9b5d4e3331753b3399e84965093109cac8f364bf
+
+      - name: 浅克隆 postgres
+        working-directory: projects
+        run: |
+          python -c "import sys; sys.path.insert(0, 'scripts/wiki'); from repo_cache import ensure_repo; print(ensure_repo('https://github.com/postgres/postgres', 'postgres'))" || {
+            echo "::error::浅克隆 postgres 失败（refs 门禁需要该库源码）"
+            exit 1
+          }
+
+      - name: 引用门禁
+        working-directory: projects
+        run: |
+          python scripts/wiki/wiki_refs.py \
+            --repo-root .cache/repos/postgres \
+            docs/wiki/projects/postgres \
+            --quiet
+
+  # ============ 工装测试（含 151 页契约测试）============
+  wiki-tests:
+    name: Wiki 工装测试
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 工装单元测试
+        working-directory: projects
+        run: python -m unittest discover -s scripts/wiki -p "test_*.py" -v
