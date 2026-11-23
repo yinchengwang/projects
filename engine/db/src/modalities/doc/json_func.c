@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "modalities/doc/json_match.h"
+#include "modalities/doc/json_ovf.h"
 #include "modalities/doc/json_parse.h"
 #include "modalities/doc/json_path.h"
 #include "storage/value.h"
@@ -175,6 +176,59 @@ static int fn_json_match(const DbValue *args, int nargs, DbValue *out)
     return OK;
 }
 
+/*
+ * 分配式 JSON 编码器（值层注册表里的一项）。
+ *
+ * 【为什么自己分配】
+ * "编码后多大算合规"是**文档模态**的知识：JSON_INLINE_MAX（2048，
+ * 见 json_ovf.h）。值层只提供机制，不认识这个数字 ——
+ * 若让调用方给固定缓冲，2048 就被写死在 query 层，违反 A7 审计。
+ *
+ * 【为什么超过上限就报错】
+ * >2048 字节的文档需要 PT_JSON_OVF 页链，而页链的 tuple 所有权、
+ * abort/WAL 恢复、VACUUM 回收尚未设计（C5.3b-b）。
+ * 现在放行只会造出没有主的页 ⇒ 明确拒绝。
+ *
+ * 【两趟】
+ * 第一趟 json_parse_to_jsonb(NULL, 0) 只算长度；
+ * 超上限就直接报错（连缓冲都不分配）；
+ * 第二趟按精确长度 malloc 并真正编码。
+ */
+static int fn_json_encode_alloc(const char *text, u32 text_len,
+                                u8 **bytes_out, u32 *len_out)
+{
+    u32 need = 0;
+    u8 *buf = NULL;
+    int rc;
+
+    if (!text || !bytes_out || !len_out)
+        return E_INVAL;
+    *bytes_out = NULL;
+    *len_out = 0;
+
+    /* 第一趟：量长度（out == NULL 时只算长度） */
+    rc = json_parse_to_jsonb(text, text_len, NULL, 0, &need);
+    if (rc != OK)
+        return rc;
+
+    if (need > JSON_INLINE_MAX)
+        return E_NOSPACE;
+
+    buf = malloc(need ? need : 1u);
+    if (!buf)
+        return E_IO;
+
+    /* 第二趟：真正编码 */
+    rc = json_parse_to_jsonb(text, text_len, buf, need, len_out);
+    if (rc != OK) {
+        free(buf);
+        *len_out = 0;
+        return rc;
+    }
+    *bytes_out = buf;
+    return OK;
+}
+
 int db_json_init(void)
 {
     int rc;
@@ -197,7 +251,7 @@ int db_json_init(void)
     if (rc != OK && rc != E_INVAL)
         worst = rc;
 
-    rc = val_set_json_encoder(json_parse_to_jsonb);
+    rc = val_set_json_encoder(fn_json_encode_alloc);
     if (rc != OK && rc != E_INVAL)
         worst = rc;
 
