@@ -255,17 +255,37 @@ void batch_cell(const BatchCtx *bc, int c, u32 i, DbValue *out)
         val_real(out, col->reals[i]);
         break;
     case T_TEXT:
-    case T_JSON:
         val_text(out, (const char *)col->tpool + col->toff[i], col->tlen[i]);
-        if (col->type == T_JSON) {
+        break;
+    case T_JSON: {
+        /*
+         * JSONB 走**外部值**，长度原样保留。
+         *
+         * 【为什么不能走 val_text】
+         * val_text 把长度截到 VAL_TEXT_MAX-1(255) ——
+         * JSONB 是二进制（tag + 载荷），截一半得到的是残缺字节流，
+         * 渲染器读到会报 E_CORRUPT。
+         *
+         * 【为什么必须与逐行路径一致】
+         * 逐行路径（value_record.c 的 dbvalue_from_record_var）
+         * 对 >255 的 JSONB 给的是外部值；批路径必须给一样的形态，
+         * 否则 A1 对拍红。
+         */
+        const u8 *bytes = (const u8 *)col->tpool + col->toff[i];
+        u32 blen = col->tlen[i];
+        if (blen <= VAL_INLINE_MAX) {
+            val_null(out);
+            out->is_null = false;
             out->type = T_JSON;
-            if (out->len > VAL_INLINE_MAX) {
-                const u8 *bytes = (const u8 *)col->tpool + col->toff[i];
-                val_external_json(out, (u64)(uintptr_t)bytes, out->len,
-                                  val_mem_detoast, (void *)bytes);
-            }
+            out->len = (u16)blen;
+            if (blen)
+                memcpy(out->s, bytes, blen);
+        } else {
+            val_external_json(out, (u64)(uintptr_t)bytes, blen,
+                              val_mem_detoast, (void *)bytes);
         }
         break;
+    }
     case T_BOOL:
         val_bool(out, col->ints[i] != 0);
         break;

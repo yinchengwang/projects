@@ -83,11 +83,21 @@ int val_batch_decode(const RecLayout *L, const ColDesc *cols, int ncols,
                     return E_CORRUPT;
 
                 /*
-                 * 截断到 VAL_TEXT_MAX-1 —— 与 val_text 一致。
+                 * T_TEXT 截断到 VAL_TEXT_MAX-1 —— 与 val_text 一致。
                  * 不截的话：① 文本池会被撑爆 ② 两边的值长度不同（对拍会红）。
+                 *
+                 * ⚠️ **T_JSON 绝不截断** ——
+                 *    JSONB 是**二进制**（tag + 载荷），截掉一半得到的是
+                 *    一个残缺的字节流，不是"短一点的 JSON"。
+                 *    渲染器读到残缺流会报 E_CORRUPT，
+                 *    而逐行路径（value_record.c）给的是完整字节 ——
+                 *    两边不一致 ⇒ 对拍红、用户拿到 E_CORRUPT。
+                 *
+                 *    所以 JSON 走下面的"外部值"路线：
+                 *    长度原样保留，字节原样指向记录缓冲。
                  */
                 u16 n = (u16)(e - s);
-                if (n >= VAL_TEXT_MAX)
+                if (cols[c].type == T_TEXT && n >= VAL_TEXT_MAX)
                     n = (u16)(VAL_TEXT_MAX - 1);
 
                 if (col->tused + n > col->tcap)

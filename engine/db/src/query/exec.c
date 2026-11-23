@@ -198,11 +198,22 @@ int b_push(Builder *b, const DbValue *vals)
         char *cell = NULL;
 
         if (vals[i].type == T_JSON) {
-            char buf[512];
-            val_to_str(&vals[i], buf, (int)sizeof(buf));
-            cell = xstrdup(buf);
-            if (!cell)
-                return E_IO;
+            /*
+             * JSON 走 val_to_json_alloc：先测长度再写，**不截断**。
+             *
+             * 【为什么不能沿用 val_to_str(buf[512])】
+             * 512 字节的栈缓冲会截断长文档 —— 用户看到的是一个语法
+             * 不完整的 JSON，比报错更难查。
+             *
+             * 【为什么放在值层做】
+             * "先问长度、再写内容"是渲染器的两趟协议；
+             * 结果构造器不该知道这个协议 —— 值层提供入口，
+             * 模态提供实现（与编码器同一条纪律）。
+             */
+            u32 json_len = 0;
+            int rc = val_to_json_alloc(&vals[i], &cell, &json_len);
+            if (rc != OK)
+                return rc;
         } else if (vals[i].external) {
             /*
              * 普通外部文本值：物化成精确大小的缓冲。

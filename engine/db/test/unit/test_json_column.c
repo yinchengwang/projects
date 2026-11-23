@@ -211,7 +211,53 @@ int main(void)
               buf, sizeof(buf)) != NULL);
     CHECK(strcmp(buf, "9") == 0);
 
-    /* ---------------- 6. 无效 JSON 与编码后超限都拒绝且不留下行 ---------------- */
+    /* ---------------- 6. 256–2048B：跨过 DbValue 内联阈值仍要完整往返 ---------------- */
+    /*
+     * 【这一组钉的是 v1.6 C5.3 的三层表示】
+     *   ≤255B       → DbValue.s[] 内联
+     *   256–2048B   → 记录里内联，运行时用**指向缓冲的外部值**
+     *   >2048B      → C5.3b-b 页链（本步拒绝）
+     *
+     * 中间那层最容易写成"直接 memcpy 进 s[256]"。DbValue.s 就是 256 字节，
+     * 多拷一个字节就踩到后面的 external 字段 —— 结果不是报错，
+     * 而是把内联值变成"外部值 + 垃圾 ext_fn"，读的时候报 E_CORRUPT。
+     * 所以这里必须断言 257 字节的 JSONB 能被完整存进去再读出来。
+     */
+    {
+        char doc[4096];
+        char sql[8192];
+
+        /* pad=230 ⇒ 文本 246B，JSONB 257B，正好越过 255B 内联阈值。 */
+        make_big_doc(230, doc, sizeof(doc));
+        snprintf(sql, sizeof(sql),
+                 "INSERT INTO t (id, doc) VALUES (60, '%s')", doc);
+        exec_ok(sql);
+
+        CHECK(one("SELECT doc FROM t WHERE id = 60", buf, sizeof(buf)) != NULL);
+        CHECK(strlen(buf) > 240);
+        CHECK(strstr(buf, "\"a\":7") != NULL);
+        CHECK(one("SELECT json_extract(doc, '$.a') FROM t WHERE id = 60",
+                  buf, sizeof(buf)) != NULL);
+        CHECK(strcmp(buf, "7") == 0);
+
+        /* pad=1200 ⇒ 约 1216B：仍在阈值内，也必须完整 */
+        make_big_doc(1200, doc, sizeof(doc));
+        snprintf(sql, sizeof(sql),
+                 "INSERT INTO t (id, doc) VALUES (61, '%s')", doc);
+        exec_ok(sql);
+        CHECK(one("SELECT doc FROM t WHERE id = 61", buf, sizeof(buf)) != NULL);
+        CHECK(strlen(buf) > 1200);
+        CHECK(strstr(buf, "\"a\":7") != NULL);
+
+        /* UPDATE 走同一条编码路径，同样不能踩阈值 */
+        snprintf(sql, sizeof(sql),
+                 "UPDATE t SET doc = '%s' WHERE id = 60", doc);
+        exec_ok(sql);
+        CHECK(one("SELECT doc FROM t WHERE id = 60", buf, sizeof(buf)) != NULL);
+        CHECK(strlen(buf) > 1200);
+    }
+
+    /* ---------------- 7. 无效 JSON 与编码后超限都拒绝且不留下行 ---------------- */
     {
         char huge[4096];
         char sql[8192];

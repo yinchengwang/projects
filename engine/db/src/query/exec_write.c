@@ -83,10 +83,44 @@ static int coerce_to_col(const ColDesc *col, DbValue *v,
         break;
 
     case T_TEXT:
-        if (v->type != T_TEXT || v->external) {
+        /*
+         * TEXT 列只内联 255 字节（值层的既有契约）。
+         *
+         * 【为什么必须显式校验】
+         * 原来的实现用 64 字节栈缓冲中转：val_to_str(v, buf, 64)
+         * 会把任意长度的值截成 63 字节，然后 val_text() 存这 63 字节。
+         * 词法器放宽到 8192B 之后，长字面量一律是外部值 ⇒
+         * 这条路径必然被踩到，且会静默丢数据。
+         *
+         * 现在：先取真实长度，超过上限直接报错，不写 heap。
+         */
+        if (v->type != T_TEXT) {
+            /* 非文本值按 TEXT 亲和性转文本（既有语义） */
             char buf[64];
             val_to_str(v, buf, (int)sizeof(buf));
             val_text(v, buf, (u16)strlen(buf));
+            break;
+        }
+        if (v->external) {
+            u8 *bytes = NULL;
+            u32 blen = 0;
+            int rc = val_detoast(v, &bytes, &blen);
+            if (rc != OK)
+                return rc;
+            if (blen > VAL_INLINE_MAX) {
+                free(bytes);
+                snprintf(err, (size_t)errcap,
+                         "列 %s：文本超过 %d 字节上限",
+                         col->name, VAL_INLINE_MAX);
+                return E_NOSPACE;
+            }
+            val_text(v, (const char *)bytes, (u16)blen);
+            free(bytes);
+        } else if (v->len > VAL_INLINE_MAX) {
+            snprintf(err, (size_t)errcap,
+                     "列 %s：文本超过 %d 字节上限",
+                     col->name, VAL_INLINE_MAX);
+            return E_NOSPACE;
         }
         break;
 
@@ -140,21 +174,22 @@ int exec_insert(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
                     rc = E_INVAL;
                     goto fail;
                 }
-                u8 jsonb[2048];
-                u32 jsonb_len = 0;
-                rc = val_json_encode(row[c].s, row[c].len,
-                                     jsonb, sizeof(jsonb), &jsonb_len);
+                /*
+                 * 编码交给 doc 模态：它自己判上限、自己分配。
+                 * 失败（语法错 / 超过模态允许的长度）在写 heap 之前发生 ——
+                 * 不会留下半个 tuple。
+                 *
+                 * ⚠️ 错误文本里**不写死上限数字** ——
+                 *    JSON_INLINE_MAX 是 doc 模态的常量，query 层不能 include
+                 *    它（A7 审计）。具体数字由模态自己在返回值里体现。
+                 */
+                rc = val_json_from_text(&row[c], &row[c]);
                 if (rc != OK) {
                     snprintf(err, (size_t)errcap,
-                             "JSON 列 %s 文本无效或编码后超过 2048 字节",
+                             "JSON 列 %s 文本无效或超过允许的长度",
                              tc.cols[c].name);
                     goto fail;
                 }
-                val_null(&row[c]);
-                row[c].is_null = false;
-                row[c].type = T_JSON;
-                row[c].len = (u16)jsonb_len;
-                memcpy(row[c].s, jsonb, jsonb_len);
             }
             if (row[c].is_null && !tc.cols[c].nullable) {
                 snprintf(err, (size_t)errcap, "列 %s 不允许 NULL", tc.cols[c].name);
@@ -170,6 +205,13 @@ int exec_insert(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
         /* xid 显式传（硬规则 5） */
         Rid rid;
         rc = tc.am->insert(tc.am, db->cur_xid, row, &rid);
+        /*
+         * 外部 JSONB 的缓冲写完即还 ——
+         * val_to_record 在 AM 内部已同步物化进记录变长区，
+         * 此后这份运行时缓冲就没有主人了。
+         */
+        for (int c = 0; c < st->ncols; c++)
+            val_json_free(&row[c]);
         if (rc != OK)
             goto fail;
 
@@ -191,6 +233,13 @@ int exec_insert(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
     return OK;
 
 fail:
+    /*
+     * 失败路径也要还缓冲 ——
+     * goto fail 可能发生在"这一行已经编码出外部 JSONB"之后
+     * （比如第 2 列编码失败，而第 1 列已经分配了缓冲）。
+     */
+    for (int c = 0; c < st->ncols; c++)
+        val_json_free(&row[c]);
     qr_free(r);
     return rc;
 }
@@ -388,22 +437,18 @@ int exec_update(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
                 qr_free(r);
                 return E_INVAL;
             }
-            u8 jsonb[2048];
-            u32 jsonb_len = 0;
-            rc = val_json_encode(nv.s, nv.len, jsonb, sizeof(jsonb), &jsonb_len);
+            /*
+             * 与 INSERT 同一套编码路径：模态自己判上限、自己分配。
+             */
+            rc = val_json_from_text(&nv, &nv);
             if (rc != OK) {
                 snprintf(err, (size_t)errcap,
-                         "JSON 列 %s 文本无效或编码后超过 2048 字节",
+                         "JSON 列 %s 文本无效或超过允许的长度",
                          tc.cols[set_idx].name);
                 free(rids);
                 qr_free(r);
                 return rc;
             }
-            val_null(&nv);
-            nv.is_null = false;
-            nv.type = T_JSON;
-            nv.len = (u16)jsonb_len;
-            memcpy(nv.s, jsonb, jsonb_len);
         }
         if (nv.is_null && !tc.cols[set_idx].nullable)
             continue;
@@ -419,9 +464,27 @@ int exec_update(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
 
         val_copy(&row[set_idx], &nv);
 
+        /*
+         * 所有权唯一化：val_copy 只是把 ext_ctx 指针拷过去，
+         * nv 与 row[set_idx] 指向**同一块**缓冲。
+         * 不清掉 nv 的外部标记的话，释放时会把同一块内存释放两次。
+         *
+         * 释放只发生在 row[] 这一份上。
+         */
+        nv.ext_ctx = NULL;
+        nv.ext_fn = NULL;
+        nv.external = false;
+
         /* MVCC 更新的两段式（打 xmax + 插新版本）在 AM 里做 */
+
         Rid new_rid;
         rc = tc.am->update(tc.am, db->cur_xid, rids[i], row, &new_rid);
+        /*
+         * 外部 JSONB 的缓冲写完即还 ——
+         * val_to_record 在 AM 内部已同步物化进记录变长区。
+         */
+        for (int c = 0; c < tc.ncols; c++)
+            val_json_free(&row[c]);
         if (rc != OK)
             continue;
 
