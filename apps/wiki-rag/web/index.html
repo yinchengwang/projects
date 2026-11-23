@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wiki RAG 工作台</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark">W</div>
+    <div><strong>Wiki RAG</strong><span>知识检索工作台</span></div>
+    <div class="top-status"><i id="service-dot"></i><span id="service-status">正在连接</span></div>
+    <div class="embed-label" id="embed-backend">嵌入后端读取中</div>
+  </header>
+  <main class="workspace">
+    <aside class="left-rail">
+      <div class="rail-heading"><span class="eyebrow">LIBRARIES</span><span class="count" id="library-count">0</span></div>
+      <div id="project-list" class="project-list"><div class="empty-state">正在读取索引…</div></div>
+      <div class="rail-note"><span>ⓘ</span><p>状态取自入库时执行的 wiki_lint 与 wiki_refs 真实退出码。</p></div>
+    </aside>
+    <section class="center-pane">
+      <div class="welcome"><div class="eyebrow">POSTGRES WIKI · HYBRID SEARCH</div><h1>找到机制背后的<br><span>原文证据</span></h1><p>混合检索 PostgreSQL 机制文档，答案只摘录原文，不做模型改写。</p></div>
+      <form id="ask-form" class="ask-form">
+        <textarea id="question" rows="2" placeholder="例如：共享缓冲池怎么选替换候选？" required></textarea>
+        <div class="form-bottom"><span>Enter 提问 · Shift+Enter 换行</span><button type="submit" id="ask-button">检索并回答 <b>↗</b></button></div>
+      </form>
+      <div class="suggestions"><button data-question="共享缓冲池怎么选替换候选">共享缓冲池替换策略</button><button data-question="PostgreSQL 如何保证脏页写回安全">脏页与 WAL</button><button data-question="共享缓冲区与本地缓冲区有什么区别">共享与本地缓冲池</button></div>
+      <div class="result-heading"><span>回答与检索过程</span><span id="result-count"></span></div>
+      <div id="answer" class="answer empty-answer">提出问题后，将展示原文摘录与检索过程。</div>
+      <details class="retrieval-drawer" id="retrieval-drawer"><summary>检索过程 <span id="retrieval-summary">尚无检索记录</span></summary><div id="retrieval-details"></div></details>
+    </section>
+    <aside class="right-pane">
+      <div class="source-heading"><div><span class="eyebrow">SOURCE PANEL</span><h2>出处与证据</h2></div><span id="source-count" class="count">0</span></div>
+      <div id="sources" class="sources"><div class="source-empty"><div>↗</div><strong>出处将在这里展开</strong><p>每条引用都由后端块 ID 回源，可展开核对原文。</p></div></div>
+      <div class="source-footer">引用由检索块生成 · 点击卡片查看全文</div>
+    </aside>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
