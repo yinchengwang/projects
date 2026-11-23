@@ -20,7 +20,7 @@ GIN 写入把 heap tuple 拆成倒排键项，并可先追加到 pending list，
 
 GIN 将一个 heap tuple 的多个属性键映射为 entry tree 中的键，并在键下维护对应 heap TID 集合。`ginbuild` 以 bulk-build 方式扫描 heap 并填充索引；常规 `aminsert` 则可按 fastupdate 配置将收集到的键/TID 先写入 pending list，稍后统一合并到常规 entry/posting 结构。
 
-pending list 是查询必须考虑的索引组成部分，不是可忽略的缓存；搜索会同时查 pending list 与主索引。它不负责决定 heap tuple 的事务可见性，回表后的 heap/table-AM 仍执行可见性判断。这里的 `ginEntryInsert` 实际定义在 `ginfast.c`，`gininsert.c` 包含其调用及 GIN 插入/构建入口；spec 按 ref 文件全文命中验证符号，不意味着该符号的函数体定义在每个被引用文件中。
+pending list 是查询必须考虑的索引组成部分，不是可忽略的缓存；搜索会同时查 pending list 与主索引。它不负责决定 heap tuple 的事务可见性，回表后的 heap/table-AM 仍执行可见性判断。`ginEntryInsert` 的定义在 `gininsert.c`；pending-list cleanup 位于 `ginfast.c`，会调用该入口把聚合键写入主索引。
 
 ## 怎么实现的
 
@@ -41,7 +41,7 @@ pending list 是查询必须考虑的索引组成部分，不是可忽略的缓�
 
 | 路径 | 符号 | 本文对应作用 |
 |---|---|---|
-| `src/backend/access/gin/gininsert.c` | `ginEntryInsert` | 该文件含其调用；真实定义在 `ginfast.c`，负责将键及 TID 集合并入 GIN 主结构。 |
+| `src/backend/access/gin/gininsert.c` | `ginEntryInsert` | 函数定义于此，负责将键及 TID 集合并入 GIN 主结构；cleanup 从 `ginfast.c` 调用。 |
 | `src/backend/access/gin/gininsert.c` | `ginbuild` | heap bulk build 入口，初始化并执行 GIN 索引构建。 |
 | `src/backend/access/gin/ginfast.c` | `ginHeapTupleFastInsert` | 把收集的索引项追加到 pending list 并维护 metapage/WAL。 |
 | `src/backend/access/gin/ginfast.c` | `ginInsertCleanup` | 聚合 pending entries、写入主索引并移除已处理页面。 |

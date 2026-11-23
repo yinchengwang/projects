@@ -31,14 +31,14 @@ refs:
 3. `textregexeq` 是 `~` 操作符的实现：取左操作数为数据、右操作数为模式，固定 `REG_ADVANCED` 与当前 collation，`nmatch = 0` 表示只要布尔结果，因此可走 `REG_NOSUB` 快速路径。
 4. `regexp_matches` 是集合返回函数：首次调用时在 `multi_call_memory_ctx` 里解析 flags、把输入串复制进多调用上下文，并由 `setup_regexp_matches` 一次性完成全部匹配（把原串转宽字符、编译模式、记录各次匹配与子表达式位置），后续每次调用只从已算好的位置表构造一个结果数组，直到耗尽。
 5. `parse_tsquery` 按 flags 选择 tokenizer（标准、plain 或 websearch 风格），初始化 `TSQueryParserStateData` 与值解析器，`makepol` 生成后序（逆波兰）`QueryItem` 列表；空词位时发 NOTICE 并返回 size 为 0 的查询，过大则由 `TSQUERY_TOO_BIG` 报错，否则按 `COMPUTESIZE` 打包头部、QueryItem 与操作数字符串。
-6. `TS_execute` 调 `TS_execute_recurse` 并在结果不等于 `TS_NO` 时返回 true。递归按操作符处理：`OP_NOT` 在 `TS_EXEC_SKIP_NOT` 下直接视为真，`OP_AND`/`OP_OR` 分别短路，`OP_PHRASE` 交给 `TS_phrase_execute`；词位操作数走回调 `chkcond`，并以 `TS_MAYBE` 三值结果表达"仅当提供位置信息时才可确定"。
+6. `TS_execute` 的公开返回类型是 `bool`，其实现将 `TS_execute_recurse(...) != TS_NO` 直接转为真假；只有内部递归及 `TS_execute_ternary` 返回 `TSTernaryValue`，保留 `TS_MAYBE`。该值仅在短语匹配需要词位位置而 caller 通过 `TS_EXEC_PHRASE_NO_POS` 表示未提供位置时出现；`TS_execute` 按源码注释将这种不确定情况视作 true。
 7. `ts_match_tt` 是文本对文本的便捷入口：先把左侧经 `to_tsvector` 规范化、右侧经 `plainto_tsquery` 解析，再调 `ts_match_vq`；后者把 `tsvector` 的词位数组与操作数字符串放入 `CHKVAL`，交给 `TS_execute` 配 `checkcondition_str` 做二分查找与权重/位置检查。
 
 ## 关键取舍
 
 - **源码事实：**正则编译结果按模式、flags、collation 缓存，命中时把条目移到数组前端；`nmatch < 2` 会自动加入 `REG_NOSUB`。**架构推论：**以缓存查找与搬移换取重复查询免编译，代价是同一模式在"要子匹配"与"不要子匹配"场景下会编译成两份；若按模式单一缓存，就无法同时获得 `REG_NOSUB` 的执行收益。
 - **源码事实：**`regexp_matches` 首次调用就一次性算出全部匹配位置，后续调用只组装结果。**架构推论：**把匹配成本集中到首调用，使 SRF 每次返回的固定开销很低，代价是即使调用者只取第一行也已付出全量扫描；若逐次增量匹配，则每次都要维护可恢复的引擎状态。
-- **源码事实：**`TS_execute` 用三值逻辑，`TS_MAYBE` 只在调用者未提供位置信息（如 `TS_EXEC_PHRASE_NO_POS`）时出现，`TS_execute` 把非 `TS_NO` 都当作真。**架构推论：**以"可能匹配"这一第三值保留短语位置信息缺失时的保守判定，避免误判为不匹配；若强行二值化，需要要么高估命中、要么漏掉本应命中的短语。
+- **源码事实：**`TS_execute` 对外返回 `bool`，将递归结果中除 `TS_NO` 外都映射为 true；`TS_MAYBE` 是内部三值递归 / `TS_execute_ternary` 的结果，只可能源于短语求值缺少位置（`TS_EXEC_PHRASE_NO_POS`），不是普通词位回调的一般状态。**架构推论：**把“缺少位置时无法确定短语关系”保留为内部 maybe，并由 bool API 保守映射为可能匹配，避免误判为不匹配；需要精确保留不确定性的调用者应使用 ternary 入口。
 
 ## 源码落点
 
@@ -47,7 +47,8 @@ refs:
 | `src/backend/utils/adt/regexp.c` | `RE_compile_and_execute` | 决定是否要子匹配、取编译缓存并执行匹配。 |
 | `src/backend/utils/adt/regexp.c` | `textregexeq` | `~` 操作符入口，以固定编译标志与当前 collation 判定匹配。 |
 | `src/backend/utils/adt/regexp.c` | `regexp_matches` | 集合返回函数，首调用完成全部匹配、逐次输出结果数组。 |
-| `src/backend/utils/adt/tsvector_op.c` | `TS_execute` | 遍历 tsquery 后序操作符树并按回调判定词位是否存在。 |
+| `src/backend/utils/adt/tsvector_op.c` | `TS_execute` | bool API：把递归执行结果除 `TS_NO` 外映射为 true；内部 maybe 仅关联缺少短语位置的情形。 |
+| `src/backend/utils/adt/tsvector_op.c` | `TS_execute_ternary` | 保留并返回内部 `TSTernaryValue`，使调用者可以区分 `TS_MAYBE`。 |
 | `src/backend/utils/adt/tsvector_op.c` | `ts_match_tt` | 文本对文本入口，先经 to_tsvector/plainto_tsquery 再复用向量查询匹配。 |
 | `src/backend/utils/adt/tsquery.c` | `parse_tsquery` | 依 flags 选 tokenizer，生成逆波兰 QueryItem 并打包为 TSQuery。 |
 

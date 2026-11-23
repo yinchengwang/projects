@@ -20,7 +20,7 @@ refs:
 
 本页只负责**面向 SQL/运维的备份接口和回调生命周期**，不讲 WAL writer 如何缓存、写文件或 flush（b01），也不讲 restore/recovery 从 archive 取回 WAL 的流程（b03）。`pg_walfile_name` 也不只是备份工具的附属：它把给定 LSN 映射到当前 timeline 与 segment 大小下的 WAL 文件名，不切段、不归档、不下载，也不验证目标文件是否已经存在。
 
-归档侧是另一条独立链路，但同属「对外接口」边界。`pgarch.c` 里 `pgarch_archiveXlog` 组装 `XLOGDIR/<file>` 路径后调用模块 vtable 的 `archive_file_cb(module_state, xlog, pathname)`；它自己架一个 `sigsetjmp` 局部异常栈，把回调抛出的 ERROR 记日志、清理锁/超时/等待状态并返回 false，从而让 archiver 重试该文件而不是整体重启。默认模块是 `shell_archive.c`：`check_configured_cb` 只检查 `XLogArchiveCommand` 非空，`archive_file_cb` 用 `replace_percent_placeholders(..., "fp", file, nativePath)` 替换 `%f`/`%p`，再 `system()` 执行并包在 `WAIT_EVENT_ARCHIVE_COMMAND` 里；返回码为信号致死时按 FATAL 处理、普通非零退出按 LOG。`pgarch.c` 还会拒绝 `archive_command` 与 `archive_library` 同时设置，说明这两个 GUC 是同一归档出口的两种实现选择，而不是两个可叠加的机制。
+归档侧是另一条独立链路，**不在本页展开**。`archive_command` 与 `archive_library` 是同一个归档出口的两种实现选择（同时设置会被拒绝），由 archiver 进程按 `.ready` 状态调用模块回调执行——那套状态机、重试策略与回调异常处理属 `i10-archive-and-base-backup` 的机制范围，本页只负责 SQL 侧的备份起止与WAL 文件名换算。本页提到的「归档完成」仅指 `pg_backup_stop(waitforarchive => true)` 会等待所需 WAL 段被归档，不表示归档目标一定已持久保存。
 
 ## 怎么实现的
 
@@ -43,7 +43,7 @@ refs:
 
 **`pg_walfile_name` 拒绝 recovery 状态下调用，而不是尝试从 replay timeline 猜文件。** 函数明确 `ereport(ERROR)`，因为函数使用的是当前 WAL insertion timeline 与 segment size；恢复期间这不等于安全可用的读/archive timeline。放弃的是 standby 上查询任意 LSN 对应 WAL 文件名的便利，换来不让调用方误把本机 insertion filename 当成归档恢复文件。该回退由真实 caller `pg_walfile_name` 本体中的 recovery 检查执行。
 
-**归档出口做成模块 vtable 而不是硬编码 shell 命令。** `pgarch.c` 只要求 `ArchiveCallbacks->archive_file_cb` 存在，命令模块 (`shell_archive_init`) 与库模块由 `archive_library` 选择；`shell_archive_file` 里 `system()` 的返回值还被解释成 FATAL 与 LOG 两种级别——被信号终止就 FATAL，让 archiver 重启；普通非零退出只 LOG 并返回 false，让下一轮重试同一文件。放弃的是「一个失败策略走到底」的简单性：如果用统一级别，普通命令失败也会频繁重启 archiver，而信号致死只记 LOG 又会让 `system()` 吞掉的中断失去响应。替代方案（自己 fork/exec 并处理退出码）能让模块内部控制更细，但当前实现把 shell 命令的语义原样交给 `system()`，并明确承认 `system()` 会忽略 SIGINT/SIGQUIT。
+**备份状态挂在会话上（`TopMemoryContext` 子上下文）而不是每次 SQL 调用独立。** 源码事实：`pg_backup_start` 把 `backup_state` 与 `tablespace_map` 放进跨调用存活的 `backupcontext`，并注册 persistent abort handler；`pg_backup_stop` 结束时才删除该上下文。放弃的是「无状态、每次调用各取所需」的简单接口形态——那要求调用者自己保管 startpoint 与 tablespace map，而外部备份工具通常在两个进程/两段脚本里分别执行 start 与 stop，状态无处安放。代价是 server 必须为每个会话维护这份内存，并在会话异常退出时靠 abort handler 撤销 `runningBackups` 计数；若只在正常 stop 路径递减，客户端中途断开就会让进程永久处于备份中状态。
 
 ## 源码落点
 

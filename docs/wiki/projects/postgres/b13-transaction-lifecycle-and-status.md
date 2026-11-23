@@ -42,7 +42,7 @@ refs:
 
 **中断与错误路径显式分两段清理，而不试图把 abort 压成一个函数返回。** `AbortTransaction` 先进入 `TRANS_ABORT` 并清理必须立即释放的锁/等待状态，`CleanupTransaction` 再清空内存、snapshot、resource owner 并将状态复位；显式事务块在两者之间还可能留在 `TBLOCK_ABORT`，只允许后续 `ROLLBACK` 脱离。放弃的是简单线性流程，换来错误发生时仍保留客户端协议状态，避免把一个失败语句误当成整个会话已回到 idle。真实 caller 是 `AbortCurrentTransactionInternal`：普通语句块错误立即 Abort+Cleanup，而显式 `BEGIN` 内错误只 Abort 并保持 `TBLOCK_ABORT` 等待 rollback。
 
-**`TransactionIdDidAbort` 只认显式 abort 标记，不推断 crash abort。** `transam.c` 的注释明言：崩溃导致的隐式 abort 常在 CLOG 仍显示 in-progress；`TransactionIdDidAbort` 不会因此返回 true。放弃的是单次函数调用给出所有终局的强语义，代价是 caller 往往需要先做 `TransactionIdIsInProgress` / `TransactionIdDidCommit` 组合判定；替代方案是把每个 crash 遗留 XID 都同步补写为 aborted，恢复阶段将承担额外全量清理与持久化成本。
+**`TransactionIdDidAbort` 的判定不止一条路径，且对 crash 遗留 XID 不做推断。** 源码事实：`TRANSACTION_STATUS_ABORTED` 直接返回 true；`TRANSACTION_STATUS_SUB_COMMITTED` 会走 `SubTransGetParent` 递归查父事务，且在递归前先判 XID 是否早于 `TransactionXmin` —— 若早于则假定父事务随崩溃遗弃了子事务登记，直接返回 true；`SubTransGetParent` 取不到有效父 XID 时先 elog WARNING 再返回 true。只有 crash 后仍为 `IN_PROGRESS` 的状态返回 false（源码注释明言这类 XID 实际上已被回滚，但不因此判为 abort）。放弃的是「单次调用给出所有终局」的强语义，代价是 caller 常需配合 `TransactionIdIsInProgress` / `TransactionIdDidCommit` 组合判定；替代方案是把每个 crash 遗留 XID 在恢复期同步补写为 aborted，恢复阶段将承担额外全量清理与持久化成本。
 
 ## 源码落点
 
@@ -52,7 +52,7 @@ refs:
 | `src/backend/access/transam/xact.c` | `CommitTransaction` | 提交的编排器：触发 pre-commit 工作，最终调用 `RecordTransactionCommit`，然后结束 ProcArray 状态并按依赖顺序释放资源 |
 | `src/backend/access/transam/xact.c` | `AbortTransaction` | 回滚的低层收尾器：解除等待与轻量锁、撤销子系统动作、写 abort 记录并结束 ProcArray 状态，但将最终本地清理留给 `CleanupTransaction` |
 | `src/backend/access/transam/transam.c` | `TransactionIdDidCommit` | 读 CLOG 状态并把 committed/sub-committed 状态转成事务结局查询；子事务可能经 `pg_subtrans` 递归追父 XID |
-| `src/backend/access/transam/transam.c` | `TransactionIdDidAbort` | 只判断明确记录的 abort 状态，sub-committed 路径同样沿父 XID 查；不把 crash 后仍为 in-progress 的字节推断成已标记 abort |
+| `src/backend/access/transam/transam.c` | `TransactionIdDidAbort` | 三条判定路径：显式 aborted 直接 true；sub-committed 递归查父 XID（XID 早于 `TransactionXmin` 或取不到父登记时也判 true）；crash 遗留 `IN_PROGRESS` 判 false |
 | `src/backend/access/transam/transam.c` | `TransactionIdCommitTree` | CLOG 状态写入的高层适配器，将父 XID 与子 XID 数组转交 `TransactionIdSetTreeStatus`；不负责事务块状态迁移 |
 
 ## 参考

@@ -32,7 +32,7 @@ refs:
 
 ## 关键取舍
 
-DSM 加 TOC 以显式分块和键值定位换取跨进程共享及可扩展的状态组合；代价是需要空间预估、序列化和严格生命周期管理。若直接复制 leader 地址空间，普通进程模型下指针、锁与资源所有权都不可移植；若把所有状态放入固定 C 结构，扩展新子系统就会造成结构耦合。不同调用方可以选择串行回退或关闭某种共享模式，但这属于调用方的策略，不是 `parallel.c` 的通用保证。
+**源码事实：**`InitializeParallelDSM` 在三种情况下把 `pcxt->nworkers` 直接置 0 而不是报错：当前进程无法处理中断（`INTERRUPTS_CAN_BE_PROCESSED()` 为假）、拿不到 per-session DSM segment handle（`session_dsm_handle == DSM_HANDLE_INVALID`）、以及 `dsm_create` 返回 NULL（已达 `max_dynamic_shared_memory` 上限）。第三种情况下它把 `private_memory` 分配在 `TopMemoryContext` 并用 `shm_toc_create` 在这块进程私有内存上建同一个 TOC，于是**整个并行上下文的 TOC 结构不变，只是没有 worker 可启动**。**源码事实：**`LaunchParallelWorkers` 的注释明确要求调用方必须能容忍实际启动数少于请求数（worker 注册失败或 slot 不足时不报错，只记 `nworkers_launched`）。**架构推论：**DSM 加 TOC 以显式分块和键值定位换取跨进程共享与可扩展的状态组合，代价是空间预估、序列化与严格生命周期管理；若直接复制 leader 地址空间，普通进程模型下指针、锁与资源所有权都不可移植；若把所有状态塞进一个固定 C 结构，扩展新子系统就会造成结构耦合。这里选择「降级为 0 worker 但保留 TOC」而不是直接失败，是把「能否并行」降级成性能问题而非正确性问题；代价是上层必须自己判断`nworkers_launched == 0` 并继续按串行路径执行，否则会拿到一个没有 worker 的计划。
 
 ## 源码落点
 

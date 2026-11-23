@@ -16,13 +16,13 @@ refs:
 
 ## 一句话职责
 
-归档与基础备份共同构成「冷启动可恢复」的离线持久化手段：archiver 把写满的 WAL 段按顺序送到外部存储，base backup 把整个数据目录连同一致的起始 WAL 位置打包出去。
+WAL 归档、会话级备份模式接口与 `BASE_BACKUP` 物理复制是三个协作但独立的机制：archiver 尝试将已完成的 WAL 段交给配置的归档目标，备份模式接口管理起止点与备份状态，`BASE_BACKUP` 协议则传送数据目录快照及可选 WAL。
 
 ## 机制是什么
 
-两者解决的是同一个问题的两半。基础备份给出某一时刻的物理数据快照，并记录 `startpoint`/`starttli`；归档则保证从该起点往后的 WAL 段在被回收前已复制到他处。恢复时只要把基础备份解包、写入 `backup_label`，再按 `archive_command`/`archive_library` 取回后续 WAL 段即可重放。若没有归档，WAL 段会被 checkpoint 循环覆盖，备份只能恢复到还留在 `pg_wal` 里的位置。
+三者解决的是协作恢复链上的不同问题，不构成无条件保证。基础备份在备份模式下记录 `startpoint`/`starttli`，提供物理数据副本；`BASE_BACKUP` 可按请求选项附带 WAL（`INCLUDE_WAL`），否则不会把后续 WAL 一并打包。archiver 根据 `.ready` 状态和配置执行归档回调，失败会重试并在本轮放弃后再试，并不保证归档目标已持久保存全部所需 WAL。恢复所需的 WAL 连续性取决于归档配置、成功交付、外部保留策略及备份选项；没有归档或其他保留机制时，WAL 可能被回收覆盖。
 
-本页负责三件事：archiver 进程的 `.ready` 状态机与重试策略；`pg_backup_start`/`pg_backup_stop` 的会话级备份模式接口；`BASE_BACKUP` 协议下 `SendBaseBackup`/`perform_base_backup` 的打包与一致性保证。不负责 WAL 记录本身的写入与 flush（b01/b02），不负责恢复期如何取回并重放（b03 的 `RestoreArchivedFile`），也不负责流复制协议（i01）。这里只讲「如何把数据与 WAL 搬出去」，不讲「如何用它们恢复」。
+本页负责三个协作但不等同的机制：archiver 进程的 `.ready` 状态机与重试策略；`pg_backup_start`/`pg_backup_stop` 的会话级备份模式接口；`BASE_BACKUP` 协议下 `SendBaseBackup`/`perform_base_backup` 的传送与一致性处理。不负责 WAL 记录本身的写入与 flush（b01/b02），不负责恢复期如何取回并重放（b03 的 `RestoreArchivedFile`），也不负责流复制协议（i01）。只讨论各自的数据/WAL 传送与边界，不把三者概括为无条件归档或可恢复保证。
 
 ## 怎么实现的
 

@@ -8,9 +8,13 @@
 #
 # 路径说明（2026-11-23 实测）：
 #   `docs/wiki/` 根下还有 `wiki-schema.md`（契约文档，无 front-matter）、
-#   `p2-pilot-report.md`、`p3-full-report.md`（报告，不是机制页）。
-#   这三个文件被 wiki_lint 判 FAIL，所以门禁范围必须是 `docs/wiki/projects`
+#   `p2-pilot-report.md`、`p3-full-report.md`、`p3-review-*.md`（报告，不是机制页）。
+#   这些文件会被 wiki_lint 判 FAIL，所以门禁范围必须是 `docs/wiki/projects`
 #   —— 即「页面树」，不含契约文档与报告。
+#
+# 本 workflow 位于 projects 仓的 .github/workflows/，所有 run 的工作目录天然就是
+# **projects 仓根**，因此**不要写 `working-directory: projects`** —— 那是顶层
+# 聚合仓 `C:\code` 的相对写法，在子仓里会变成不存在的 `projects/projects`。
 #
 # refs 门禁需要该库的本地源码。CI 里没有 `.cache/repos/postgres`，
 # 所以先由 repo_cache.ensure_repo 浅克隆，再跑 refs。
@@ -53,7 +57,6 @@ jobs:
 
       # 门禁脚本只用标准库，不装任何第三方包。
       - name: 结构门禁
-        working-directory: projects
         run: python scripts/wiki/wiki_lint.py docs/wiki/projects --quiet
 
   # ============ manifest 门禁 ============
@@ -73,7 +76,6 @@ jobs:
           python-version: "3.12"
 
       - name: manifest 门禁
-        working-directory: projects
         run: python scripts/wiki/wiki_manifest_lint.py docs/wiki/projects/postgres/_manifest.yml
 
   # ============ 引用门禁（需要 postgres 浅克隆）============
@@ -97,11 +99,10 @@ jobs:
       - name: 缓存 postgres 浅克隆
         uses: actions/cache@v4
         with:
-          path: projects/.cache/repos/postgres
+          path: .cache/repos/postgres
           key: wiki-repo-postgres-9b5d4e3331753b3399e84965093109cac8f364bf
 
       - name: 浅克隆 postgres
-        working-directory: projects
         run: |
           python -c "import sys; sys.path.insert(0, 'scripts/wiki'); from repo_cache import ensure_repo; print(ensure_repo('https://github.com/postgres/postgres', 'postgres'))" || {
             echo "::error::浅克隆 postgres 失败（refs 门禁需要该库源码）"
@@ -109,7 +110,6 @@ jobs:
           }
 
       - name: 引用门禁
-        working-directory: projects
         run: |
           python scripts/wiki/wiki_refs.py \
             --repo-root .cache/repos/postgres \
@@ -133,5 +133,4 @@ jobs:
           python-version: "3.12"
 
       - name: 工装单元测试
-        working-directory: projects
         run: python -m unittest discover -s scripts/wiki -p "test_*.py" -v
