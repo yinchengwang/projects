@@ -1,0 +1,452 @@
+---
+project: redis
+schema_version: 1
+pages:
+  - feature: ae-event-loop
+    feature_group: A-事件循环与命令分派
+    title: 事件循环与文件事件分派
+    page_file: a01-ae-event-loop.md
+    refs:
+      - path: src/ae.c
+        symbols: [aeMain, aeProcessEvents, aeWait]
+      - path: src/ae.c
+        symbols: [aeCreateFileEvent, aeDeleteFileEvent]
+  - feature: beforesleep-cycle
+    feature_group: A-事件循环与命令分派
+    title: 每轮事件循环前后的固定动作
+    page_file: a02-beforesleep-cycle.md
+    refs:
+      - path: src/server.c
+        symbols: [beforeSleep, afterSleep]
+  - feature: servercron-timers
+    feature_group: A-事件循环与命令分派
+    title: serverCron 定时任务
+    page_file: a03-servercron-timers.md
+    refs:
+      - path: src/server.c
+        symbols: [serverCron]
+  - feature: command-table
+    feature_group: A-事件循环与命令分派
+    title: 命令表与命令元数据
+    page_file: a04-command-table.md
+    refs:
+      - path: src/server.c
+        symbols: [populateCommandTable, lookupCommand, commandCheckArity]
+  - feature: command-dispatch-call
+    feature_group: A-事件循环与命令分派
+    title: 命令执行与传播登记
+    page_file: a05-command-dispatch-call.md
+    refs:
+      - path: src/server.c
+        symbols: [call, processCommand, alsoPropagate]
+  - feature: client-input-parsing
+    feature_group: A-事件循环与命令分派
+    title: 客户端输入解析
+    page_file: a06-client-input-parsing.md
+    refs:
+      - path: src/networking.c
+        symbols: [readQueryFromClient, processInputBuffer]
+      - path: src/networking.c
+        symbols: [processMultibulkBuffer, processInlineBuffer]
+  - feature: client-lifecycle
+    feature_group: B-网络与客户端
+    title: 客户端对象生命周期
+    page_file: b01-client-lifecycle.md
+    refs:
+      - path: src/networking.c
+        symbols: [createClient, freeClient, resetClient]
+  - feature: reply-buffers
+    feature_group: B-网络与客户端
+    title: 回复编码与缓冲
+    page_file: b02-reply-buffers.md
+    refs:
+      - path: src/networking.c
+        symbols: [addReplyBulkCBuffer, addReplyErrorObject, addReplyLongLong, addReplyArrayLen, addReplyNull]
+  - feature: output-buffer-limits
+    feature_group: B-网络与客户端
+    title: 输出缓冲上限与超限处置
+    page_file: b03-output-buffer-limits.md
+    refs:
+      - path: src/networking.c
+        symbols: [checkClientOutputBufferLimits, closeClientOnOutputBufferLimitReached]
+  - feature: socket-writeback
+    feature_group: B-网络与客户端
+    title: 回复写回 socket
+    page_file: b04-socket-writeback.md
+    refs:
+      - path: src/networking.c
+        symbols: [writeToClient, sendReplyToClient]
+  - feature: clients-cron-maintenance
+    feature_group: B-网络与客户端
+    title: 客户端定期维护
+    page_file: b05-clients-cron-maintenance.md
+    refs:
+      - path: src/server.c
+        symbols: [clientsCron, clientsCronResizeQueryBuffer, clientsCronResizeOutputBuffer]
+  - feature: client-eviction
+    feature_group: B-网络与客户端
+    title: 客户端按内存驱逐
+    page_file: b06-client-eviction.md
+    refs:
+      - path: src/server.c
+        symbols: [clientEvictionAllowed]
+  - feature: keyspace-read-lookup
+    feature_group: C-键空间与过期
+    title: 键的读侧查找
+    page_file: c01-keyspace-read-lookup.md
+    refs:
+      - path: src/db.c
+        symbols: [lookupKeyRead, lookupKeyReadWithFlags, lookupKeyWrite]
+  - feature: keyspace-write-delete
+    feature_group: C-键空间与过期
+    title: 键的写侧插入与删除
+    page_file: c02-keyspace-write-delete.md
+    refs:
+      - path: src/db.c
+        symbols: [dbAdd, setKey, dbDelete, dbSyncDelete]
+  - feature: expiration-metadata
+    feature_group: C-键空间与过期
+    title: 过期时间元数据
+    page_file: c03-expiration-metadata.md
+    refs:
+      - path: src/db.c
+        symbols: [setExpire]
+  - feature: active-expire
+    feature_group: C-键空间与过期
+    title: 主动过期扫描
+    page_file: c04-active-expire.md
+    refs:
+      - path: src/expire.c
+        symbols: [activeExpireCycle]
+  - feature: memory-eviction
+    feature_group: C-键空间与过期
+    title: 内存淘汰
+    page_file: c05-memory-eviction.md
+    refs:
+      - path: src/evict.c
+        symbols: [performEvictions]
+  - feature: keyspace-scan
+    feature_group: C-键空间与过期
+    title: 键空间游标扫描
+    page_file: c06-keyspace-scan.md
+    refs:
+      - path: src/db.c
+        symbols: [scanGenericCommand]
+  - feature: robj-refcount
+    feature_group: D-对象与编码
+    title: 对象与引用计数
+    page_file: d01-robj-refcount.md
+    refs:
+      - path: src/object.c
+        symbols: [incrRefCount, decrRefCount, createStringObject]
+  - feature: object-encoding-transition
+    feature_group: D-对象与编码
+    title: 对象编码与转换
+    page_file: d02-object-encoding-transition.md
+    refs:
+      - path: src/object.c
+        symbols: [tryObjectEncoding, getDecodedObject, dupStringObject]
+  - feature: object-free-by-type
+    feature_group: D-对象与编码
+    title: 按类型释放值对象
+    page_file: d03-object-free-by-type.md
+    refs:
+      - path: src/object.c
+        symbols: [freeStringObject, freeListObject, freeHashObject, freeSetObject, freeZsetObject]
+  - feature: intset-encoding
+    feature_group: D-对象与编码
+    title: 整数集合编码
+    page_file: d04-intset-encoding.md
+    refs:
+      - path: src/intset.c
+        symbols: [intsetAdd, intsetSearch]
+      - path: src/t_set.c
+        symbols: [setTypeMaybeConvert]
+  - feature: ziplist-legacy-encoding
+    feature_group: D-对象与编码
+    title: 旧版紧凑列表编码
+    page_file: d05-ziplist-legacy-encoding.md
+    refs:
+      - path: src/ziplist.c
+        symbols: [ziplistIndex]
+  - feature: dict-hashtable
+    feature_group: E-底层数据结构
+    title: 哈希表与渐进 rehash
+    page_file: e01-dict-hashtable.md
+    refs:
+      - path: src/dict.c
+        symbols: [dictAdd, dictFind, dictRehash]
+  - feature: dict-scan-iteration
+    feature_group: E-底层数据结构
+    title: 哈希表的反向遍历与安全游标
+    page_file: e02-dict-scan-iteration.md
+    refs:
+      - path: src/dict.c
+        symbols: [dictScan, dictGetIterator, dictNext, dictUnlink]
+  - feature: sds-string
+    feature_group: E-底层数据结构
+    title: 动态字符串
+    page_file: e03-sds-string.md
+    refs:
+      - path: src/sds.c
+        symbols: [sdsnewlen, sdsMakeRoomFor, sdsRemoveFreeSpace, sdscatlen]
+  - feature: rax-radix-tree
+    feature_group: E-底层数据结构
+    title: 压缩前缀树
+    page_file: e04-rax-radix-tree.md
+    refs:
+      - path: src/rax.c
+        symbols: [raxInsert, raxFind, raxSeek, raxNext, raxNew]
+  - feature: listpack
+    feature_group: E-底层数据结构
+    title: 紧凑列表 listpack
+    page_file: e05-listpack.md
+    refs:
+      - path: src/listpack.c
+        symbols: [lpAppend, lpGet, lpGetValue, lpDelete, lpReplace, lpInsert]
+  - feature: quicklist
+    feature_group: E-底层数据结构
+    title: quicklist 分片链表
+    page_file: e06-quicklist.md
+    refs:
+      - path: src/quicklist.c
+        symbols: [quicklistPush, quicklistCreate, quicklistDelIndex, quicklistReplaceAtIndex]
+  - feature: memory-allocator
+    feature_group: E-底层数据结构
+    title: 内存分配与用量统计
+    page_file: e07-memory-allocator.md
+    refs:
+      - path: src/zmalloc.c
+        symbols: [zmalloc, zfree, zrealloc, zmalloc_used_memory, zmalloc_get_rss, zmalloc_get_private_dirty, zstrdup]
+  - feature: string-type
+    feature_group: F-数据类型
+    title: 字符串类型
+    page_file: f01-string-type.md
+    refs:
+      - path: src/t_string.c
+        symbols: [setGenericCommand, getGenericCommand, getrangeCommand]
+  - feature: list-type
+    feature_group: F-数据类型
+    title: 列表类型
+    page_file: f02-list-type.md
+    refs:
+      - path: src/t_list.c
+        symbols: [listTypePush, listTypePop, pushGenericCommand, listTypeTryConversion]
+  - feature: hash-type
+    feature_group: F-数据类型
+    title: 哈希类型
+    page_file: f03-hash-type.md
+    refs:
+      - path: src/t_hash.c
+        symbols: [hashTypeSet, hashTypeGetValue, hashTypeDelete, hashTypeLength, hashTypeTryConversion, hashTypeInitIterator]
+  - feature: set-type
+    feature_group: F-数据类型
+    title: 集合类型
+    page_file: f04-set-type.md
+    refs:
+      - path: src/t_set.c
+        symbols: [setTypeAdd, setTypeRemove, setTypeIsMember, setTypeSize, setTypeMaybeConvert, setTypeRandomElement]
+  - feature: zset-type
+    feature_group: F-数据类型
+    title: 有序集合类型
+    page_file: f05-zset-type.md
+    refs:
+      - path: src/t_zset.c
+        symbols: [zsetAdd, zsetScore, zsetDel, zsetRank, zsetTypeMaybeConvert]
+  - feature: skiplist
+    feature_group: F-数据类型
+    title: 跳表
+    page_file: f06-skiplist.md
+    refs:
+      - path: src/t_zset.c
+        symbols: [zslInsert]
+  - feature: stream-type
+    feature_group: F-数据类型
+    title: 流类型
+    page_file: f07-stream-type.md
+    refs:
+      - path: src/t_stream.c
+        symbols: [streamAppendItem, streamIteratorStart, streamIteratorGetID, streamTrim, streamDeleteItem, streamCompareID]
+  - feature: stream-consumer-groups
+    feature_group: F-数据类型
+    title: 流的消费者组
+    page_file: f08-stream-consumer-groups.md
+    refs:
+      - path: src/t_stream.c
+        symbols: [streamCreateCG]
+  - feature: rdb-snapshot
+    feature_group: G-持久化
+    title: RDB 快照格式与落盘
+    page_file: g01-rdb-snapshot.md
+    refs:
+      - path: src/rdb.c
+        symbols: [rdbSave, rdbLoad]
+  - feature: aof-append
+    feature_group: G-持久化
+    title: AOF 追加日志
+    page_file: g02-aof-append.md
+    refs:
+      - path: src/aof.c
+        symbols: [aofWrite, feedAppendOnlyFile]
+  - feature: replication-feed
+    feature_group: H-复制与高可用
+    title: 主从复制传播
+    page_file: h01-replication-feed.md
+    refs:
+      - path: src/replication.c
+        symbols: [replicationFeedSlaves, replicaofCommand]
+  - feature: cluster-bus
+    feature_group: H-复制与高可用
+    title: 集群总线与槽位
+    page_file: h02-cluster-bus.md
+    refs:
+      - path: src/cluster_legacy.c
+        symbols: [clusterInit, clusterProcessPacket]
+  - feature: sentinel
+    feature_group: H-复制与高可用
+    title: 哨兵监控与故障转移
+    page_file: h03-sentinel.md
+    refs:
+      - path: src/sentinel.c
+        symbols: [sentinelHandleDictOfRedisInstances, sentinelSendPeriodicCommands, sentinelCheckSubjectivelyDown]
+  - feature: blocked-clients
+    feature_group: I-阻塞与通知
+    title: 阻塞客户端与唤醒
+    page_file: i01-blocked-clients.md
+    refs:
+      - path: src/blocked.c
+        symbols: [blockForKeys, handleClientsBlockedOnKeys, unblockClient]
+  - feature: keyspace-notification
+    feature_group: I-阻塞与通知
+    title: 键空间通知
+    page_file: i02-keyspace-notification.md
+    refs:
+      - path: src/notify.c
+        symbols: [notifyKeyspaceEvent]
+  - feature: multi-exec
+    feature_group: J-事务脚本与模块
+    title: 事务与命令排队
+    page_file: j01-multi-exec.md
+    refs:
+      - path: src/multi.c
+        symbols: [multiCommand, execCommand]
+  - feature: pubsub
+    feature_group: J-事务脚本与模块
+    title: 发布订阅通道
+    page_file: j02-pubsub.md
+    refs:
+      - path: src/pubsub.c
+        symbols: [pubsubPublishMessage]
+  - feature: scripting-eval
+    feature_group: J-事务脚本与模块
+    title: 脚本执行
+    page_file: j03-scripting-eval.md
+    refs:
+      - path: src/eval.c
+        symbols: [evalGenericCommand, scriptCommand]
+  - feature: functions-library
+    feature_group: J-事务脚本与模块
+    title: 函数库
+    page_file: j04-functions-library.md
+    refs:
+      - path: src/functions.c
+        symbols: [functionsCreateWithLibraryCtx, fcallCommand, functionLoadCommand]
+  - feature: module-api
+    feature_group: J-事务脚本与模块
+    title: 模块系统
+    page_file: j05-module-api.md
+    refs:
+      - path: src/module.c
+        symbols: [moduleInitModulesSystem]
+  - feature: config-runtime
+    feature_group: J-事务脚本与模块
+    title: 运行时配置与配置重写
+    page_file: j06-config-runtime.md
+    refs:
+      - path: src/config.c
+        symbols: [configSetCommand, rewriteConfig]
+  - feature: acl
+    feature_group: K-安全
+    title: 访问控制列表
+    page_file: k01-acl.md
+    refs:
+      - path: src/acl.c
+        symbols: [ACLInit, ACLSetUser, ACLCheckAllUserCommandPerm, ACLAuthenticateUser]
+  - feature: tls-transport
+    feature_group: K-安全
+    title: TLS 传输
+    page_file: k02-tls-transport.md
+    refs:
+      - path: src/tls.c
+        symbols: [tlsInit]
+  - feature: bitops
+    feature_group: L-特殊数据类型
+    title: 位与位域操作
+    page_file: l01-bitops.md
+    refs:
+      - path: src/bitops.c
+        symbols: [setbitCommand, getbitCommand, bitcountCommand, bitposCommand, bitfieldGeneric]
+  - feature: hyperloglog
+    feature_group: L-特殊数据类型
+    title: 基数估算
+    page_file: l02-hyperloglog.md
+    refs:
+      - path: src/hyperloglog.c
+        symbols: [hllAdd, hllCount, pfaddCommand]
+  - feature: geo-index
+    feature_group: L-特殊数据类型
+    title: 地理索引与半径查询
+    page_file: l03-geo-index.md
+    refs:
+      - path: src/geo.c
+        symbols: [geoaddCommand, georadiusGeneric]
+  - feature: sort-command
+    feature_group: L-特殊数据类型
+    title: SORT 命令
+    page_file: l04-sort-command.md
+    refs:
+      - path: src/sort.c
+        symbols: [sortCommand, sortCommandGeneric]
+  - feature: active-defrag
+    feature_group: L-特殊数据类型
+    title: 主动碎片整理
+    page_file: l05-active-defrag.md
+    refs:
+      - path: src/defrag.c
+        symbols: [activeDefragCycle]
+  - feature: server-bootstrap
+    feature_group: M-启动运维与后台任务
+    title: 服务端启动装配
+    page_file: m01-server-bootstrap.md
+    refs:
+      - path: src/server.c
+        symbols: [initServerConfig, initServer]
+  - feature: bio-background-jobs
+    feature_group: M-启动运维与后台任务
+    title: 后台 I/O 线程任务
+    page_file: m02-bio-background-jobs.md
+    refs:
+      - path: src/bio.c
+        symbols: [bioSubmitJob]
+  - feature: shutdown-sequence
+    feature_group: M-启动运维与后台任务
+    title: 关停流程
+    page_file: m03-shutdown-sequence.md
+    refs:
+      - path: src/server.c
+        symbols: [prepareForShutdown]
+  - feature: slowlog
+    feature_group: M-启动运维与后台任务
+    title: 慢查询日志
+    page_file: m04-slowlog.md
+    refs:
+      - path: src/slowlog.c
+        symbols: [slowlogPushEntryIfNeeded]
+  - feature: latency-monitor
+    feature_group: M-启动运维与后台任务
+    title: 延迟监控与命令重写
+    page_file: m05-latency-monitor.md
+    refs:
+      - path: src/networking.c
+        symbols: [rewriteClientCommandVector]
+---

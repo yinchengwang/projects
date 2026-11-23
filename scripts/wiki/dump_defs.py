@@ -23,9 +23,12 @@ import re
 #   static void foo(           redis
 #   SQLITE_API int foo(        sqlite
 #   int                         （换行参数表）foo(
+#   void Class::method(        C++ 成员函数（mysql）
 _DEFINITION = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_]*\s+)*?"          # 返回类型（可含指针）
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",   # 函数名
+    r"^(?:[A-Za-z_][A-Za-z0-9_:<>, \t\*&]*\s+)*?"      # 返回类型（可含指针/引用/模板）
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*"                 # 函数名
+    r"(?:::[A-Za-z_~][A-Za-z0-9_]*)*)"                 # 可带 Class:: 限定
+    r"\s*\(",                                          # 左括号
     re.MULTILINE)
 
 _KEYWORDS = {

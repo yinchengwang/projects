@@ -1,0 +1,524 @@
+---
+project: mysql-server
+schema_version: 1
+pages:
+  - feature: connection-dispatch
+    feature_group: A-连接与命令分派
+    title: 连接与命令分派
+    page_file: a01-connection-dispatch.md
+    refs:
+      - path: sql/sql_parse.cc
+        symbols: [do_command, dispatch_command]
+  - feature: thd-lifecycle
+    feature_group: A-连接与命令分派
+    title: THD 线程对象生命周期
+    page_file: a02-thd-lifecycle.md
+    refs:
+      - path: sql/sql_class.cc
+        symbols: [THD::sql_parser]
+      - path: sql/mysqld_thd_manager.cc
+        symbols: [THD]
+  - feature: prepare-execute-protocol
+    feature_group: A-连接与命令分派
+    title: 预处理语句的两阶段执行
+    page_file: a03-prepare-execute-protocol.md
+    refs:
+      - path: sql/sql_prepare.cc
+        symbols: [Prepared_statement]
+  - feature: change-db
+    feature_group: A-连接与命令分派
+    title: USE 与当前库切换
+    page_file: a04-change-db.md
+    refs:
+      - path: sql/sql_db.cc
+        symbols: [mysql_change_db]
+  - feature: error-diagnostics
+    feature_group: A-连接与命令分派
+    title: 错误码与诊断信息
+    page_file: a05-error-diagnostics.md
+    refs:
+      - path: sql/derror.cc
+        symbols: [init_errmessage, mysql_errno_to_builtin]
+  - feature: lexer
+    feature_group: B-解析与词法
+    title: 词法分析器
+    page_file: b01-lexer.md
+    refs:
+      - path: sql/sql_lex.cc
+        symbols: [lex_start]
+  - feature: grammar-parser
+    feature_group: B-解析与词法
+    title: 语法分析器
+    page_file: b02-grammar-parser.md
+    refs:
+      - path: sql/sql_yacc.yy
+        symbols: [MYSQLparse, yyparse]
+  - feature: parse-tree-items
+    feature_group: B-解析与词法
+    title: 解析树到 Item 的转换
+    page_file: b03-parse-tree-items.md
+    refs:
+      - path: sql/parse_tree_items.cc
+        symbols: [PTI_comp_op::itemize, PTI_user_variable::itemize]
+  - feature: name-resolution
+    feature_group: B-解析与词法
+    title: 名称解析与列绑定
+    page_file: b04-name-resolution.md
+    refs:
+      - path: sql/sql_resolver.cc
+        symbols: [Query_block::resolve_placeholder_tables]
+      - path: sql/item.cc
+        symbols: [Item_field::fix_outer_field]
+  - feature: parse-tree-hints
+    feature_group: B-解析与词法
+    title: 优化器提示的解析
+    page_file: b05-parse-tree-hints.md
+    refs:
+      - path: sql/parse_tree_hints.cc
+        symbols: [PT_hint_list::contextualize, find_qb_hints]
+      - path: sql/opt_hints.cc
+        symbols: [Opt_hints::check_unresolved, Opt_hints_qb::subquery_strategy]
+  - feature: join-optimize
+    feature_group: C-优化器与执行计划
+    title: JOIN 的整体优化
+    page_file: c01-join-optimize.md
+    refs:
+      - path: sql/sql_optimizer.cc
+        symbols: [JOIN::optimize]
+  - feature: join-plan
+    feature_group: C-优化器与执行计划
+    title: 连接计划与表访问顺序
+    page_file: c02-join-plan.md
+    refs:
+      - path: sql/sql_optimizer.cc
+        symbols: [JOIN::make_join_plan]
+  - feature: index-selection
+    feature_group: C-优化器与执行计划
+    title: 索引与范围访问选择
+    page_file: c03-index-selection.md
+    refs:
+      - path: sql/sql_optimizer.cc
+        symbols: [JOIN::estimate_rowcount, get_best_group_min_max]
+  - feature: subquery-transform
+    feature_group: C-优化器与执行计划
+    title: 子查询改写
+    page_file: c04-subquery-transform.md
+    refs:
+      - path: sql/item_subselect.cc
+        symbols: [Item_subselect::exec, Item_in_subselect::transform]
+  - feature: derived-table-materialization
+    feature_group: C-优化器与执行计划
+    title: 派生表与 CTE 的物化
+    page_file: c05-derived-table-materialization.md
+    refs:
+      - path: sql/sql_derived.cc
+        symbols: [setup_materialized_derived, materialize_derived]
+  - feature: partition-pruning
+    feature_group: C-优化器与执行计划
+    title: 分区裁剪
+    page_file: c06-partition-pruning.md
+    refs:
+      - path: sql/partition_info.cc
+        symbols: [partition_info::can_prune_insert]
+      - path: sql/sql_optimizer.cc
+        symbols: [partition_pruning]
+  - feature: query-execution
+    feature_group: D-执行器与行迭代
+    title: 查询执行入口
+    page_file: d01-query-execution.md
+    refs:
+      - path: sql/sql_select.cc
+        symbols: [Sql_cmd_dml::execute, Sql_cmd_dml::execute_inner]
+      - path: sql/sql_union.cc
+        symbols: [Query_expression::execute]
+  - feature: row-iterator
+    feature_group: D-执行器与行迭代
+    title: 行迭代器框架
+    page_file: d02-row-iterator.md
+    refs:
+      - path: sql/iterators/row_iterator.h
+        symbols: [RowIterator]
+      - path: sql/iterators/composite_iterators.h
+        symbols: [AppendIterator]
+  - feature: table-and-index-scan
+    feature_group: D-执行器与行迭代
+    title: 全表扫描与索引扫描
+    page_file: d03-table-and-index-scan.md
+    refs:
+      - path: sql/iterators/basic_row_iterators.cc
+        symbols: [TableScanIterator::Init, TableScanIterator::Read]
+      - path: sql/range_optimizer/index_range_scan.cc
+        symbols: [IndexRangeScanIterator::Init, IndexRangeScanIterator::Read]
+  - feature: filter-and-aggregate
+    feature_group: D-执行器与行迭代
+    title: 过滤与聚合迭代
+    page_file: d04-filter-and-aggregate.md
+    refs:
+      - path: sql/iterators/composite_iterators.cc
+        symbols: [FilterIterator, AggregateIterator]
+      - path: sql/iterators/window_iterators.cc
+        symbols: [WindowIterator]
+  - feature: join-execution
+    feature_group: D-执行器与行迭代
+    title: 连接执行
+    page_file: d05-join-execution.md
+    refs:
+      - path: sql/sql_select.cc
+        symbols: [JOIN::exec]
+      - path: sql/iterators/composite_iterators.h
+        symbols: [NestedLoopIterator]
+      - path: sql/sql_executor.cc
+        symbols: [JOIN::create_access_paths, attach_access_paths_for_having_and_limit]
+  - feature: temp-table
+    feature_group: E-临时表与排序
+    title: 内部临时表
+    page_file: e01-temp-table.md
+    refs:
+      - path: sql/sql_tmp_table.cc
+        symbols: [create_tmp_table, create_tmp_table_from_fields]
+  - feature: filesort
+    feature_group: E-临时表与排序
+    title: 文件排序
+    page_file: e02-filesort.md
+    refs:
+      - path: sql/filesort.cc
+        symbols: [Filesort::make_sortorder, Filesort::clear_addon_fields]
+      - path: sql/filesort_utils.cc
+        symbols: [Filesort_buffer::allocate_block]
+  - feature: limit-clause
+    feature_group: E-临时表与排序
+    title: LIMIT 与行数截断
+    page_file: e03-limit-clause.md
+    refs:
+      - path: sql/sql_resolver.cc
+        symbols: [Query_block::resolve_limits]
+      - path: sql/iterators/composite_iterators.h
+        symbols: [LimitOffsetIterator]
+      - path: sql/sql_lex.cc
+        symbols: [Query_block::get_limit, Query_block::print_limit]
+  - feature: join-buffer
+    feature_group: E-临时表与排序
+    title: 连接缓冲
+    page_file: e04-join-buffer.md
+    refs:
+      - path: sql/sql_optimizer.cc
+        symbols: [setup_join_buffering, set_join_buffer_properties]
+  - feature: handler-api
+    feature_group: F-存储引擎接口
+    title: handler 存储引擎接口
+    page_file: f01-handler-api.md
+    refs:
+      - path: sql/handler.cc
+        symbols: [ha_open, handler::ha_open, handler::ha_write_row]
+  - feature: table-open-cache
+    feature_group: F-存储引擎接口
+    title: 表打开与表缓存
+    page_file: f02-table-open-cache.md
+    refs:
+      - path: sql/table_cache.cc
+        symbols: [Table_cache::init, Table_cache_manager::cached_tables]
+      - path: sql/sql_base.cc
+        symbols: [open_table_from_share]
+  - feature: metadata-lock
+    feature_group: F-存储引擎接口
+    title: 元数据锁
+    page_file: f03-metadata-lock.md
+    refs:
+      - path: sql/mdl.cc
+        symbols: [MDL_context::acquire_lock, MDL_context::release_lock]
+  - feature: dd-data-dictionary
+    feature_group: F-存储引擎接口
+    title: 数据字典
+    page_file: f04-dd-data-dictionary.md
+    refs:
+      - path: sql/dd/dd_table.cc
+        symbols: [fill_dd_columns_from_create_fields]
+      - path: sql/dd/dictionary.h
+        symbols: [is_dd_table_name, acquire_shared_table_mdl]
+  - feature: btr-cursor-search
+    feature_group: G-InnoDB 索引与页
+    title: B-tree 游标定位
+    page_file: g01-btr-cursor-search.md
+    refs:
+      - path: storage/innobase/btr/btr0cur.cc
+        symbols: [btr_cur_search_to_nth_level, btr_cur_search_to_nth_level_with_no_latch]
+  - feature: btr-insert-split
+    feature_group: G-InnoDB 索引与页
+    title: B-tree 插入与页分裂
+    page_file: g02-btr-insert-split.md
+    refs:
+      - path: storage/innobase/btr/btr0btr.cc
+        symbols: [btr_page_split_and_insert, btr_page_reorganize]
+  - feature: page-directory
+    feature_group: G-InnoDB 索引与页
+    title: 页目录与记录定位
+    page_file: g03-page-directory.md
+    refs:
+      - path: storage/innobase/page/page0cur.cc
+        symbols: [page_cur_search_with_match, page_cur_search_with_match_bytes]
+  - feature: compact-record
+    feature_group: G-InnoDB 索引与页
+    title: 紧凑记录格式
+    page_file: g04-compact-record.md
+    refs:
+      - path: storage/innobase/rem/rem0rec.cc
+        symbols: [rec_get_offsets, rec_convert_dtuple_to_rec_comp]
+  - feature: record-compare
+    feature_group: G-InnoDB 索引与页
+    title: 记录比较
+    page_file: g05-record-compare.md
+    refs:
+      - path: storage/innobase/rem/rem0cmp.cc
+        symbols: [cmp_dtuple_rec_with_match_low, cmp_dtuple_rec]
+  - feature: buf-page-get
+    feature_group: H-InnoDB 缓冲池
+    title: 缓冲池取页
+    page_file: h01-buf-page-get.md
+    refs:
+      - path: storage/innobase/buf/buf0buf.cc
+        symbols: [buf_page_get_gen, buf_pool_get]
+  - feature: buf-flush
+    feature_group: H-InnoDB 缓冲池
+    title: 脏页刷新
+    page_file: h02-buf-flush.md
+    refs:
+      - path: storage/innobase/buf/buf0flu.cc
+        symbols: [buf_flush_page_coordinator_thread, buf_flush_page_cleaner_thread]
+  - feature: buf-lru-eviction
+    feature_group: H-InnoDB 缓冲池
+    title: LRU 淘汰
+    page_file: h03-buf-lru-eviction.md
+    refs:
+      - path: storage/innobase/buf/buf0lru.cc
+        symbols: [buf_LRU_free_page, buf_LRU_stat_update]
+      - path: storage/innobase/buf/buf0buf.cc
+        symbols: [buf_pool_free]
+  - feature: buf-pool-instance
+    feature_group: H-InnoDB 缓冲池
+    title: 缓冲池多实例
+    page_file: h04-buf-pool-instance.md
+    refs:
+      - path: storage/innobase/buf/buf0buf.cc
+        symbols: [buf_pool_init, buf_pool_free_instance, buf_pool_invalidate_instance]
+  - feature: redo-log-write
+    feature_group: I-InnoDB 日志与恢复
+    title: redo 日志写入
+    page_file: i01-redo-log-write.md
+    refs:
+      - path: storage/innobase/log/log0write.cc
+        symbols: [log_write_up_to, log_write_buffer]
+  - feature: log-checkpoint
+    feature_group: I-InnoDB 日志与恢复
+    title: 检查点
+    page_file: i02-log-checkpoint.md
+    refs:
+      - path: storage/innobase/log/log0log.cc
+        symbols: [log_checkpoint]
+      - path: storage/innobase/log/log0write.cc
+        symbols: [log_write_up_to]
+  - feature: crash-recovery
+    feature_group: I-InnoDB 日志与恢复
+    title: 崩溃恢复
+    page_file: i03-crash-recovery.md
+    refs:
+      - path: storage/innobase/log/log0recv.cc
+        symbols: [recv_recovery_from_checkpoint_start, recv_recovery_from_checkpoint_finish, recv_init_crash_recovery]
+  - feature: file-io
+    feature_group: I-InnoDB 日志与恢复
+    title: 文件 I/O 封装
+    page_file: i04-file-io.md
+    refs:
+      - path: storage/innobase/fil/fil0fil.cc
+        symbols: [fil_io, fil_flush]
+  - feature: trx-lifecycle
+    feature_group: J-InnoDB 事务与锁
+    title: 事务对象生命周期
+    page_file: j01-trx-lifecycle.md
+    refs:
+      - path: storage/innobase/trx/trx0trx.cc
+        symbols: [trx_commit_for_mysql, trx_create_low]
+      - path: storage/innobase/trx/trx0sys.cc
+        symbols: [trx_sys_write_max_trx_id]
+  - feature: row-lock
+    feature_group: J-InnoDB 事务与锁
+    title: 行锁与锁等待
+    page_file: j02-row-lock.md
+    refs:
+      - path: storage/innobase/lock/lock0lock.cc
+        symbols: [lock_table, lock_clust_rec_read_check_and_lock, lock_rec_lock]
+  - feature: lock-latch
+    feature_group: J-InnoDB 事务与锁
+    title: 闩锁
+    page_file: j03-lock-latch.md
+    refs:
+      - path: storage/innobase/lock/lock0latches.cc
+        symbols: [Latches::Page_shards::get_shard, Latches::Table_shards::get_shard]
+  - feature: read-view
+    feature_group: J-InnoDB 事务与锁
+    title: 读视图
+    page_file: j04-read-view.md
+    refs:
+      - path: storage/innobase/trx/trx0sys.cc
+        symbols: [ReadView::check_trx_id_sanity, trx_sys_write_max_trx_id]
+  - feature: undo-log
+    feature_group: J-InnoDB 事务与锁
+    title: undo 日志
+    page_file: j05-undo-log.md
+    refs:
+      - path: storage/innobase/trx/trx0undo.cc
+        symbols: [trx_undo_page_init, trx_undo_seg_create, trx_undo_write_xid]
+  - feature: group-commit
+    feature_group: J-InnoDB 事务与锁
+    title: 组提交
+    page_file: j06-group-commit.md
+    refs:
+      - path: storage/innobase/log/log0write.cc
+        symbols: [log_flush_low, log_flusher]
+  - feature: row-insert
+    feature_group: K-InnoDB 行操作与可见性
+    title: 插入行
+    page_file: k01-row-insert.md
+    refs:
+      - path: storage/innobase/row/row0mysql.cc
+        symbols: [row_insert_for_mysql, row_ins_step]
+  - feature: row-update
+    feature_group: K-InnoDB 行操作与可见性
+    title: 更新行
+    page_file: k02-row-update.md
+    refs:
+      - path: storage/innobase/row/row0mysql.cc
+        symbols: [row_update_for_mysql, row_upd_step]
+  - feature: row-delete
+    feature_group: K-InnoDB 行操作与可见性
+    title: 删除行
+    page_file: k03-row-delete.md
+    refs:
+      - path: storage/innobase/row/row0mysql.cc
+        symbols: [row_delete_for_mysql_using_cursor, btr_cur_del_mark_set_clust_rec]
+  - feature: mvcc-visibility
+    feature_group: K-InnoDB 行操作与可见性
+    title: MVCC 可见性判定
+    page_file: k04-mvcc-visibility.md
+    refs:
+      - path: storage/innobase/row/row0sel.cc
+        symbols: [row_search_mvcc, row_sel_get_clust_rec]
+  - feature: binlog-event-write
+    feature_group: L-二进制日志
+    title: binlog 事件写入
+    page_file: l01-binlog-event-write.md
+    refs:
+      - path: sql/log_event.cc
+        symbols: [Log_event::write, Rows_log_event]
+      - path: sql/binlog.cc
+        symbols: [MYSQL_BIN_LOG::write, MYSQL_BIN_LOG::do_write_cache]
+  - feature: binlog-statement-vs-row
+    feature_group: L-二进制日志
+    title: 语句格式与行格式
+    page_file: l02-binlog-statement-vs-row.md
+    refs:
+      - path: sql/log_event.cc
+        symbols: [Rows_log_event::Rows_log_event, Query_log_event::Query_log_event]
+  - feature: binlog-cache-flush
+    feature_group: L-二进制日志
+    title: binlog 缓存与刷盘
+    page_file: l03-binlog-cache-flush.md
+    refs:
+      - path: sql/binlog.cc
+        symbols: [MYSQL_BIN_LOG::flush_cache_to_file, MYSQL_BIN_LOG::commit, MYSQL_BIN_LOG::finish_commit]
+  - feature: binlog-dump-source
+    feature_group: L-二进制日志
+    title: binlog 发送端
+    page_file: l04-binlog-dump-source.md
+    refs:
+      - path: sql/rpl_source.cc
+        symbols: [mysql_binlog_send, com_binlog_dump]
+  - feature: binlog-rotation
+    feature_group: L-二进制日志
+    title: binlog 轮转与清理
+    page_file: l05-binlog-rotation.md
+    refs:
+      - path: sql/binlog.cc
+        symbols: [MYSQL_BIN_LOG::rotate, MYSQL_BIN_LOG::purge_logs, MYSQL_BIN_LOG::add_log_to_index]
+  - feature: replica-io-thread
+    feature_group: M-复制与 GTID
+    title: 从库 IO 线程
+    page_file: m01-replica-io-thread.md
+    refs:
+      - path: sql/rpl_replica.cc
+        symbols: [exec_relay_log_event, apply_event_and_update_pos]
+  - feature: replica-applier
+    feature_group: M-复制与 GTID
+    title: 从库应用线程
+    page_file: m02-replica-applier.md
+    refs:
+      - path: sql/rpl_replica.cc
+        symbols: [start_slave, stop_slave]
+      - path: sql/rpl_channel_service_interface.cc
+        symbols: [start_slave]
+  - feature: gtid-set
+    feature_group: M-复制与 GTID
+    title: GTID 集合
+    page_file: m03-gtid-set.md
+    refs:
+      - path: sql/rpl_gtid_set.cc
+        symbols: [Gtid_set::add_gtid_set, Gtid_set::is_subset]
+  - feature: gtid-allocation
+    feature_group: M-复制与 GTID
+    title: GTID 分配与持久化
+    page_file: m04-gtid-allocation.md
+    refs:
+      - path: sql/rpl_gtid_persist.cc
+        symbols: [Gtid_table_persistor::save, Gtid_table_persistor::write_row]
+      - path: sql/rpl_gtid_mode.cc
+        symbols: [Gtid_mode::set, Gtid_mode::get]
+  - feature: replication-filter
+    feature_group: M-复制与 GTID
+    title: 复制过滤规则
+    page_file: m05-replication-filter.md
+    refs:
+      - path: sql/rpl_filter.cc
+        symbols: [Rpl_filter::tables_ok, Rpl_filter::reset]
+  - feature: write-set-tracking
+    feature_group: M-复制与 GTID
+    title: 写集跟踪
+    page_file: m06-write-set-tracking.md
+    refs:
+      - path: sql/rpl_trx_tracking.cc
+        symbols: [Writeset_trx_dependency_tracker::get_dependency, Transaction_dependency_tracker::step]
+  - feature: authentication
+    feature_group: N-权限与认证
+    title: 认证插件
+    page_file: n01-authentication.md
+    refs:
+      - path: sql/auth/sql_authentication.cc
+        symbols: [acl_authenticate]
+      - path: sql/sql_connect.cc
+        symbols: [acl_authenticate]
+  - feature: privilege-check
+    feature_group: N-权限与认证
+    title: 权限判定
+    page_file: n02-privilege-check.md
+    refs:
+      - path: sql/auth/sql_authorization.cc
+        symbols: [check_access]
+      - path: sql/auth/sql_security_ctx.cc
+        symbols: [Security_context::check_access]
+  - feature: role-model
+    feature_group: N-权限与认证
+    title: 角色模型
+    page_file: n03-role-model.md
+    refs:
+      - path: sql/auth/roles.cc
+        symbols: [Role_activation::activate, Role_activation::activate_role_all]
+      - path: sql/auth/sql_authorization.cc
+        symbols: [mysql_grant_role, mysql_revoke_role]
+  - feature: perfschema
+    feature_group: N-权限与认证
+    title: 性能监控
+    page_file: n04-perfschema.md
+    refs:
+      - path: storage/perfschema/pfs.cc
+        symbols: [pfs]
+      - path: storage/perfschema/pfs_instr_class.cc
+        symbols: [PFS_instr_class]
+---
