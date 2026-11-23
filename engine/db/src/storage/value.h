@@ -217,15 +217,64 @@ bool val_json_renderer_is(JsonRenderFn fn);
 JsonRenderFn val_json_render(void);
 
 /*
- * JSON 文本编码器注册（SQL T_TEXT → T_JSON 写入使用）。
+ * ==================== JSON 文本编码器注册 ====================
  *
- * storage 值层不依赖 json_parse / doc 模态；只通过这两个入口调用注册的编码器。
- * 输入是带显式长度的 UTF-8 JSON 文本；out 缓冲输出 JSONB 字节。
+ * 用途：SQL 层把 `T_TEXT` 的 JSON 文本转成 `T_JSON` 的 JSONB 字节。
+ *
+ * 【为什么是分配式】
+ * "编码后多大算合规"是**文档模态**的知识（JSON_INLINE_MAX = 2048，
+ * 见 modalities/doc/json_ovf.h）。若让调用方给固定缓冲，
+ * 2048 这个数字就被写死在 query 层 —— 违反 A7 审计（查询层不得认识
+ * 具体模态的表示细节）。
+ *
+ * 契约：
+ *   - 实现自己分配 *bytes_out（调用方用 val_json_free 释放）
+ *   - *len_out = 编码后的字节数
+ *   - 超过模态上限 ⇒ 返回 E_NOSPACE，并且**不留下**已分配的缓冲
+ *   - 文本非法 ⇒ 返回具体错误码，同样不留缓冲
+ *
+ * 【和渲染器同一条纪律】
+ * 值层提供机制、模态提供实现，两者通过一个很窄的契约相连。
+ * 渲染器管"JSONB → 文本"，编码器管"文本 → JSONB"，两条路对称。
  */
-int  val_set_json_encoder(int (*fn)(const char *text, u32 text_len,
-                                     u8 *out, u32 cap, u32 *out_len));
-int  val_json_encode(const char *text, u32 text_len,
-                     u8 *out, u32 cap, u32 *out_len);
+typedef int (*JsonEncodeFn)(const char *text, u32 text_len,
+                            u8 **bytes_out, u32 *len_out);
+
+/* 注册编码器（重复注册返回 E_INVAL —— 覆盖是静默换行为） */
+int  val_set_json_encoder(JsonEncodeFn fn);
+
+/*
+ * 把 T_TEXT 值（内联或外部）编码成 T_JSON 值。
+ *
+ * 入参 text 必须是 T_TEXT 且非 NULL。外部值先物化（长 SQL 字面量就是外部值）。
+ *
+ * 出参 value：
+ *   - 长度 <= VAL_INLINE_MAX ⇒ 内联在 value->s[]
+ *   - 更长 ⇒ external = true，ext_ctx 指向编码器分配的缓冲
+ *     （**调用方必须用 val_json_free 释放**）
+ *
+ * 未注册编码器 ⇒ E_NOTSUP；文本非法或超过模态上限 ⇒ 编码器的错误码原样透出。
+ */
+int  val_json_from_text(const DbValue *text, DbValue *value);
+
+/*
+ * 释放 val_json_from_text 产出的外部缓冲。
+ * 非外部值时是空操作（可重复调用）。
+ */
+void val_json_free(DbValue *value);
+
+/*
+ * 渲染成新分配的 C 字符串（调用方 free）。
+ *
+ * 【为什么不能只靠 val_to_str】
+ * val_to_str 有 cap 上限（REPL / 日志等"短输出"场景用它）。
+ * 结果集投影必须给完整文本 —— 512 字节的栈缓冲会截断长文档，
+ * 用户看到的是一个语法不完整的 JSON，比报错更难查。
+ *
+ * 实现口径：先问渲染器要长度，再按该长度分配并写内容
+ * （jsonb_render 的两趟调用协议）。
+ */
+int  val_to_json_alloc(const DbValue *v, char **out, u32 *len);
 
 /*
  * 物化：把值的内容读进新分配的缓冲。

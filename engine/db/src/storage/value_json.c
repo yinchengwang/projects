@@ -32,6 +32,9 @@
 
 #include "storage/value.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 /*
  * 【为什么是进程级静态而不是实例级】
  * 渲染器是**纯代码目录**，不持有任何状态 —— 它只是"JSONB 字节 →
@@ -73,25 +76,169 @@ JsonRenderFn val_json_render(void)
     return g_json_renderer;
 }
 
-/* T_JSON 写入编码器：SQL 文本 JSON → JSONB 字节（由 doc 模态注册） */
-static int (*g_json_encoder)(const char *text, u32 text_len,
-                             u8 *out, u32 cap, u32 *out_len) = NULL;
+/*
+ * ==================== JSON 文本编码器 ====================
+ *
+ * 与渲染器对称的一条路：渲染器管"JSONB → JSON 文本"，
+ * 编码器管"JSON 文本 → JSONB 字节"。
+ *
+ * 【为什么编码器是分配式的】
+ * "编码后多大算合规"是**文档模态**的知识（JSON_INLINE_MAX），
+ * 值层不认识这个数字 —— 认识了就等于 L1 依赖 L4 的表示细节。
+ * 所以由实现自己 malloc、自己判上限、自己报错。
+ */
 
-int val_set_json_encoder(int (*fn)(const char *text, u32 text_len,
-                                   u8 *out, u32 cap, u32 *out_len))
+/* T_JSON 写入编码器：SQL 文本 JSON → JSONB 字节（由 doc 模态注册） */
+static JsonEncodeFn g_json_encoder = NULL;
+
+int val_set_json_encoder(JsonEncodeFn fn)
 {
     if (!fn)
         return E_INVAL;
+    /*
+     * 已注册就不再接受第二个实现 —— 覆盖是静默换行为，
+     * 调用方完全看不出来（同 val_set_json_renderer 的取舍）。
+     */
     if (g_json_encoder)
         return E_INVAL;
     g_json_encoder = fn;
     return OK;
 }
 
-int val_json_encode(const char *text, u32 text_len,
-                    u8 *out, u32 cap, u32 *out_len)
+int val_json_from_text(const DbValue *text, DbValue *value)
 {
+    u8 *text_bytes = NULL;
+    u32 text_len = 0;
+    u8 *out_bytes = NULL;
+    u32 out_len = 0;
+    int rc;
+
+    if (!text || !value)
+        return E_INVAL;
+    if (text->is_null || text->type != T_TEXT)
+        return E_INVAL;
     if (!g_json_encoder)
         return E_NOTSUP;
-    return g_json_encoder(text, text_len, out, cap, out_len);
+
+    /*
+     * 长 SQL 字面量是外部值（len 不设），必须先物化成连续字节。
+     *
+     * 【为什么要拆成两个缓冲】
+     * 不能把 text_bytes 直接当作编码器的输出缓冲 ——
+     * 输入与输出别名时，编码器写输出的那一刻输入已经被覆盖了。
+     */
+    if (text->external) {
+        rc = val_detoast(text, &text_bytes, &text_len);
+        if (rc != OK)
+            return rc;
+    } else {
+        text_bytes = (u8 *)text->s;
+        text_len = text->len;
+    }
+
+    rc = g_json_encoder((const char *)text_bytes, text_len,
+                        &out_bytes, &out_len);
+    if (text->external)
+        free(text_bytes);
+    if (rc != OK)
+        return rc;
+
+    val_null(value);
+    value->is_null = false;
+    if (out_len <= VAL_INLINE_MAX) {
+        /* 小文档：内联在 s[] 里（不付堆代价） */
+        value->type = T_JSON;
+        value->len = (u16)out_len;
+        if (out_len)
+            memcpy(value->s, out_bytes, out_len);
+        free(out_bytes);
+    } else {
+        /* 中型文档：外部值，缓冲归调用方（val_json_free 释放） */
+        val_external_json(value, (u64)(uintptr_t)out_bytes, out_len,
+                          val_mem_detoast, out_bytes);
+    }
+    return OK;
+}
+
+void val_json_free(DbValue *value)
+{
+    if (!value)
+        return;
+    if (value->type == T_JSON && value->external && value->ext_ctx) {
+        free(value->ext_ctx);
+        value->ext_ctx = NULL;
+        value->ext_fn = NULL;
+        value->external = false;
+    }
+}
+
+/*
+ * 渲染成新分配的 C 字符串。
+ *
+ * 【为什么要单独一个函数】
+ * val_to_str() 有 cap 上限（REPL / 日志等"短输出"场景用它）。
+ * 结果集投影必须给完整文本 —— 512 字节的栈缓冲会截断长文档，
+ * 用户看到的是一个语法不完整的 JSON，比报错更难查。
+ *
+ * 两次调用渲染器：先问长度，再写内容（jsonb_render 的两趟协议）。
+ */
+int val_to_json_alloc(const DbValue *v, char **out, u32 *len)
+{
+    u8 *bytes = NULL;
+    u32 blen = 0;
+    u32 need = 0;
+    u32 got = 0;
+    int rc;
+    JsonRenderFn render = val_json_render();
+
+    if (!v || !out)
+        return E_INVAL;
+    *out = NULL;
+    if (len)
+        *len = 0;
+    if (!render)
+        return E_NOTSUP;
+
+    if (v->external) {
+        rc = val_detoast(v, &bytes, &blen);
+        if (rc != OK)
+            return rc;
+    } else {
+        bytes = (u8 *)v->s;
+        blen = v->len;
+    }
+
+    /* 第一趟：问需要多少字节 */
+    rc = render(bytes, blen, NULL, 0, &need);
+    if (rc != E_NOSPACE && rc != OK) {
+        if (v->external)
+            free(bytes);
+        return rc;
+    }
+    if (need == 0) {
+        if (v->external)
+            free(bytes);
+        return E_CORRUPT;
+    }
+
+    char *buf = malloc((size_t)need + 1u);
+    if (!buf) {
+        if (v->external)
+            free(bytes);
+        return E_IO;
+    }
+
+    /* 第二趟：按长度写内容 */
+    rc = render(bytes, blen, buf, need, &got);
+    if (v->external)
+        free(bytes);
+    if (rc != OK || got != need) {
+        free(buf);
+        return rc == OK ? E_CORRUPT : rc;
+    }
+    buf[got] = '\0';
+    *out = buf;
+    if (len)
+        *len = got;
+    return OK;
 }
