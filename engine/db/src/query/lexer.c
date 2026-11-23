@@ -146,31 +146,78 @@ int lex_next(Lexer *lx, Token *tok)
 
     /* 字符串：'...'，'' 表示一个单引号 */
     if (c == '\'') {
-        int n = 0;
-        lx->pos++;
+        /*
+         * 字符串字面量**可以很长**（JSON 文档、长路径）。
+         *
+         * 【为什么不能沿用 TK_TEXT_MAX 截断】
+         * 截断是静默改值：`INSERT ... VALUES ('{...300 字节...}')`
+         * 会只存前 255 字节，用户拿到的是一个语法不完整的 JSON ——
+         * 而且中间没有任何报错。这里改成"装得下就放 text[]，
+         * 装不下就单独分配 str_value"，长度始终是精确值。
+         */
+        int start = lx->pos + 1;
+        int p = start;
+        size_t need = 0;
+
+        /* 第一趟：量出解码后的长度（'' 计一个字节） */
         for (;;) {
-            char ch = s[lx->pos];
+            char ch = s[p];
             if (ch == '\0') {
                 tok->type = TK_EOF;
                 snprintf(tok->text, sizeof(tok->text), "字符串没有闭合");
                 tok->len = (u16)strlen(tok->text);
-                return E_INVAL;          /* 字符串没闭合 */
+                return E_INVAL;
             }
             if (ch == '\'') {
-                if (s[lx->pos + 1] == '\'') {   /* 转义 */
-                    if (n < TK_TEXT_MAX - 1)
-                        tok->text[n++] = '\'';
+                if (s[p + 1] == '\'') {
+                    need++;
+                    p += 2;
+                    continue;
+                }
+                p++;
+                break;
+            }
+            need++;
+            p++;
+        }
+
+        if (need > (size_t)TK_STR_MAX) {
+            tok->type = TK_EOF;
+            snprintf(tok->text, sizeof(tok->text),
+                     "字符串常量太长（上限 %d 字节）", TK_STR_MAX);
+            tok->len = (u16)strlen(tok->text);
+            return E_INVAL;
+        }
+
+        char *dst;
+        if (need < (size_t)TK_TEXT_MAX) {
+            dst = tok->text;
+        } else {
+            dst = malloc(need + 1u);
+            if (!dst)
+                return E_IO;
+            tok->str_value = dst;
+        }
+
+        /* 第二趟：真正拷贝（转义按 '' → ' 解） */
+        size_t n = 0;
+        lx->pos = start;
+        for (;;) {
+            char ch = s[lx->pos];
+            if (ch == '\'') {
+                if (s[lx->pos + 1] == '\'') {
+                    dst[n++] = '\'';
                     lx->pos += 2;
                     continue;
                 }
                 lx->pos++;
                 break;
             }
-            if (n < TK_TEXT_MAX - 1)
-                tok->text[n++] = ch;
+            dst[n++] = ch;
             lx->pos++;
         }
-        tok->text[n] = '\0';
+        dst[n] = '\0';
+
         tok->len = (u16)n;
         tok->type = TK_STR;
         return OK;

@@ -5,6 +5,7 @@
 #include "common/types.h"
 
 #define TK_TEXT_MAX 256
+#define TK_STR_MAX  8192
 
 typedef enum {
     TK_EOF = 0,
@@ -18,15 +19,14 @@ typedef struct {
     TokType type;
     char    text[TK_TEXT_MAX];
     u16     len;
+    char   *str_value;       /* TK_STR 长字面量独立存储；由词法器分配，解析器接管 */
+    u64     unum;                /* 整数常量幅值（无符号） */
     /*
-     * 整数字面量的**幅值**（无符号）。
-     *
      * 【为什么用 u64 而不是 i64】
      * 范围检查要放在解析器里做（因为负号是语法的一部分：
      * -9223372036854775808 = -(2^63)，幅值本身超出 i64 上限）。
      * 词法器只负责"这串数字有多大"，能不能表示由解析器判断 ✓
      */
-    u64     unum;
     /*
      * 实数字面量（v1.1）。
      *
