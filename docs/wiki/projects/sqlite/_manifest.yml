@@ -1,0 +1,635 @@
+---
+project: sqlite
+schema_version: 1
+pages:
+  - feature: db-connection-open
+    feature_group: A-连接与生命周期
+    title: 数据库连接与打开
+    page_file: a01-db-connection-open.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_open_v2, sqlite3ParseUri]
+  - feature: db-close
+    feature_group: A-连接与生命周期
+    title: 连接关闭与僵尸连接
+    page_file: a02-db-close.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_close, sqlite3_close_v2, sqlite3LeaveMutexAndCloseZombie]
+  - feature: global-initialization
+    feature_group: A-连接与生命周期
+    title: 全局初始化与关闭
+    page_file: a03-global-initialization.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_initialize, sqlite3_shutdown]
+  - feature: schema-cookie
+    feature_group: A-连接与生命周期
+    title: 模式版本与缓存失效
+    page_file: a04-schema-cookie.md
+    refs:
+      - path: src/build.c
+        symbols: [sqlite3ChangeCookie]
+  - feature: busy-handler
+    feature_group: A-连接与生命周期
+    title: 锁冲突忙等待回调
+    page_file: a05-busy-handler.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_busy_handler, sqlite3_busy_timeout, sqlite3InvokeBusyHandler]
+  - feature: connection-status-metrics
+    feature_group: A-连接与生命周期
+    title: 连接与全局状态统计
+    page_file: a06-connection-status-metrics.md
+    refs:
+      - path: src/status.c
+        symbols: [sqlite3_status, sqlite3_db_status, sqlite3StatusUp, sqlite3StatusDown]
+  - feature: tokenizer
+    feature_group: B-解析与名称解析
+    title: 词法分析器
+    page_file: b01-tokenizer.md
+    refs:
+      - path: src/tokenize.c
+        symbols: [sqlite3GetToken, sqlite3RunParser, sqlite3IsIdChar]
+  - feature: sql-parser
+    feature_group: B-解析与名称解析
+    title: 语法分析与语法树
+    page_file: b02-sql-parser.md
+    refs:
+      - path: src/parse.y
+        symbols: [sqlite3Parser]
+  - feature: name-resolution
+    feature_group: B-解析与名称解析
+    title: 名称解析
+    page_file: b03-name-resolution.md
+    refs:
+      - path: src/resolve.c
+        symbols: [sqlite3ResolveExprNames, sqlite3ResolveSelectNames, sqlite3ResolveOrderGroupBy]
+  - feature: prepare-statement
+    feature_group: B-解析与名称解析
+    title: 语句编译入口
+    page_file: b04-prepare-statement.md
+    refs:
+      - path: src/prepare.c
+        symbols: [sqlite3_prepare_v2, sqlite3Prepare]
+  - feature: schema-load
+    feature_group: B-解析与名称解析
+    title: 模式表加载
+    page_file: b05-schema-load.md
+    refs:
+      - path: src/prepare.c
+        symbols: [sqlite3InitOne, sqlite3ReadSchema]
+  - feature: reprepare
+    feature_group: B-解析与名称解析
+    title: 模式变更后的语句重编译
+    page_file: b06-reprepare.md
+    refs:
+      - path: src/prepare.c
+        symbols: [sqlite3Reprepare]
+  - feature: expression-tree
+    feature_group: C-表达式与代码生成
+    title: 表达式树
+    page_file: c01-expression-tree.md
+    refs:
+      - path: src/expr.c
+        symbols: [sqlite3ExprCodeTarget, sqlite3ExprAffinity, sqlite3ExprAnalyzeAggregates]
+  - feature: expression-codegen
+    feature_group: C-表达式与代码生成
+    title: 表达式代码生成
+    page_file: c02-expression-codegen.md
+    refs:
+      - path: src/expr.c
+        symbols: [sqlite3ExprCode, sqlite3ExprCodeGetColumn, sqlite3ExprCodeTarget]
+  - feature: type-affinity
+    feature_group: C-表达式与代码生成
+    title: 类型亲和性
+    page_file: c03-type-affinity.md
+    refs:
+      - path: src/expr.c
+        symbols: [sqlite3AffinityType, sqlite3CompareAffinity]
+      - path: src/build.c
+        symbols: [sqlite3AffinityType]
+  - feature: subquery-and-in
+    feature_group: C-表达式与代码生成
+    title: 子查询与 IN 条件
+    page_file: c04-subquery-and-in.md
+    refs:
+      - path: src/expr.c
+        symbols: [sqlite3CodeSubselect, sqlite3ExprCodeIN, sqlite3CodeRhsOfIN]
+  - feature: common-table-expression
+    feature_group: C-表达式与代码生成
+    title: 公用表表达式
+    page_file: c05-common-table-expression.md
+    refs:
+      - path: src/build.c
+        symbols: [sqlite3CteDelete]
+      - path: src/select.c
+        symbols: [sqlite3ExpandSubquery, sqlite3SelectExpand]
+  - feature: virtual-machine-program-build
+    feature_group: C-表达式与代码生成
+    title: 虚拟机构建
+    page_file: c06-virtual-machine-program-build.md
+    refs:
+      - path: src/vdbeaux.c
+        symbols: [sqlite3VdbeAddOp0, sqlite3VdbeAddOp1, sqlite3VdbeAddOp2, sqlite3VdbeAddOp3, sqlite3VdbeAddOp4]
+      - path: src/build.c
+        symbols: [sqlite3VdbeMakeReady]
+  - feature: select-compile
+    feature_group: D-查询规划与执行
+    title: SELECT 编译
+    page_file: d01-select-compile.md
+    refs:
+      - path: src/select.c
+        symbols: [sqlite3SelectPrep, sqlite3Select, sqlite3GenerateColumnNames]
+  - feature: where-loop-optimization
+    feature_group: D-查询规划与执行
+    title: WHERE 条件的索引选择
+    page_file: d02-where-loop-optimization.md
+    refs:
+      - path: src/where.c
+        symbols: [sqlite3WhereBegin, sqlite3WhereEnd, sqlite3WhereCodeOneLoopStart, sqlite3ShowWhereLoop]
+  - feature: join-planning
+    feature_group: D-查询规划与执行
+    title: 连接顺序与外连接
+    page_file: d03-join-planning.md
+    refs:
+      - path: src/select.c
+        symbols: [sqlite3ProcessJoin, sqlite3JoinType, sqlite3SelectExpand]
+  - feature: materialization-and-co-routines
+    feature_group: D-查询规划与执行
+    title: 物化与协程式子查询
+    page_file: d04-materialization-and-co-routines.md
+    refs:
+      - path: src/delete.c
+        symbols: [sqlite3MaterializeView]
+      - path: src/select.c
+        symbols: [sqlite3SelectDestInit]
+      - path: src/delete.c
+        symbols: [sqlite3MaterializeView]
+  - feature: group-by-and-aggregate
+    feature_group: D-查询规划与执行
+    title: 分组与聚合
+    page_file: d05-group-by-and-aggregate.md
+    refs:
+      - path: src/expr.c
+        symbols: [sqlite3ExprAnalyzeAggList, sqlite3ExprAnalyzeAggregates]
+  - feature: order-by-limit
+    feature_group: D-查询规划与执行
+    title: 排序与 LIMIT
+    page_file: d06-order-by-limit.md
+    refs:
+      - path: src/select.c
+        symbols: [sqlite3CopySortOrder, sqlite3ConvertedOrderByColl]
+  - feature: delete-compile
+    feature_group: D-查询规划与执行
+    title: DELETE 编译
+    page_file: d07-delete-compile.md
+    refs:
+      - path: src/delete.c
+        symbols: [sqlite3DeleteFrom, sqlite3GenerateRowDelete, sqlite3CodeChangeCount]
+  - feature: update-compile
+    feature_group: D-查询规划与执行
+    title: UPDATE 编译
+    page_file: d08-update-compile.md
+    refs:
+      - path: src/update.c
+        symbols: [sqlite3Update, sqlite3ColumnDefault]
+  - feature: insert-compile
+    feature_group: D-查询规划与执行
+    title: INSERT 编译
+    page_file: d09-insert-compile.md
+    refs:
+      - path: src/insert.c
+        symbols: [sqlite3Insert, sqlite3CompleteInsertion, sqlite3AutoincrementBegin]
+  - feature: vdbe-execution
+    feature_group: E-虚拟机与语句执行
+    title: 虚拟机主循环
+    page_file: e01-vdbe-execution.md
+    refs:
+      - path: src/vdbe.c
+        symbols: [sqlite3VdbeExec]
+  - feature: step-and-finalize
+    feature_group: E-虚拟机与语句执行
+    title: step 与 finalize
+    page_file: e02-step-and-finalize.md
+    refs:
+      - path: src/vdbeapi.c
+        symbols: [sqlite3_step, sqlite3_finalize, sqlite3_reset]
+  - feature: column-access
+    feature_group: E-虚拟机与语句执行
+    title: 结果列读取
+    page_file: e03-column-access.md
+    refs:
+      - path: src/vdbeapi.c
+        symbols: [sqlite3_column_int, sqlite3_column_text, sqlite3_column_type, sqlite3_column_blob]
+  - feature: parameter-binding
+    feature_group: E-虚拟机与语句执行
+    title: 参数绑定
+    page_file: e04-parameter-binding.md
+    refs:
+      - path: src/vdbeapi.c
+        symbols: [sqlite3_bind_int64, sqlite3_bind_text, sqlite3_bind_blob, sqlite3_bind_parameter_index, sqlite3_bind_parameter_count]
+  - feature: transaction-begin-in-vdbe
+    feature_group: E-虚拟机与语句执行
+    title: 虚拟机内的事务与保存点
+    page_file: e05-transaction-begin-in-vdbe.md
+    refs:
+      - path: src/build.c
+        symbols: [sqlite3BeginTransaction, sqlite3BeginWriteOperation]
+  - feature: btree-open-and-cursor
+    feature_group: F-Btree 存储引擎
+    title: B-tree 打开与游标
+    page_file: f01-btree-open-and-cursor.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeOpen, sqlite3BtreeCursor, sqlite3BtreeCloseCursor, sqlite3BtreeCursorZero]
+  - feature: btree-cell-access
+    feature_group: F-Btree 存储引擎
+    title: B-tree 单元与记录访问
+    page_file: f02-btree-cell-access.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreePayload, sqlite3BtreePayloadChecked, sqlite3BtreePayloadSize, accessPayload]
+  - feature: btree-insert
+    feature_group: F-Btree 存储引擎
+    title: B-tree 插入与单元搬移
+    page_file: f03-btree-insert.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeInsert, balance_nonroot, sqlite3BtreeClearTable]
+  - feature: btree-delete-and-rebalance
+    feature_group: F-Btree 存储引擎
+    title: B-tree 删除与页合并
+    page_file: f04-btree-delete-and-rebalance.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeDelete, sqlite3BtreeClearCursor, sqlite3BtreeDropTable]
+  - feature: btree-cursor-movement
+    feature_group: F-Btree 存储引擎
+    title: B-tree 游标移动
+    page_file: f05-btree-cursor-movement.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeNext, sqlite3BtreePrevious, sqlite3BtreeFirst, sqlite3BtreeLast, sqlite3BtreeEof]
+  - feature: btree-search
+    feature_group: F-Btree 存储引擎
+    title: B-tree 键定位
+    page_file: f06-btree-search.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeIndexMoveto, sqlite3BtreeTableMoveto, btreeMoveto]
+  - feature: btree-transaction
+    feature_group: F-Btree 存储引擎
+    title: B-tree 事务与提交
+    page_file: f07-btree-transaction.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeBeginTrans, sqlite3BtreeCommit, sqlite3BtreeCommitPhaseOne, sqlite3BtreeCommitPhaseTwo, sqlite3BtreeRollback]
+  - feature: btree-integrity-check
+    feature_group: F-Btree 存储引擎
+    title: B-tree 完整性检查
+    page_file: f08-btree-integrity-check.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeIntegrityCheck, sqlite3BtreeCount, sqlite3BtreeRowCountEst]
+  - feature: autovacuum
+    feature_group: F-Btree 存储引擎
+    title: 自动整理空闲页
+    page_file: f09-autovacuum.md
+    refs:
+      - path: src/btree.c
+        symbols: [sqlite3BtreeIncrVacuum, sqlite3BtreeGetAutoVacuum, sqlite3BtreeSetAutoVacuum]
+  - feature: sqlite-record-format
+    feature_group: F-Btree 存储引擎
+    title: 记录格式与 varint
+    page_file: f10-sqlite-record-format.md
+    refs:
+      - path: src/insert.c
+        symbols: [sqlite3SetMakeRecordP5]
+  - feature: sorter
+    feature_group: F-Btree 存储引擎
+    title: 外排排序器
+    page_file: f11-sorter.md
+    refs:
+      - path: src/vdbesort.c
+        symbols: [sqlite3VdbeSorterInit, sqlite3VdbeSorterWrite, sqlite3VdbeSorterNext, sqlite3VdbeSorterClose]
+  - feature: pager-open-and-roles
+    feature_group: G-分页器与回滚日志
+    title: 分页器与回滚模式切换
+    page_file: g01-pager-open-and-roles.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerOpen, sqlite3PagerGetJournalMode, sqlite3PagerSetJournalMode, sqlite3PagerOkToChangeJournalMode]
+  - feature: pager-page-cache-ref
+    feature_group: G-分页器与回滚日志
+    title: 分页器的页获取与引用计数
+    page_file: g02-pager-page-cache-ref.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerGet, sqlite3PagerRef, sqlite3PagerUnref, sqlite3PagerPageRefcount, sqlite3PagerPagecount]
+  - feature: rollback-journal
+    feature_group: G-分页器与回滚日志
+    title: 回滚日志写入
+    page_file: g03-rollback-journal.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerWrite, sqlite3PagerRollback, sqlite3PagerCommitPhaseOne, sqlite3PagerCommitPhaseTwo]
+  - feature: page-writeback
+    feature_group: G-分页器与回滚日志
+    title: 脏页写回与同步
+    page_file: g04-page-writeback.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerFlush, sqlite3PagerSync, sqlite3PagerTruncateImage, sqlite3PagerUnrefNotNull]
+  - feature: master-journal
+    feature_group: G-分页器与回滚日志
+    title: 主日志与多文件原子提交
+    page_file: g05-master-journal.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerSetFlags, sqlite3PagerSavepoint, sqlite3PagerOpenSavepoint]
+  - feature: pager-locking
+    feature_group: G-分页器与回滚日志
+    title: 分页器文件锁
+    page_file: g06-pager-locking.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerSharedLock, sqlite3PagerExclusiveLock, sqlite3PagerLockingMode]
+  - feature: sqlite-file-header
+    feature_group: G-分页器与回滚日志
+    title: 数据库文件头
+    page_file: g07-sqlite-file-header.md
+    refs:
+      - path: src/pager.c
+        symbols: [sqlite3PagerReadFileheader, sqlite3PagerSetPagesize]
+  - feature: wal-mode-and-index
+    feature_group: H-WAL 预写日志
+    title: WAL 模式与索引文件
+    page_file: h01-wal-mode-and-index.md
+    refs:
+      - path: src/wal.c
+        symbols: [sqlite3WalOpen, sqlite3WalClose, sqlite3WalBeginReadTransaction]
+      - path: src/pager.c
+        symbols: [sqlite3PagerOpenWal, sqlite3PagerCloseWal]
+  - feature: wal-frames
+    feature_group: H-WAL 预写日志
+    title: WAL 帧写入与读取
+    page_file: h02-wal-frames.md
+    refs:
+      - path: src/wal.c
+        symbols: [sqlite3WalFrames, sqlite3WalReadFrame, sqlite3WalFindFrame, sqlite3WalFramesize]
+  - feature: wal-checkpoint
+    feature_group: H-WAL 预写日志
+    title: WAL 检查点
+    page_file: h03-wal-checkpoint.md
+    refs:
+      - path: src/wal.c
+        symbols: [sqlite3WalCheckpoint, sqlite3WalExclusiveMode, sqlite3WalWriteLock]
+      - path: src/pager.c
+        symbols: [sqlite3PagerCheckpoint]
+  - feature: wal-readers
+    feature_group: H-WAL 预写日志
+    title: WAL 读事务与快照
+    page_file: h04-wal-readers.md
+    refs:
+      - path: src/wal.c
+        symbols: [sqlite3WalBeginReadTransaction, sqlite3WalEndReadTransaction, sqlite3WalSnapshotGet, sqlite3WalSnapshotOpen]
+  - feature: wal-savepoint-undo
+    feature_group: H-WAL 预写日志
+    title: WAL 保存点与撤销
+    page_file: h05-wal-savepoint-undo.md
+    refs:
+      - path: src/wal.c
+        symbols: [sqlite3WalSavepoint, sqlite3WalSavepointUndo, sqlite3WalUndo]
+  - feature: pcache-lookup
+    feature_group: I-页缓存
+    title: 页缓存查找与固定
+    page_file: i01-pcache-lookup.md
+    refs:
+      - path: src/pcache.c
+        symbols: [sqlite3PcacheFetch, sqlite3PcacheRef, sqlite3PcacheRelease, sqlite3PcachePageRefcount]
+  - feature: pcache-dirty-tracking
+    feature_group: I-页缓存
+    title: 脏页跟踪
+    page_file: i02-pcache-dirty-tracking.md
+    refs:
+      - path: src/pcache.c
+        symbols: [sqlite3PcacheMakeDirty, sqlite3PcacheMakeClean, sqlite3PCacheIsDirty, sqlite3PCachePercentDirty]
+  - feature: pcache-eviction
+    feature_group: I-页缓存
+    title: 页缓存淘汰与截断
+    page_file: i03-pcache-eviction.md
+    refs:
+      - path: src/pcache.c
+        symbols: [sqlite3PcacheShrink, sqlite3PcacheTruncate, sqlite3PcacheIterateDirty, sqlite3PcacheDrop]
+  - feature: pcache-size-policy
+    feature_group: I-页缓存
+    title: 页缓存容量策略
+    page_file: i04-pcache-size-policy.md
+    refs:
+      - path: src/pcache.c
+        symbols: [sqlite3PcacheSetCachesize, sqlite3PcacheGetCachesize, sqlite3PcacheSetSpillsize, sqlite3PcacheSize]
+  - feature: vfs-abstraction
+    feature_group: J-OS 接口与内存管理
+    title: VFS 抽象层
+    page_file: j01-vfs-abstraction.md
+    refs:
+      - path: src/os.c
+        symbols: [sqlite3OsOpen, sqlite3OsRead, sqlite3OsWrite, sqlite3OsLock, sqlite3OsUnlock, sqlite3_vfs_register]
+  - feature: os-file-control
+    feature_group: J-OS 接口与内存管理
+    title: 文件控制与共享内存
+    page_file: j02-os-file-control.md
+    refs:
+      - path: src/os.c
+        symbols: [sqlite3OsFileControl, sqlite3OsFileSize, sqlite3OsShmMap, sqlite3OsShmLock, sqlite3OsFetch, sqlite3OsUnfetch]
+  - feature: memory-allocator
+    feature_group: J-OS 接口与内存管理
+    title: 内存分配器
+    page_file: j03-memory-allocator.md
+    refs:
+      - path: src/malloc.c
+        symbols: [sqlite3MallocInit, sqlite3MallocSize, sqlite3DbMallocSize, sqlite3HeapNearlyFull, sqlite3_soft_heap_limit64, sqlite3_hard_heap_limit64]
+  - feature: mem0-page-allocator
+    feature_group: J-OS 接口与内存管理
+    title: 小内存块分配器
+    page_file: j04-mem0-page-allocator.md
+    refs:
+      - path: src/mem0.c
+        symbols: [sqlite3MemInit, sqlite3MemFree, sqlite3MemSize, sqlite3MemRoundup, sqlite3MemShutdown]
+  - feature: string-formatter
+    feature_group: J-OS 接口与内存管理
+    title: 字符串格式化
+    page_file: j05-string-formatter.md
+    refs:
+      - path: src/printf.c
+        symbols: [sqlite3_str_vappendf, sqlite3_str_appendf, sqlite3_str_finish]
+  - feature: hash-table
+    feature_group: J-OS 接口与内存管理
+    title: 哈希表
+    page_file: j06-hash-table.md
+    refs:
+      - path: src/hash.c
+        symbols: [sqlite3HashInit, sqlite3HashClear, sqlite3HashInsert, sqlite3HashFind]
+  - feature: mutex-and-threading
+    feature_group: J-OS 接口与内存管理
+    title: 互斥与多线程
+    page_file: j07-mutex-and-threading.md
+    refs:
+      - path: src/mutex.c
+        symbols: [sqlite3_mutex_enter, sqlite3_mutex_leave, sqlite3_mutex_alloc, sqlite3MutexInit]
+  - feature: constraint-checks
+    feature_group: K-写入路径与约束
+    title: 约束检查
+    page_file: k01-constraint-checks.md
+    refs:
+      - path: src/insert.c
+        symbols: [sqlite3GenerateConstraintChecks]
+      - path: src/build.c
+        symbols: [sqlite3AddNotNull, sqlite3AddCheckConstraint, sqlite3AddPrimaryKey]
+  - feature: foreign-keys
+    feature_group: K-写入路径与约束
+    title: 外键约束
+    page_file: k02-foreign-keys.md
+    refs:
+      - path: src/fkey.c
+        symbols: [sqlite3FkCheck, sqlite3FkActions, sqlite3FkRequired, sqlite3FkLocateIndex]
+  - feature: triggers
+    feature_group: K-写入路径与约束
+    title: 触发器
+    page_file: k03-triggers.md
+    refs:
+      - path: src/trigger.c
+        symbols: [sqlite3CodeRowTrigger, sqlite3BeginTrigger, sqlite3FinishTrigger, sqlite3DeleteTrigger]
+  - feature: generated-columns
+    feature_group: K-写入路径与约束
+    title: 生成列
+    page_file: k04-generated-columns.md
+    refs:
+      - path: src/insert.c
+        symbols: [sqlite3ComputeGeneratedColumns]
+      - path: src/expr.c
+        symbols: [sqlite3ExprCodeGeneratedColumn]
+  - feature: index-maintenance
+    feature_group: K-写入路径与约束
+    title: 索引维护
+    page_file: k05-index-maintenance.md
+    refs:
+      - path: src/delete.c
+        symbols: [sqlite3GenerateIndexKey, sqlite3GenerateRowIndexDelete]
+      - path: src/build.c
+        symbols: [sqlite3CreateIndex]
+  - feature: builtin-functions
+    feature_group: L-内置函数与日期时间
+    title: 内置标量与聚合函数
+    page_file: l01-builtin-functions.md
+    refs:
+      - path: src/func.c
+        symbols: [sqlite3RegisterBuiltinFunctions, sqlite3RegisterPerConnectionBuiltinFunctions, sqlite3QuoteValue]
+  - feature: user-defined-functions
+    feature_group: L-内置函数与日期时间
+    title: 用户自定义函数
+    page_file: l02-user-defined-functions.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_create_function, sqlite3CreateFunc]
+      - path: src/vdbeapi.c
+        symbols: [sqlite3_result_text, sqlite3_result_int64, sqlite3_value_blob, sqlite3_user_data]
+  - feature: date-time-functions
+    feature_group: L-内置函数与日期时间
+    title: 日期时间函数
+    page_file: l03-date-time-functions.md
+    refs:
+      - path: src/date.c
+        symbols: [sqlite3RegisterDateTimeFunctions]
+  - feature: json-functions
+    feature_group: L-内置函数与日期时间
+    title: JSON 函数
+    page_file: l04-json-functions.md
+    refs:
+      - path: src/json.c
+        symbols: [sqlite3RegisterJsonFunctions]
+  - feature: like-and-glob-matching
+    feature_group: L-内置函数与日期时间
+    title: LIKE 与 GLOB 匹配
+    page_file: l05-like-and-glob-matching.md
+    refs:
+      - path: src/func.c
+        symbols: [sqlite3RegisterLikeFunctions, sqlite3_strlike, sqlite3_strglob, sqlite3IsLikeFunction]
+  - feature: transaction-state
+    feature_group: M-事务与并发控制
+    title: 事务状态机
+    page_file: m01-transaction-state.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_get_autocommit, sqlite3_txn_state, sqlite3RollbackAll]
+  - feature: savepoints
+    feature_group: M-事务与并发控制
+    title: 保存点
+    page_file: m02-savepoints.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3CloseSavepoints]
+      - path: src/btree.c
+        symbols: [sqlite3BtreeSavepoint]
+  - feature: snapshot-isolation
+    feature_group: M-事务与并发控制
+    title: 快照与并发读
+    page_file: m03-snapshot-isolation.md
+    refs:
+      - path: src/main.c
+        symbols: [sqlite3_snapshot_get]
+      - path: src/pager.c
+        symbols: [sqlite3PagerSnapshotGet, sqlite3PagerSnapshotCheck, sqlite3PagerSnapshotRecover]
+  - feature: unlock-notify
+    feature_group: M-事务与并发控制
+    title: 解锁通知
+    page_file: m04-unlock-notify.md
+    refs:
+      - path: src/notify.c
+        symbols: [sqlite3_unlock_notify, sqlite3ConnectionBlocked, sqlite3ConnectionUnlocked, sqlite3ConnectionClosed]
+  - feature: alter-table
+    feature_group: N-模式演进与附加能力
+    title: ALTER TABLE
+    page_file: n01-alter-table.md
+    refs:
+      - path: src/alter.c
+        symbols: [sqlite3AlterRenameTable, sqlite3AlterRenameColumn, sqlite3AlterBeginAddColumn, sqlite3AlterFinishAddColumn, sqlite3AlterDropColumn]
+  - feature: views
+    feature_group: N-模式演进与附加能力
+    title: 视图
+    page_file: n02-views.md
+    refs:
+      - path: src/build.c
+        symbols: [sqlite3CreateView]
+  - feature: attach-database
+    feature_group: N-模式演进与附加能力
+    title: 附加数据库
+    page_file: n03-attach-database.md
+    refs:
+      - path: src/attach.c
+        symbols: [sqlite3Attach, sqlite3Detach, sqlite3FixSrcList, sqlite3FixExpr]
+  - feature: load-extension
+    feature_group: N-模式演进与附加能力
+    title: 可加载扩展
+    page_file: n04-load-extension.md
+    refs:
+      - path: src/loadext.c
+        symbols: [sqlite3LoadExtension, sqlite3_auto_extension, sqlite3_enable_load_extension, sqlite3CloseExtensions]
+  - feature: pragma-processing
+    feature_group: N-模式演进与附加能力
+    title: PRAGMA 处理
+    page_file: n05-pragma-processing.md
+    refs:
+      - path: src/pragma.c
+        symbols: [sqlite3Pragma, sqlite3GetBoolean]
+  - feature: returning-clause
+    feature_group: N-模式演进与附加能力
+    title: RETURNING 子句
+    page_file: n06-returning-clause.md
+    refs:
+      - path: src/build.c
+        symbols: [sqlite3AddReturning]
+      - path: src/trigger.c
+        symbols: [sqlite3ProcessReturningSubqueries, sqlite3ReturningSubqueryCorrelated]
+---
