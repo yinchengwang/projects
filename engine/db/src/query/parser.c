@@ -35,6 +35,8 @@ void p_advance(Parser *p)
 {
     if (p->failed)
         return;
+    free(p->cur.str_value);
+    p->cur.str_value = NULL;
     if (lex_next(&p->lx, &p->cur) != OK) {
         /* 词法器带回了具体原因就用它（否则只说"词法错误"，没法查） */
         if (p->cur.text[0])
@@ -142,6 +144,7 @@ void free_expr(Expr *e)
     for (int i = 0; i < e->nargs; i++)
         free_expr(e->args[i]);
     free(e->args);
+    free(e->text_owned);
 
     free(e);
 }
@@ -416,7 +419,19 @@ static Expr *parse_primary(Parser *p)
     if (p->cur.type == TK_STR) {
         e = p_expr_new(EX_LIT);
         if (!e) { p_fail(p, "内存不足"); return NULL; }
-        val_text(&e->lit, p->cur.text, p->cur.len);
+        if (p->cur.str_value) {
+            /*
+             * 长字面量：直接接管词法器的分配，不复制第二份。
+             * 用外部 T_TEXT 表示，len 精确保留到 8192 字节上限。
+             */
+            e->text_owned = p->cur.str_value;
+            e->text_len = p->cur.len;
+            val_external_text(&e->lit, (u64)(uintptr_t)e->text_owned,
+                              e->text_len, val_mem_detoast, e->text_owned);
+            p->cur.str_value = NULL;
+        } else {
+            val_text(&e->lit, p->cur.text, p->cur.len);
+        }
         p_advance(p);
         return e;
     }
@@ -614,6 +629,8 @@ int parse_sql(const char *sql, Stmt *out, char *errbuf, int errcap)
     }
 
     if (rc == E_PARSE_DUMMY || p.failed) {
+        free(p.cur.str_value);
+        p.cur.str_value = NULL;
         free_stmt(out);
         return E_INVAL;
     }
@@ -623,8 +640,12 @@ int parse_sql(const char *sql, Stmt *out, char *errbuf, int errcap)
 
     if (p.cur.type != TK_EOF) {
         p_fail(&p, "语句结尾有多余内容");
+        free(p.cur.str_value);
+        p.cur.str_value = NULL;
         free_stmt(out);
         return E_INVAL;
     }
+    free(p.cur.str_value);
+    p.cur.str_value = NULL;
     return OK;
 }
