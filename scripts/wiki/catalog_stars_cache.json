@@ -1061,7 +1061,7 @@
       "name": "pklite",
       "repo": "https://github.com/nicholasgasior/pklite",
       "status": "failed",
-      "fetched_at": "2026-11-23T07:30:14+00:00",
+      "fetched_at": "2026-11-23T07:52:24+00:00",
       "http_status": 404,
       "error": "HTTP 404",
       "body": "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/repos/repos#get-a-repository\",\"status\":\"404\"}"
