@@ -17,7 +17,7 @@
 | manifest 门禁 `wiki_manifest_lint` | PASS |
 | manifest 可重生成 | `gen_postgres_manifest.py` 重新生成与仓库文件 **逐字节相同** |
 | 契约测试 | `test_postgres_mechanism_pages` **6/6 通过**（151 页全覆盖断言） |
-| 全套 wiki 工装测试 | **`Ran 341 tests ... OK (skipped=1)`** |
+| 全套 wiki 工装测试 | **`Ran 353 tests ... OK (skipped=1)`** |
 | `_index.md` 导航表 | **151 行**完整导航（`_index.md` 共 279 行） |
 
 ## 2. 内容规模（脚本实测，非估算）
@@ -107,16 +107,24 @@
 ## 6. 遗留
 
 1. **A 组 20 页未在本轮重写**，其中 `a19` 的「关键取舍」项在 P2 抽检时记 0（缺具体 caller
-   的 fallback 证据）。本轮抽检把 a19 纳入批次 1，结论见该批报告。
-2. **`postgres_mechanism_specs.py` 的 5 处 refs 偏差已在页面正文注明但不改 spec**：
-   `d08`（`ginEntryInsert` 定义位置）、`b17`（boundary 提 `archive_command` 调用点但 refs
-   只有 `xlogfuncs.c`）、`b14`（`XLogPrefetcherAllocate` 唯一 caller 不在 refs）、
-   `b16`（`RmgrData` / `XLogRecGetBlockData` 不在 refs）、`c15`（refs 只列
-   `heapam_index_scan_begin`）。这是 **P4 清单维护的任务**，不在 P3 范围。
-3. **`_index.md` 的 `stars` / `stars_as_of` 仍是占位值**（`0` / `1970-01-01`），
-   catalog 里 postgres 条目本身也是占位。属 P4 Task 2 的 stars 回填范围。
+   的 fallback 证据）。本轮抽检把 a19 纳入批次 1，结论见 `p3-review-a-bc.md`：该页已按
+   `InitializeParallelDSM` 的三条 `nworkers = 0` 源码事实重写取舍段，复跑双门禁后重新通过。
+2. **`postgres_mechanism_specs.py` 的 8 处 refs/边界偏差已在页面正文注明但不改 spec**：
+   `d08`（`ginEntryInsert` 定义在 `gininsert.c`，`ginfast.c` 是调用点）、`b17`（boundary 提
+   `archive_command` 调用点但 refs 只有 `xlogfuncs.c`，正文已收敛为边界声明）、`b14`
+   （`XLogPrefetcherAllocate` 唯一 caller 不在 refs）、`b16`（`RmgrData` /
+   `XLogRecGetBlockData` 不在 refs）、`c15`（refs 只列 `heapam_index_scan_begin`）、
+   `c01`（`heap_getnext` 是 heap 专用旧接口，通用路径是 `heap_getnextslot`）、`c09`
+   （boundary 写「VACUUM/bitmap 消费方」，真实消费者是 `vacuumlazy.c`/`vacuumparallel.c`）、
+   `i10`（一页覆盖归档状态机 + BASE_BACKUP + 会话级备份接口，篇幅压力大）。这是
+   **P4 清单维护的任务**，不在 P3 范围。
+3. **`_index.md` 的 `stars` / `stars_as_of` 已回填为真实值**（22909 / 2026-11-23，
+   由 catalog 的真实取数带入），不再是占位值。catalog 里 postgres 条目同批回填。
 4. **对比页（`page_type: compare`）未做**，按计划 §9 属 P4 跨库阶段。
 5. **未做浏览器端人工冒烟**：本机 headless 不可用；RAG 与页面结构验证都走服务端断言。
+6. **抽检强度低于计划**：计划要求每波每组抽 5 页共 55 页（36.4%），实际完成三批
+   **15 + 2 + 4 = 21 页**（13.9%），分见 `p3-review-a-bc.md`（15 页）、`p3-review-d-ef.md`
+   （2 页）、`p3-review-g-l.md`（4 页）。覆盖 12/12 组，但组内密度不足。
 
 ## 7. 验证命令（可复现）
 
@@ -135,6 +143,6 @@ python scripts\wiki\gen_postgres_manifest.py --output .\tmp-manifest.yml
 # 全套工装测试（含 151 页契约测试）
 python -m unittest discover -s scripts\wiki -p "test_*.py"
 
-# 重生成导航表（只打印，不写文件）
-python scripts\wiki\render_index_nav.py
+# 重生成导航表（写回 _index.md；改 manifest 后必须重跑）
+python scripts\wiki\rebuild_postgres_index.py
 ```
