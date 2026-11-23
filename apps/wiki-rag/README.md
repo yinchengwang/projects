@@ -65,6 +65,16 @@ python -m pytest tests -q
 
 覆盖：切块元数据 / 短块合并 / 超长切分 / overview 标记、RRF 名次与 k 可配置、抽取式引用可回源与无结果回退、API 正常与错误路径、入库幂等、按库重建隔离。测试全部用哈希嵌入，不依赖模型缓存。
 
+### 端到端冒烟（需要已建好的真实索引）
+
+```powershell
+python tools/smoke.py
+```
+
+`smoke.py` 自己起一个 uvicorn 子进程（端口 8012），依次打 `/api/health`、`/api/projects`、`/api/projects/{name}`、`/api/search`、`/api/ask`，并**断言引用可回源**：把 `/api/ask` 返回的每个 `block_id` 拿去 `index/data/projects/<库>/chunks.json` 里查，缺失就打印出来。跑完自动 `terminate` 子进程。
+
+不并进 pytest 的原因：真实索引有 899 块、要加载真实嵌入模型，放进默认测试会让它变慢并依赖模型缓存。冒烟脚本只在「索引已建好」的环境里跑。
+
 ## 与 apps/ 既有风格的分歧
 
 现有 `apps/`（`games` / `knowledge-hub` / `programmer-workbench` / `trip-log` / `study-hub`）零 pip 依赖、无 Python 后端。本项目是第一个：
@@ -81,7 +91,7 @@ core/    chunker / embedder / bm25 / fusion / extractive / wiki_source
 index/   build_index.py（IndexStore + 检索）、data/（产物，gitignore）
 web/     index.html / app.js / style.css
 tests/   test_chunker / test_fusion / test_extractive / test_api / test_ingest
-tools/   ingest.py（全量/增量入库 CLI，跑真实门禁）
+tools/   ingest.py（全量/增量入库 CLI，跑真实门禁）、smoke.py（端到端冒烟与引用回源断言）
 ```
 
 ## 配置
