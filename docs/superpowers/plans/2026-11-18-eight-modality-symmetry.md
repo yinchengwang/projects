@@ -1695,7 +1695,33 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
   5. scan/read 两趟 detoast 与并发 VACUUM 的互斥/快照保护；
   6. 启动恢复时如何找到孤儿链、以及 `DetoastFn` 的 `u16` 长度上限 65535 的公开语义。
 
-  在以上契约与故障注入测试获批前，禁止把 JSON 溢出页链接入生产 heap 写路径。
+  **（2026-11-24 状态）设计已完成并通过用户审阅**，见
+  `docs/superpowers/specs/2026-11-24-json-ovf-ownership-design.md`。
+  六项契约的裁决结果：
+  1. 持久化格式 —— tuple 里 12 字节溢出标记 `tag(4) + chain_head(4) + chain_len(4)`；
+     链长度持久化使读路径从两趟变一趟，消除"两趟之间被 VACUUM 释放"这一整类竞态；
+  2. 发布顺序 —— 先 `json_ovf_write` 再 `heap_am_insert`；失败按 §5.2 补偿并置 `chain_head = NIL`；
+     UPDATE 不释放旧链（旧版本由 VACUUM 回收）；
+  3. WAL —— 页链每页走 `LOG_PAGEDATA` 全页镜像，复用现有 redo/undo；
+     要求"先分配全部页再写内容"，否则 `next` 回填会让 before 镜像不是全 0、undo 语义坏掉；
+     运行时 abort **不主动释放链**（宁可浪费空间，不可破坏数据），留作孤儿由启动扫描回收；
+  4. VACUUM —— 释放链 → 把 tag 改成 FREE（写 WAL）→ 删 slot；
+     `json_ovf_free` 必须本身幂等（页头类型不是 `PT_JSON_OVF` 就跳过）；
+  5. 并发 —— 长度从 tuple 拿（`chain_len` 是权威，`ext_off` 是副本）；
+     释放时拿表级锁与读互斥，不引入链级引用计数；
+  6. 孤儿链 —— 启动时扫 tuple 判定（不用"扫页 + 走 next"那套，因为它发现不了
+     "首页被引用、后续页是孤儿"的混合情况）；`DetoastFn` 的 u16 上限 65535 保留为公开契约。
+
+  ⚠️ **本子步仍未实现**：设计已定，代码待写。在实现与故障注入测试完成前，
+  仍然禁止把 JSON 溢出页链接入生产 heap 写路径。
+
+- [ ] **附：TEXT 列长值落点评估（不实现）**
+
+  结论：TEXT 列保持 255B 上限并**显式报错**（不静默截断）。TEXT 没有外部值落点
+  —— 要支持长 TEXT 需先有页链机制（即 C5.3b-b），之后接入还需约 8 处改动跨越
+  值层/记录层/执行层/索引层/事务层。需要长文本请用 blob 模态。
+  详见 `docs/superpowers/specs/2026-11-24-text-long-value-assessment.md`。
+
 
 - [ ] **C5.8 索引：路径索引（写时维护）**
 
