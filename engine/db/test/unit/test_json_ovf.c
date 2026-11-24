@@ -604,8 +604,18 @@ static void t_write_wal_fail_rollback(void)
     CHECK(rc == E_IO);
     CHECK(key == (u64)PAGE_ID_NIL);        /* 调用方拿不到句柄 */
 
-    /* 两页都要回到空闲栈 —— 一页都不许泄漏 */
-    CHECK(pager_free_count(own) == free_before + 2u);
+    /*
+     * 【只有第 2 页能归还，第 1 页必须留成孤儿】
+     *
+     * 第 1 页的 WAL 记录已经写成功、内容也已经落页。把它还回空闲栈的话，
+     * 别的结构可能立刻分配到它并写入**已提交**的数据；而崩溃恢复会 undo
+     * 本事务，把 PT_FREE 前像盖到那页上 ⇒ 新主人的已提交数据被静默抹掉，
+     * 而新主人（比如 B-tree）还指着它。
+     *
+     * 所以：写过的页宁可留成孤儿（空间浪费），由启动孤儿扫描回收。
+     * 这就是设计 §6.4「运行时 abort 不主动释放已 WAL 化的链」那条不变量。
+     */
+    CHECK(pager_free_count(own) == free_before + 1u);
 
     /* 帧确实没被占死：同一池子还能再写一份两页文档并读回来 */
     {

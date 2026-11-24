@@ -166,6 +166,23 @@ int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
 int json_ovf_read(Pager *pg, u64 ext_key, u8 *buf, u16 cap, u16 *len_out);
 
 /*
+ * 用**已知长度**读（tuple 的溢出标记里存着 chain_len，见设计 §4.2）。
+ *
+ * 【为什么需要它】
+ * json_ovf_read 是两趟 walk：第一趟量长度、第二趟拷内容。
+ * 两趟之间链没有任何保护 —— 若 VACUUM 在此刻回收了这条链，
+ * 第二趟就会读到已清零的页（E_CORRUPT 甚至脏数据）。
+ * 把长度持久化到 tuple 之后，长度不必"走过去量" ⇒ 只走一趟，
+ * 那条竞态窗口随之消失。
+ *
+ * chain_len != 0 ⇒ 用它与链的实际长度交叉校验，不符返回 E_CORRUPT；
+ * chain_len == 0 ⇒ 退化成老的两趟 walk（兼容尚未接线的调用点）。
+ */
+int json_ovf_read_len(Pager *pg, u64 ext_key, u32 chain_len, u32 *len_out);
+int json_ovf_read_once(Pager *pg, u64 ext_key, u32 chain_len,
+                       u8 *buf, u16 cap, u16 *len_out);
+
+/*
  * 释放一条页链（把页还给全局页分配器）。
  *
  * ⚠️ 释放之前调用方必须确保**没有人在读这条链**。
@@ -182,13 +199,18 @@ int json_ovf_page_count(Pager *pg, u64 ext_key, u32 *n_out);
  * json_ovf_read 的参数是 (Pager *, ext_key)，而 DetoastFn 是
  * (ctx, key, off, buf, cap, len_out) ⇒ 需要一个适配器把两者接上。
  *
- * 句柄：key = 页链首页的页号（就是外部值的 ext_key），off = 0
- *      —— 一个外置文档是一个整体，没有"偏移"可言（与 vector 同一口径）。
+ * 句柄：key = 页链首页的页号（外部值的 ext_key）
+ *      **off = 链的总长度**（tuple 溢出标记里的 chain_len）。
+ *
+ * 【off 的语义与 blob / vector 不同，必须显式记住】
+ * blob 的 off 是帧号、vector 的 off 恒为 0；json 的 off 是**整条链的字节数**。
+ * 有了它才能一趟读完（不必先走一遍量长度）。off == 0 表示"调用方没给长度"，
+ * 此时退化成两趟 walk —— 空文档也走这条路，能正确得到 0。
  *
  * 用法：
- *     val_external_text(&v, ext_key, 0, json_ovf_detoast, pg);
+ *     val_external_text(&v, head, chain_len, json_ovf_detoast, pg);
  *
- * ⚠️ 语义与 json_ovf_read 完全一致：两次调用（先问长度、再取内容），
+ * ⚠️ 语义与 json_ovf_read 一致：两次调用（先问长度、再取内容），
  * 缓冲不够 ⇒ E_NOSPACE 并报出需要多少字节。
  */
 int json_ovf_detoast(void *ctx, u64 key, u64 off,

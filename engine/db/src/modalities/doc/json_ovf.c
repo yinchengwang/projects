@@ -357,6 +357,19 @@ int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
      * 所以每页先算出完整的内容快照，用它当 after；before 是全 0
      * （pager_alloc 已经把整页清零，含复用出来的空闲页 —— 见 pager.c）。
      */
+    /*
+     * `done` = "已经写进 WAL、并且已经落页"的页数。
+     *
+     * 【为什么必须单独记账】
+     * 失败补偿**不能**把写过的页还回空闲栈。
+     * 那些页的 WAL 记录已经存在；一旦还回去，别的结构可能立刻分配到它并写入
+     * 已提交的数据 —— 而崩溃恢复会 undo 本事务，把 PT_FREE 前像盖到那页上，
+     * 把新主人的已提交数据静默抹掉，新主人（比如 B-tree）还指着它。
+     *
+     * ⇒ 写过的页留成孤儿，由启动时的孤儿扫描回收（设计 §6.4 的取舍）。
+     */
+    u32 done = 0;
+
     for (i = 0; i < npages; i++) {
         PageFrame *fr = NULL;
         u8 before[PAGE_SIZE];
@@ -410,12 +423,30 @@ int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
                 (void)pager_unpin(pg, page_ids[i], false);
                 goto fail;
             }
+            /*
+             * 钩子返回 OK 但 LSN 为 0 ⇒ 日志其实没落地。
+             *
+             * 放过去会让这页成为 H_LSN == 0 的脏页：
+             * pager_min_dirty_lsn 会跳过它 ⇒ checkpoint 的截断点算错 ⇒
+             * 那些日志被提前丢弃。geo_wal.c 同一个取舍（视作 E_IO）。
+             */
+            if (lsn == 0) {
+                (void)pager_unpin(pg, page_ids[i], false);
+                rc = E_IO;
+                goto fail;
+            }
         }
 
         /* 日志已经落定，这时才改页 */
         memcpy(fr->data, after, PAGE_SIZE);
         if (lsn)
             page_set_lsn(fr->data, lsn);
+
+        /*
+         * 从这一刻起这页**不可回收**（WAL 里已经有它的记录）——
+         * 必须在 unpin 之前推进 done，否则 unpin 失败时会误把它当"没写过"。
+         */
+        done = i + 1u;
 
         rc = pager_unpin(pg, page_ids[i], true);
         if (rc != OK)
@@ -429,13 +460,17 @@ int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
 
 fail:
     /*
-     * 补偿：整条链都是本次新建的，没有 tuple 引用它 ⇒ 全部归还。
+     * 补偿只归还 **[done, npages)** 这一段 —— 它们从没进过 WAL。
      *
-     * ⚠️ 用逐页归还而**不是** json_ovf_free：
-     *    失败时链的后半段还没写内容（页头是全 0），按链走会在半路
-     *    判成"链损坏"并中止 ⇒ 后半段页泄漏。
+     * [0, done) 已经写过 WAL，**绝不能**还回空闲栈：
+     * 见 `done` 声明处的说明。它们留成孤儿，由启动孤儿扫描回收。
+     *
+     * ⚠️ 用逐页归还而不是 json_ovf_free：
+     *    未写过的页页头还是全 0（不是 PT_JSON_OVF），按链走会在第一页
+     *    就判成"链损坏"并中止 ⇒ 一页都还不回去。
      */
-    ovf_free_page_list(pg, page_ids, npages);
+    if (done < npages)
+        ovf_free_page_list(pg, page_ids + done, npages - done);
     return rc;
 }
 
@@ -489,6 +524,115 @@ int json_ovf_read(Pager *pg, u64 ext_key, u8 *buf, u16 cap, u16 *len_out)
         *len_out = (u16)got;
     }
 
+    return OK;
+}
+
+/* ---------------- 用已知长度的一趟读取 ---------------- */
+
+/*
+ * 为什么需要"已知长度"的读入口
+ *
+ * 老读路径是两趟 walk：第一趟沿链走出总长度，第二趟再沿链拷内容。
+ * 两趟之间链**没有任何保护** —— 若此刻有别的执行流释放了这条链
+ * （VACUUM 回收已删版本的链），第二趟读到的就是已清零的页，
+ * 结果是 E_CORRUPT 甚至脏数据。
+ *
+ * 把链的总长度持久化在 tuple 里（record 的溢出标记，见设计 §4.2）之后，
+ * 长度就不再需要"走过去量"了 ⇒ 读路径只走一趟，
+ * 两趟之间那条竞态窗口随之消失。
+ */
+
+/*
+ * 只问长度。
+ *
+ * chain_len != 0 ⇒ 用它校验链；chain_len == 0 ⇒ 沿链走一遍量出来。
+ *
+ * ⚠️ 即使有已知长度也走一遍链：长度是"期望值"，链可能被改坏。
+ *    这里只统计、不拷贝 —— 代价一次遍历，换来"坏链当场报错"。
+ */
+int json_ovf_read_len(Pager *pg, u64 ext_key, u32 chain_len, u32 *len_out)
+{
+    u32 total = 0;
+    u32 pages = 0;
+    int rc;
+
+    if (!pg || !len_out)
+        return E_INVAL;
+    if (ext_key > 0xFFFFFFFFu)
+        return E_INVAL;
+    if (chain_len > JSON_OVF_MAX_LEN)
+        return E_NOSPACE;
+
+    /*
+     * 有已知长度 ⇒ **直接报它，不碰页**。
+     *
+     * 【为什么这里可以信任 chain_len】
+     * 它的用途只是"给调用方一次分配缓冲的大小"。真正的校验发生在
+     * json_ovf_read_once：那里会把实际链路长度与 chain_len 对比，
+     * 不符就返回 E_CORRUPT。如果这里也走一遍链，就又把"两次 walk"
+     * 请回来了 —— 那正是这个 API 存在的意义所在。
+     */
+    if (chain_len != 0) {
+        *len_out = chain_len;
+        return OK;
+    }
+
+    /* 没给长度 ⇒ 只能走一遍量出来（老路径） */
+    rc = json_ovf_walk(pg, (u32)ext_key, NULL, 0, &total, &pages, NULL);
+    if (rc != OK)
+        return rc;
+
+    *len_out = total;
+    return OK;
+}
+
+/*
+ * 用已知长度读。
+ *
+ * chain_len != 0 ⇒ 按它校验并在链路长度不符时返回 E_CORRUPT；
+ * chain_len == 0 ⇒ 退化成老的两趟 walk（兼容未接线的调用点）。
+ *
+ * 契约与 DetoastFn 一致：
+ *   buf == NULL ⇒ 只报长度，返回 E_NOSPACE（与 json_ovf_read 同款）；
+ *   buf != NULL 且 cap 不够 ⇒ E_NOSPACE 并报出需要多少。
+ */
+int json_ovf_read_once(Pager *pg, u64 ext_key, u32 chain_len,
+                       u8 *buf, u16 cap, u16 *len_out)
+{
+    u32 total = 0;
+    u32 pages = 0;
+    int rc;
+
+    if (!pg || !len_out)
+        return E_INVAL;
+    if (ext_key > 0xFFFFFFFFu)
+        return E_INVAL;
+    if (chain_len > JSON_OVF_MAX_LEN)
+        return E_NOSPACE;
+
+    if (chain_len == 0) {
+        /* 没有已知长度 ⇒ 走老路径（内部就是两趟 walk） */
+        return json_ovf_read(pg, ext_key, buf, cap, len_out);
+    }
+
+    rc = json_ovf_walk(pg, (u32)ext_key, buf, cap, &total, &pages, NULL);
+    if (rc != OK)
+        return rc;
+
+    if (total != chain_len) {
+        /*
+         * 链的实际长度与 tuple 记的不一致。
+         *
+         * 两种可能：① 链被改坏；② tuple 的长度字段写错了。
+         * 无论哪种，都不能把读到的内容当答案交出去 ——
+         * 半个文档比报错危险得多。
+         */
+        return E_CORRUPT;
+    }
+
+    *len_out = (u16)total;
+    if (buf == NULL)
+        return (total > 0) ? E_NOSPACE : OK;
     return OK;
 }
 
@@ -621,10 +765,34 @@ int json_ovf_page_count(Pager *pg, u64 ext_key, u32 *n_out)
 int json_ovf_detoast(void *ctx, u64 key, u64 off,
                      u8 *buf, u16 cap, u16 *len_out)
 {
-    (void)off;
-
     if (!ctx)
         return E_INVAL;
 
-    return json_ovf_read((Pager *)ctx, key, buf, cap, len_out);
+    /*
+     * off 是**已知的链总长度**（来自 tuple 的溢出标记）。
+     *
+     * 【为什么保留 off=0 的老语义】
+     * 早期调用点（test_json_ovf 与未接线的路径）传 off=0，表示"我不知道长度"。
+     * read_once 把 chain_len==0 解释成"退化成 walk"，所以老调用仍然正确。
+     *
+     * 【为什么不用 off==0 当非法句柄】
+     * 空文档的合法长度也是 0。用 0 当哨兵会把"空文档"和"没给长度"
+     * 混成一件事。这里选择"0 = 没给长度、走 walk" —— 空文档走 walk
+     * 也能正确得到 0（一个 payload_len=0 的页），两种语义不冲突。
+     */
+    if (off > JSON_OVF_MAX_LEN)
+        return E_NOSPACE;
+
+    /*
+     * 第一趟（buf == NULL）：已知长度就直接报，**不碰页**。
+     *
+     * 这是"长度持久化在 tuple 里"换来的真正收益 ——
+     * val_detoast 先问长度那一步不再需要走一遍链。
+     */
+    if (buf == NULL && off != 0) {
+        *len_out = (u16)off;
+        return E_NOSPACE;
+    }
+
+    return json_ovf_read_once((Pager *)ctx, key, (u32)off, buf, cap, len_out);
 }
