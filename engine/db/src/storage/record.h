@@ -91,6 +91,55 @@ typedef struct {
 #define REC_MAX_COLS 32
 
 /*
+ * ==================== JSON 溢出标记（C5.3b-b） ====================
+ *
+ * JSONB 超过 JSON_INLINE_MAX（2048）时不在 record 变长区里存字节，
+ * 而是存一个**定长 12 字节的溢出标记**，指向一条 PT_JSON_OVF 页链。
+ *
+ * 布局（紧跟在变长区那一列的字节流开头）：
+ *
+ *   偏移 0   4B  tag = REC_JSON_OVF_TAG（0x4A534F56，"JSOV"）
+ *   偏移 4   4B  chain_head：页链首页页号（u32；PAGE_ID_NIL 非法）
+ *   偏移 8   4B  chain_len ：链里的 JSONB 字节数（u32，<= 65535）
+ *
+ * 【为什么不用"长度 > 2048 就是标记"这种隐式约定】
+ * 那依赖一个跨层的隐式契约。显式 tag 更稳：读侧先看 tag，
+ * 对不上就当普通内联 JSONB 处理。
+ *
+ * 【为什么 tag 首字节不可能撞上合法 JSONB】
+ * 合法 JSONB tag 只有 0..8（见 modalities/doc/jsonb.h），而 0x4A 不在其中。
+ * 所以"12 字节既能是标记又是合法 JSONB"在字节层面不存在 —— 零歧义。
+ *
+ * 【为什么 chain_len 必须持久化】
+ * 读路径原本要两趟 walk（先量长度、再拷内容），两趟之间若链被 VACUUM 释放，
+ * 第二趟会读到已清零的页。长度存进 tuple 之后只走一趟，窗口消失。
+ *
+ * ⚠️ 标记本身 12 字节，但**链的内容不进 tuple** ——
+ *    所以 64KB 文档不会把 tuple 撑爆（tuple 各层长度都是 u16）。
+ */
+#define REC_JSON_OVF_TAG   0x4A534F56u
+#define REC_JSON_OVF_MARK_SIZE 12u
+
+/* 这段字节是不是一个 JSON 溢出标记（只做字节判别，不校验链） */
+bool rec_json_ovf_is_marker(const u8 *bytes, u32 len);
+
+/*
+ * 解析溢出标记。
+ *
+ * 返回 OK 并把 head / chain_len 写出来；
+ * 不是标记、head 非法、或 chain_len 超过 65535 ⇒ E_INVAL。
+ *
+ * ⚠️ 不检查页链本身是否存在 —— 那是读路径（json_ovf_read_once）的事。
+ */
+int rec_json_ovf_decode(const u8 *bytes, u32 len,
+                        u32 *head_out, u32 *len_out);
+
+/*
+ * 把溢出标记写进一段缓冲（调用方保证 cap >= REC_JSON_OVF_MARK_SIZE）。
+ */
+int rec_json_ovf_encode(u32 head, u32 chain_len, u8 *buf, u16 cap);
+
+/*
  * ==================== 记录布局（预计算） ====================
  *
  * 布局只跟**列定义**有关，跟行无关：
