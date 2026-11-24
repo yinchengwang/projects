@@ -8,6 +8,7 @@
  *   4. **外部 JSONB（256..2048B 借用记录缓冲）也能取路径** —— 实参是外部值
  *   5. 未注册的模态不会假装成功（`db_json_init` 前查表应为 NULL）
  *   6. 规格解析失败 ⇒ `json_match` 返回错误，不是静默 false
+ *   7. 分配式编码器：文本 → JSONB → 文本往返；非法输入与超限各自报错
  *
  * 【为什么用值层函数表查，而不是走 SQL】
  * 走 SQL 需要"把 JSON 文本插进 JSON 列"的写入路径，那是 C5.3b 的范围
@@ -195,8 +196,98 @@ int main(void)
         CHECK(val_func_find("json_extract")(args, 1, &out) != OK);
     }
 
+    /* ---------------- 7. 分配式编码器（值层注册表） ---------------- */
+    {
+        DbValue text;
+        DbValue out;
+
+        /*
+         * 编码器是 db_json_init 注册进来的 ⇒ 必须可用。
+         * （本测试在 db_json_init 之后跑，所以这里不是 E_NOTSUP。）
+         */
+        val_text(&text, "{\"a\":5}", 7);
+        CHECK(val_json_from_text(&text, &out) == OK);
+        CHECK(out.type == T_JSON);
+        /*
+         * ⚠️ JSONB 是**二进制**（tag + 载荷），长度不等于源文本长度。
+         *    `{"a":5}` 7 个字符 → JSONB 15 字节。
+         *    这里断言"是内联值且非空"，具体字节数由 A1 对拍覆盖。
+         */
+        CHECK(out.len > 0);
+        CHECK(out.external == 0);
+
+        /* 渲染回文本应当还原 */
+        char *rendered = NULL;
+        u32 rlen = 0;
+        CHECK(val_to_json_alloc(&out, &rendered, &rlen) == OK);
+        CHECK(rendered != NULL);
+        if (rendered) {
+            CHECK(strcmp(rendered, "{\"a\":5}") == 0);
+            free(rendered);
+        }
+
+        /* 非法 JSON ⇒ 报错（不静默存半截） */
+        DbValue bad;
+        DbValue out2;
+        val_text(&bad, "{\"a\":}", 6);
+        CHECK(val_json_from_text(&bad, &out2) != OK);
+
+        /* 非 T_TEXT / NULL 输入 ⇒ E_INVAL */
+        DbValue num, nul;
+        DbValue out3;
+        val_int(&num, 5);
+        CHECK(val_json_from_text(&num, &out3) == E_INVAL);
+        val_null(&nul);
+        CHECK(val_json_from_text(&nul, &out3) == E_INVAL);
+
+        /*
+         * 超过模态上限（>2048B）⇒ E_NOSPACE（页链留给 C5.3b-b）。
+         *
+         * ⚠️ **必须用外部 T_TEXT** ——
+         *    val_text() 会把内容截到 VAL_TEXT_MAX-1(255)，
+         *    2200 字节的文档会被截成 255 字节的**半截 JSON**，
+         *    编码器报的是 E_INVAL（语法错）而不是 E_NOSPACE（超限）。
+         *    长 SQL 字面量走的正是外部值这条路，所以测它才对得上。
+         */
+        {
+            static char big[4096];
+            size_t n = 0;
+            n += (size_t)snprintf(big + n, sizeof(big) - n, "{\"pad\":\"");
+            for (int i = 0; i < 2200; i++)
+                big[n++] = 'x';
+            n += (size_t)snprintf(big + n, sizeof(big) - n, "\"}");
+            big[n] = '\0';
+
+            DbValue btext, bout;
+            val_external_text(&btext, (u64)(uintptr_t)big, (u64)n,
+                              val_mem_detoast, big);
+            CHECK(val_json_from_text(&btext, &bout) == E_NOSPACE);
+        }
+
+        /*
+         * 边界：刚好在上限之内 ⇒ 成功，且是**外部值**（JSONB 装不进 s[256]）。
+         */
+        {
+            static char big[4096];
+            size_t n = 0;
+            n += (size_t)snprintf(big + n, sizeof(big) - n, "{\"pad\":\"");
+            for (int i = 0; i < 2030; i++)
+                big[n++] = 'x';
+            n += (size_t)snprintf(big + n, sizeof(big) - n, "\"}");
+            big[n] = '\0';
+
+            DbValue btext, bout;
+            val_external_text(&btext, (u64)(uintptr_t)big, (u64)n,
+                              val_mem_detoast, big);
+            CHECK(val_json_from_text(&btext, &bout) == OK);
+            CHECK(bout.type == T_JSON);
+            CHECK(bout.external == 1);       /* 256–2048B 走外部值 */
+            val_json_free(&bout);
+        }
+    }
+
     if (failures == 0) {
-        printf("  6 项验收全部通过");
+        printf("  7 项验收全部通过");
         return 0;
     }
     printf("  %d 项失败", failures);

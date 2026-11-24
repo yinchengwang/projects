@@ -1672,7 +1672,14 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
 
   本子步的实现边界：执行器 INSERT/UPDATE 在进入关系 Heap AM 前，将 JSON 列 TEXT
   调值层注册的通用编码入口转成 `T_JSON`；值层/记录层不 include doc 模态；关系 AM
-  和 record 编码只接收已编码 JSONB。编码缓冲长度受 2048B 限制，转换失败不写 heap。
+  和 record 编码只接收已编码 JSONB。编码上限由 doc 模态自己裁决
+  （`JSON_INLINE_MAX`，见 `modalities/doc/json_ovf.h`）—— query 层不写死这个数字
+  （A7 审计：查询层不得认识具体模态的表示细节）；转换失败不写 heap。
+
+  **SQL 字符串字面量**上限 8192B（`TK_STR_MAX`），超限明确报错，绝不静默截断；
+  `TEXT` 列超过 255B 显式报错（`E_NOSPACE`），不静默截断成 63B 或存成空串。
+  详见 `docs/superpowers/specs/2026-11-23-json-column-long-literal-design.md`
+  与实施计划 `docs/superpowers/plans/2026-11-23-json-column-long-literal.md`。
 
 - [ ] **C5.3b-b：`PT_JSON_OVF` 页链所有权与 MVCC 生命周期（待独立设计）**
 
