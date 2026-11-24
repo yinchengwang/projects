@@ -13,11 +13,13 @@ refs:
   - path: src/backend/optimizer/plan/planner.c
     symbols: [standard_planner]
   - path: src/backend/executor/execMain.c
-    symbols: [ExecutorStart]
+    symbols: [ExecutorStart, ExecutorRun]
   - path: src/backend/access/transam/xlog.c
     symbols: [XLogInsertRecord, XLogFlush]
   - path: src/backend/storage/buffer/bufmgr.c
     symbols: [ReadBufferExtended]
+  - path: src/backend/storage/smgr/smgr.c
+    symbols: [smgropen]
 ---
 
 # PostgreSQL
@@ -28,15 +30,13 @@ PostgreSQL 是提供关系型 SQL、事务、并发控制、持久化与扩展�
 
 ## 机制是什么
 
-PostgreSQL 后端以进程承载客户端会话；SQL 解析、规划和执行分层完成查询处理。MVCC、WAL、锁及存储管理协作提供事务一致性与持久化。本文库按经审阅的机制单元组织：**12 个机制领域、共 151 篇机制页**，每个机制页对应一个可独立理解、可独立验证的机制单元，而不是一个源文件。
+PostgreSQL 后端以进程承载客户端会话；SQL 解析、规划和执行分层完成查询处理。MVCC、WAL、锁及存储管理协作提供事务一致性与持久化。
 
-页数不是按源码文件数折算的：本库 `src/backend/**` 有 904 个 `.c` 文件，而机制单元是逐条盘点后合并、拆分、移组得到的 151 个。文件名兜底的伪主题（如「xxx.c 模块」）在盘点阶段已被清除。
+本文库按经审阅的机制单元组织：**12 个机制领域、共 151 篇机制页**，每个机制页对应一个可独立理解、可独立验证的机制单元，而不是一个源文件。
 
 ## 怎么实现的
 
-后端会话接收协议消息并执行 SQL；优化器生成 Plan，执行器驱动表/索引访问方法。事务快照与提交状态判定版本可见性，WAL 为变更记录和崩溃恢复提供依据。共享缓冲池缓存关系页，smgr/md 将逻辑块映射到关系文件。进程槽、等待事件、共享内存和复制设施支撑并发及高可用。
-
-下表的 12 个领域按「从存储到 SQL 面」的顺序排列：A 存储与 IPC → B 事务与 WAL → C 堆表与元组 → D 索引族 → E 优化器 → F 执行器 → G 目录与缓存 → H 内存与排序 → I 复制与高可用 → J 服务端与命令面 → K SQL 处理与安全 → L SQL 类型与内建函数。每一篇的具体边界、实现路径与取舍以该页正文为准，本页只做导航。
+下表的 12 个领域按下面的顺序排列：A 存储与 IPC → B 事务与 WAL → C 堆表与元组 → D 索引族 → E 优化器 → F 执行器 → G 目录与缓存 → H 内存与排序 → I 复制与高可用 → J 服务端与命令面 → K SQL 处理与安全 → L SQL 类型与内建函数。每一篇的具体边界、实现路径与取舍以该页正文为准，本页只做导航。
 
 ## 机制导航（151 篇 / 12 组）
 
@@ -261,12 +261,12 @@ PostgreSQL 以多进程会话和明确的子系统接口换取隔离与可扩展
 
 | 路径 | 符号 | 对应职责 |
 |---|---|---|
-| `src/backend/tcop/postgres.c` | `PostgresMain` | 后端会话循环 |
-| `src/backend/optimizer/plan/planner.c` | `standard_planner` | 查询规划入口 |
-| `src/backend/executor/execMain.c` | `ExecutorStart`、`ExecutorRun` | 执行器生命周期 |
-| `src/backend/access/transam/xlog.c` | `XLogInsertRecord`、`XLogFlush` | WAL 插入与刷写 |
-| `src/backend/storage/buffer/bufmgr.c` | `ReadBufferExtended` | 共享缓冲读入 |
-| `src/backend/storage/smgr/smgr.c` | `smgropen` | 关系物理存储句柄 |
+| `src/backend/tcop/postgres.c` | PostgresMain | 后端会话循环 |
+| `src/backend/optimizer/plan/planner.c` | standard_planner | 查询规划入口 |
+| `src/backend/executor/execMain.c` | ExecutorStart, ExecutorRun | 执行器生命周期 |
+| `src/backend/access/transam/xlog.c` | XLogInsertRecord, XLogFlush | WAL 插入与刷写 |
+| `src/backend/storage/buffer/bufmgr.c` | ReadBufferExtended | 共享缓冲读入 |
+| `src/backend/storage/smgr/smgr.c` | smgropen | 关系物理存储句柄 |
 
 ## 参考
 
