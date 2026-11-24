@@ -324,6 +324,72 @@ int  val_json_from_text(const DbValue *text, DbValue *value);
 void val_json_free(DbValue *value);
 
 /*
+ * ============ JSON 内联上限（模态裁决，值层只保管） ============
+ *
+ * "多长算小文档、可以直接内联在 tuple 里"是**文档模态**的知识
+ * （JSON_INLINE_MAX = 2048）。查询层若写死这个数字，就是 A7 审计
+ * 明令禁止的"查询层认识具体模态的表示细节"。
+ *
+ * 所以由 doc 模态注册、查询层只问。
+ *
+ * 【为什么需要它】
+ * 编码器只负责"文本 → JSONB 字节"，不决定存放方式。
+ * 写路径要做"内联还是走页链"的分流，就必须知道这个阈值 ——
+ * 但数字不许出现在 query/ 里。注册表就是那条窄缝。
+ *
+ * 未注册返回 0（调用方据此保守处理）。
+ */
+int  val_set_json_inline_max(u32 n);
+u32  val_json_inline_max(void);
+
+/*
+ * ============ 已编码 JSONB 的字节数 ============
+ *
+ * 内联值取 len；外部值取 ext_off（val_json_from_text 把长度放在那里）。
+ *
+ * 【为什么不直接用 v->len】
+ * 外部值的 len 恒为 0（协议是"长度靠 detoast 问"）——
+ * 直接读 len 会得到 0，于是"超限检查"永远不触发。这是个静默错。
+ */
+u32  val_json_encoded_len(const DbValue *v);
+
+/*
+ * ============ 页链 detoast 注册（读路径用） ============
+ *
+ * 从 record 解出页链标记之后，要用什么函数去读那条链？
+ * 答案只能是 L4 的 json_ovf_detoast（它才知道页链的页内布局）。
+ * 值层是 L1 ⇒ 通过注册把它接进来，与渲染器/编码器同一条纪律。
+ *
+ * 【为什么用 DetoastFn 这个既有类型而不是自定义签名】
+ * json_ovf_detoast 的签名本来就与 DetoastFn 完全一致
+ * （ctx=Pager*、key=链首页、off=链长度）。再包一层适配只会多一份语义。
+ */
+int       val_set_json_chain_detoast(DetoastFn fn);
+DetoastFn val_json_chain_detoast(void);
+
+/*
+ * ============ 带解码上下文的记录解码 ============
+ *
+ * 【为什么必须有 decode_ctx 这个参数】
+ * 页链值的 ext_ctx 必须是一个**能读这条链的稳定对象**（Pager*）。
+ * 而 rec_decode 只拿到 (rec, schema)，不知道 Pager 在哪 ——
+ * 所以由调用方（heap AM）把上下文传进来。
+ *
+ * decode_ctx 会被原样放进页链值的 ext_ctx。调用方必须保证它活到
+ * 所有用这些值读完为止。
+ *
+ * 原来的 val_from_record / val_from_record_layout 保留为
+ * "传 NULL 的薄封装"：它们遇到页链标记会返回 E_NOTSUP
+ * （明确报错，不是静默给出不可读的值）。
+ */
+int  val_from_record_ctx(const ColDesc *cols, int ncols,
+                         const u8 *rec, u16 len, void *decode_ctx,
+                         DbValue *out);
+int  val_from_record_layout_ctx(const RecLayout *L, const ColDesc *cols,
+                                int ncols, const u8 *rec, u16 len,
+                                void *decode_ctx, DbValue *out);
+
+/*
  * ============ 主动归还页链（写路径失败补偿专用） ============
  *
  * 与 val_json_free 的分工：

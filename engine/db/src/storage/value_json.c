@@ -105,6 +105,38 @@ int val_set_json_encoder(JsonEncodeFn fn)
     return OK;
 }
 
+/*
+ * ============ JSON 内联上限 ============
+ *
+ * 0 表示"模态没注册"。查询层拿到 0 时不做内联/页链分流判断 ——
+ * 那是"没有文档模态"的配置，此时 JSON 列本来就不该存在。
+ */
+static u32 g_json_inline_max = 0u;
+
+int val_set_json_inline_max(u32 n)
+{
+    if (n == 0u)
+        return E_INVAL;
+    if (g_json_inline_max != 0u)
+        return E_INVAL;      /* 重复注册：覆盖是静默换行为 */
+    g_json_inline_max = n;
+    return OK;
+}
+
+u32 val_json_inline_max(void)
+{
+    return g_json_inline_max;
+}
+
+u32 val_json_encoded_len(const DbValue *v)
+{
+    if (!v)
+        return 0u;
+    if (!v->external)
+        return (u32)v->len;
+    return (u32)v->ext_off;
+}
+
 int val_json_from_text(const DbValue *text, DbValue *value)
 {
     u8 *text_bytes = NULL;
@@ -145,18 +177,44 @@ int val_json_from_text(const DbValue *text, DbValue *value)
 
     val_null(value);
     value->is_null = false;
+
+    /*
+     * ============ 三档存放 ============
+     *
+     *   <= VAL_INLINE_MAX(255)        内联在 s[]（不付堆代价）
+     *   <= inline_max（模态给的阈值）  堆缓冲 + VAL_EXT_MEM
+     *   >  inline_max                E_NOSPACE（页链由写路径单独建）
+     *
+     * 【为什么这里不建页链】
+     * 建页链要 Pager 和 xid —— 编码器与这个函数都不该知道它们
+     * （值层是 L1，Pager 属于 L1 但 xid 属于事务层；把它们塞进签名
+     *  会让"文本转 JSONB"这件简单事牵连到事务）。
+     * 页链由**写路径**（exec_write → doc 模态的 store 回调）负责。
+     * 这里只如实报告"编码后有多大、装不进内存外部值"。
+     */
     if (out_len <= VAL_INLINE_MAX) {
-        /* 小文档：内联在 s[] 里（不付堆代价） */
         value->type = T_JSON;
         value->len = (u16)out_len;
         if (out_len)
             memcpy(value->s, out_bytes, out_len);
         free(out_bytes);
-    } else {
-        /* 中型文档：外部值，缓冲归调用方（val_json_free 释放） */
-        val_external_json(value, (u64)(uintptr_t)out_bytes, out_len,
-                          val_mem_detoast, out_bytes);
+        return OK;
     }
+
+    if (g_json_inline_max != 0u && out_len > g_json_inline_max) {
+        /*
+         * 超过模态允许的内存外部值上限 ⇒ 明确报错。
+         *
+         * 调用方（写路径）看到 E_NOSPACE 就知道"该走页链了" ——
+         * 而不是拿到一个悄悄截断的值。
+         */
+        free(out_bytes);
+        return E_NOSPACE;
+    }
+
+    /* 中型文档：外部值，缓冲归调用方（val_json_free 释放） */
+    val_external_json(value, (u64)(uintptr_t)out_bytes, out_len,
+                      val_mem_detoast, out_bytes);
     return OK;
 }
 
@@ -197,6 +255,32 @@ void val_json_free(DbValue *value)
     value->ext_fn = NULL;
     value->external = false;
     value->ext_kind = (u8)VAL_EXT_NONE;
+}
+
+/*
+ * ============ 页链 detoast 的注册表 ============
+ *
+ * 从 record 解出页链标记之后，读那条链要知道"页内布局怎么排"——
+ * 那是 L4 文档模态的知识。值层只持一个函数指针。
+ *
+ * 与渲染器 / 编码器 / 归还函数同一条纪律：
+ *   值层提供机制、模态提供实现，两者通过一个很窄的契约相连。
+ */
+static DetoastFn g_json_chain_detoast = NULL;
+
+int val_set_json_chain_detoast(DetoastFn fn)
+{
+    if (!fn)
+        return E_INVAL;
+    if (g_json_chain_detoast)
+        return E_INVAL;      /* 重复注册：覆盖是静默换行为 */
+    g_json_chain_detoast = fn;
+    return OK;
+}
+
+DetoastFn val_json_chain_detoast(void)
+{
+    return g_json_chain_detoast;
 }
 
 /*

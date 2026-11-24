@@ -211,7 +211,20 @@ static int fn_json_encode_alloc(const char *text, u32 text_len,
     if (rc != OK)
         return rc;
 
-    if (need > JSON_INLINE_MAX)
+    /*
+     * 上限从 JSON_INLINE_MAX 放到 JSON_OVF_MAX_LEN。
+     *
+     * 【为什么必须放】
+     * 原来这里卡在 2048：>2048 直接 E_NOSPACE ⇒ 页链那条路**永远走不到**。
+     * 页链接进来之后，2048 不再是"能存多大"的边界，而是
+     * "内联还是走页链"的分界 —— 判断它的地方在写路径（json_should_ovf），
+     * 不在编码器。
+     *
+     * 编码器只负责"文本 → JSONB 字节"，真正的存放方式由调用方决定。
+     * 仍保留 65535 上限：那是 DetoastFn 的长度出口决定的物理上限，
+     * 超过就根本读不回来。
+     */
+    if (need > JSON_OVF_MAX_LEN)
         return E_NOSPACE;
 
     buf = malloc(need ? need : 1u);
@@ -227,6 +240,24 @@ static int fn_json_encode_alloc(const char *text, u32 text_len,
     }
     *bytes_out = buf;
     return OK;
+}
+
+/*
+ * 页链归还适配器（值层注册表里的一项）。
+ *
+ * 签名要与 val_set_json_chain_free 的契约一致：ctx 是 Pager*，
+ * head 是链首页页号。
+ *
+ * 【为什么要包一层而不是直接把 json_ovf_free 强转】
+ * json_ovf_free 的第二个参数是 u64 ext_key，与这里一致；
+ * 但**签名类型不同**（Pager* vs void*）—— 强转函数指针在 C 里是 UB。
+ * 一行适配换来零 UB，值得。
+ */
+static int fn_json_chain_free(void *pager, u64 head)
+{
+    if (!pager)
+        return E_INVAL;
+    return json_ovf_free((Pager *)pager, head);
 }
 
 int db_json_init(void)
@@ -252,6 +283,36 @@ int db_json_init(void)
         worst = rc;
 
     rc = val_set_json_encoder(fn_json_encode_alloc);
+    if (rc != OK && rc != E_INVAL)
+        worst = rc;
+
+    /*
+     * 页链的两个接线点（C5.3b-b）。
+     *
+     * 【为什么由 doc 模态注册】
+     * 值层是 L1、页链在 L4。读链要知道页内布局、还链要知道页分配器语义，
+     * 两者都只有 doc 模态知道。值层只持函数指针。
+     *
+     * 【为什么 ctx 就是 Pager】
+     * json_ovf_detoast 的 ctx 签名是 void*，实际只用它的 Pager 部分；
+     * 归还函数同款。record 解码时由 heap AM 把 Pager 从 Heap 里取出来
+     * 当 decode_ctx 传进来 —— 这样值层始终不知道"Pager 是什么"。
+     */
+    rc = val_set_json_chain_detoast(json_ovf_detoast);
+    if (rc != OK && rc != E_INVAL)
+        worst = rc;
+
+    rc = val_set_json_chain_free(fn_json_chain_free);
+    if (rc != OK && rc != E_INVAL)
+        worst = rc;
+
+    /*
+     * 把内联阈值交给值层保管。
+     *
+     * 查询层要做"内联还是页链"的分流，但它不认识 JSON_INLINE_MAX ——
+     * A7 审计禁止查询层写死模态的表示细节。注册表是那条窄缝。
+     */
+    rc = val_set_json_inline_max(JSON_INLINE_MAX);
     if (rc != OK && rc != E_INVAL)
         worst = rc;
 
