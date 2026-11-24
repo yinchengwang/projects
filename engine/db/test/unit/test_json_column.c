@@ -269,19 +269,69 @@ int main(void)
         if (r) { db_result_free(r); r = NULL; }
         CHECK(count_rows("SELECT id FROM t WHERE id = 91") == 0);
 
+        /*
+         * >2048B 的文档：C5.3b-b 之后走页链，**不再是拒绝**。
+         *
+         * 这一行是"越界哨兵"—— 它证明页链接进来了（C5.3b-a 时代这里必须失败）。
+         */
         make_big_doc(2500, huge, sizeof(huge));
         snprintf(sql, sizeof(sql),
                  "INSERT INTO t (id, doc) VALUES (92, '%s')", huge);
         e = db_exec(g_db, sql, &r);
-        CHECK(e != DB_OK);
-        if (r) db_result_free(r);
-        CHECK(count_rows("SELECT id FROM t WHERE id = 92") == 0);
+        CHECK(e == DB_OK);
+        if (r) { db_result_free(r); r = NULL; }
+        CHECK(count_rows("SELECT id FROM t WHERE id = 92") == 1);
+
+        /* 读回来必须是**完整**的，不能是半截 */
+        {
+            const char *v = one("SELECT doc FROM t WHERE id = 92", buf, sizeof(buf));
+            CHECK(v != NULL);
+            if (v) {
+                CHECK(strlen(buf) > 2500);          /* 全文都在 */
+                CHECK(strstr(buf, "\"a\":7") != NULL);   /* 尾部标记还在 */
+                CHECK(strstr(buf, "\"pad\"") != NULL);   /* 首部标记还在 */
+            }
+        }
+
+        /* 路径查询也要能穿透页链 */
+        {
+            const char *v = one("SELECT json_extract(doc, '$.a') FROM t WHERE id = 92",
+                          buf, sizeof(buf));
+            CHECK(v != NULL);
+            if (v)
+                CHECK(strcmp(buf, "7") == 0);
+        }
     }
 
-    /* ---------------- 7. 页链外置不属于 C5.3b-a ---------------- */
+    /* ---------------- 8. 超过 65535 的文档仍然拒绝 ---------------- */
     /*
-     * C5.3b-a 约定编码后 >2048B 拒绝；大文档页链与 tuple 生命周期
-     * 留待 C5.3b-b 完成所有权/WAL/abort/VACUUM 设计后测试。
+     * 65535 是 DetoastFn 的长度出口决定的物理上限 —— 超过就根本读不回来。
+     * 这条边界不因为页链接入而放松：宁可在写入时明确报错。
+     */
+    {
+        static char huge[70000];
+        char sql[80000];
+        Result *r = NULL;
+        size_t n = 0;
+
+        n += (size_t)snprintf(huge + n, sizeof(huge) - n, "{\"pad\":\"");
+        while (n + 16 < sizeof(huge))
+            huge[n++] = 'x';
+        n += (size_t)snprintf(huge + n, sizeof(huge) - n, "\"}");
+
+        CHECK(n > 65535u);
+        snprintf(sql, sizeof(sql),
+                 "INSERT INTO t (id, doc) VALUES (93, '%s')", huge);
+        e = db_exec(g_db, sql, &r);
+        CHECK(e != DB_OK);
+        if (r) { db_result_free(r); r = NULL; }
+        CHECK(count_rows("SELECT id FROM t WHERE id = 93") == 0);
+    }
+
+    /* ---------------- 9. 页链外置的清理 ------------- */
+    /*
+     * 这些行删掉之后，链会由 VACUUM 回收（Task 5）。
+     * 在 VACUUM 接好之前，链留成孤儿 —— 那是有意接受的（设计 §6.4）。
      */
     db_close(g_db);
     g_db = NULL;

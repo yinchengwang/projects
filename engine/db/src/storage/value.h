@@ -324,6 +324,45 @@ int  val_json_from_text(const DbValue *text, DbValue *value);
 void val_json_free(DbValue *value);
 
 /*
+ * ============ 纯编码：JSON 文本 → JSONB 字节（不决定存放方式） ============
+ *
+ * 与 val_json_from_text 的分工：
+ *   val_json_text_to_bytes  只管编码，字节归调用方 free
+ *   val_json_from_text      编码 + 决定内联/内存外部值（不建页链）
+ *
+ * 【为什么需要拆开】
+ * 建页链要知道"编码后多大"，而它需要 xid / Pager —— 那两样只有写路径有。
+ * 把编码单独暴露出来，写路径才能自己做三档判断，
+ * 而值层仍然不认识"页链"这个概念。
+ */
+int val_json_text_to_bytes(const DbValue *text, u8 **bytes_out, u32 *len_out);
+
+/*
+ * ============ JSON 列赋值（写路径用） ============
+ *
+ * "把一列 JSON 文本变成可以写进 tuple 的值"是一个**跨层**的动作：
+ * 它要编码、要按阈值选存放方式、超过阈值还要建页链。
+ *
+ * 建页链需要 Pager + xid + WAL 钩子 —— 其中 WAL 钩子的 ctx 是 DbInstance，
+ * 而 DbInstance 是 db 层的内部结构（L1 的 storage 与 L4 的 doc 都看不到）。
+ *
+ * 所以整个动作由 **db 层**实现、注册进来。查询层只调这一个函数，
+ * 不需要知道"页链"存在（A7 审计：查询层不得认识模态表示细节）。
+ *
+ * 契约：
+ *   xid  —— 当前事务号（**必须显式传**：共享对象里藏"当前是谁"必然串号）
+ *   text —— 必须是 T_TEXT 值（内联或外部都可）
+ *   out  —— 产出的 T_JSON 值；可能是内联、内存外部值、或页链句柄
+ *
+ * 失败语义：不留下半成品值，不留下可被 tuple 引用的链。
+ */
+typedef int (*JsonToColumnFn)(void *ctx, u32 xid,
+                              const DbValue *text, DbValue *out);
+
+int val_set_json_to_column(JsonToColumnFn fn, void *ctx);
+int val_json_to_column(u32 xid, const DbValue *text, DbValue *out);
+
+/*
  * ============ JSON 内联上限（模态裁决，值层只保管） ============
  *
  * "多长算小文档、可以直接内联在 tuple 里"是**文档模态**的知识

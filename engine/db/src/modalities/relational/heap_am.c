@@ -184,8 +184,19 @@ static int heap_am_decode(StorageAM *am, const u8 *buf, u16 len, DbValue *out)
     HeapAmCtx *c = ctx_of(am);
     if (!c)
         return E_INVAL;
-    /* 用预计算的布局 —— 不每行重算（见 record.h 的 RecLayout 说明） */
-    return val_from_record_layout(&c->layout, c->cols, c->ncols, buf, len, out);
+
+    /*
+     * 用预计算的布局 —— 不每行重算（见 record.h 的 RecLayout 说明）。
+     *
+     * decode_ctx 传 Pager：JSON 页链值的 ext_ctx 必须是能读那条链的对象，
+     * 而读链（json_ovf_detoast）只认 Pager。从 Heap 取它，
+     * 而不是让执行器知道 Pager 在哪 —— 执行器只认 StorageAM。
+     *
+     * ⚠️ Pager 是实例级对象，活得比任何查询都久 ⇒ 放进 ext_ctx 不会悬空。
+     *    （对比：如果传的是 HeapAmCtx 的地址，查询结束就成了野指针。）
+     */
+    return val_from_record_layout_ctx(&c->layout, c->cols, c->ncols,
+                                      buf, len, heap_pager(c->heap), out);
 }
 
 static bool heap_am_visible(StorageAM *am, const u8 *buf, u16 len,

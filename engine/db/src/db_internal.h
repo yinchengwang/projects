@@ -248,6 +248,20 @@ typedef struct DbInstance {
 } DbInstance;
 
 /*
+ * ---------------- JSON 页链的建链/还链（db_json_ovf.c 实现） ----------------
+ */
+
+/*
+ * 把建链与还链注册进值层。
+ *
+ * 为什么在 db 层：建链要写 WAL，而 WAL 钩子的 ctx 必须是 DbInstance ——
+ * 那是 db 层的内部结构，L4 的 doc 模态看不到它。
+ *
+ * 幂等：重复注册返回 E_INVAL（值层拒绝覆盖），调用方当成功处理。
+ */
+int  db_json_ovf_init(DbInstance *inst);
+
+/*
  * ---------------- 开库的恢复阶段（db_recover.c 实现） ----------------
  */
 

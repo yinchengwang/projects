@@ -175,15 +175,19 @@ int exec_insert(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
                     goto fail;
                 }
                 /*
-                 * 编码交给 doc 模态：它自己判上限、自己分配。
-                 * 失败（语法错 / 超过模态允许的长度）在写 heap 之前发生 ——
-                 * 不会留下半个 tuple。
+                 * 一列 JSON 文本 → 可写进 tuple 的值（编码 + 选存放方式）。
                  *
-                 * ⚠️ 错误文本里**不写死上限数字** ——
-                 *    JSON_INLINE_MAX 是 doc 模态的常量，query 层不能 include
-                 *    它（A7 审计）。具体数字由模态自己在返回值里体现。
+                 * 【为什么是一个入口而不是"编码 + 判断 + 建链"三步】
+                 * 三步里的每一步都需要模态知识（阈值、页链），
+                 * 而查询层不许认识它们（A7 审计）。所以整个动作由 db 层
+                 * 注册的实现一次做完，这里只传 xid。
+                 *
+                 * xid 必须显式传：建链要写 WAL，日志得记在正确的事务名下。
+                 *
+                 * 失败（语法错 / 超过 65535）在写 heap 之前发生 ——
+                 * 不会留下半个 tuple。
                  */
-                rc = val_json_from_text(&row[c], &row[c]);
+                rc = val_json_to_column(db->cur_xid, &row[c], &row[c]);
                 if (rc != OK) {
                     snprintf(err, (size_t)errcap,
                              "JSON 列 %s 文本无效或超过允许的长度",
@@ -438,9 +442,9 @@ int exec_update(Db *db, Stmt *st, QueryResult **out, char *err, int errcap)
                 return E_INVAL;
             }
             /*
-             * 与 INSERT 同一套编码路径：模态自己判上限、自己分配。
+             * 与 INSERT 同一套路径：编码 + 选存放方式一次做完。
              */
-            rc = val_json_from_text(&nv, &nv);
+            rc = val_json_to_column(db->cur_xid, &nv, &nv);
             if (rc != OK) {
                 snprintf(err, (size_t)errcap,
                          "JSON 列 %s 文本无效或超过允许的长度",

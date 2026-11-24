@@ -426,6 +426,41 @@ static int fill_batch_via_am(const TableCtx *tc, BatchCtx *bc, AmScan *scan,
     ab.cols = bc->col;
 
     rc = tc->am->batch_decode(tc->am, bc->refs, nvis, &ab);
+    if (rc == E_NOTSUP) {
+        /*
+         * ============ 本批退回逐行解码 ============
+         *
+         * 触发条件：这一批里有 JSON 溢出标记（>2048B 的文档走页链，
+         * 而列批解不了页链 —— 见 storage/batch.c 的说明）。
+         *
+         * 【为什么不整条语句报错】
+         * 一行大文档就让整表查询失败，不可接受。
+         *
+         * 【为什么不关掉批能力】
+         * 那会让全库所有关系表退化成逐行，性能门禁直接红。
+         *
+         * 【为什么可以就地退回】
+         * 本批的行字节还在 bc->refs[] 里（batch_scan 刚给的，页还 pin 着），
+         * 直接对这些 ref 逐行解码即可 —— 不需要回退游标、不需要重新扫描。
+         *
+         * 【为什么返回值必须是 OK】
+         * 退化成功就是成功。把 E_NOTSUP 传出去会让上层以为整个操作失败。
+         */
+        int i;
+
+        for (i = 0; i < nvis; i++) {
+            DbValue row[SQL_MAX_COLS];
+
+            rc = tc->am->decode(tc->am, bc->refs[i].data, bc->refs[i].len, row);
+            if (rc != OK)
+                return rc;
+
+            rc = batch_add_row(bc, row);
+            if (rc != OK)
+                return rc;
+        }
+        return OK;
+    }
     if (rc != OK)
         return rc;
 

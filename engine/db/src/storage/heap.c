@@ -608,6 +608,18 @@ u32 heap_npages(const Heap *h)
     return h ? (u32)atomic_load(&h->npages) : 0;
 }
 
+/*
+ * 这张表挂在哪个 Pager 上（见 heap.h 的说明）。
+ *
+ * 返回 const 指针之外的东西？—— 返回可变指针是必需的：
+ * 页链读写要 pager_get/pager_alloc，那些都要可变 Pager。
+ * Heap 自己持有的是可变 Pager，所以这里不引入新的可变性。
+ */
+Pager *heap_pager(const Heap *h)
+{
+    return h ? h->pager : NULL;
+}
+
 u64 heap_wal_calls(const Heap *h)
 {
     return h ? (u64)atomic_load(&h->wal_calls) : 0;

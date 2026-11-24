@@ -140,6 +140,21 @@ int  heap_scan_page_batch(HeapScan *s, AmRowRef *out, int max, int *n_out);
 u32  heap_npages(const Heap *h);
 u64  heap_wal_calls(const Heap *h);
 
+/*
+ * 这张表挂在哪个 Pager 上。
+ *
+ * 【为什么需要这个访问器】
+ * Heap 结构里本来就有 pager 字段，但那是内部头（heap_internal.h）——
+ * 让 db 层直接伸手进去会把"Heap 长什么样"变成跨层的隐式契约。
+ * 给一个一行的存取器，代价为零。
+ *
+ * 【为什么 db 层需要它】
+ * JSON 页链值的 ext_ctx 必须是能读那条链的对象（Pager*），
+ * 而解码路径（heap_am_decode）只有 Heap。有了这个访问器，
+ * heap AM 就能在解码时把 Pager 当 decode_ctx 传给 val_from_record_layout_ctx。
+ */
+Pager *heap_pager(const Heap *h);
+
 /* ---------------- 页内 compact（v1.2 步骤 5） ---------------- */
 
 /*

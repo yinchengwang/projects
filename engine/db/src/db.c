@@ -605,6 +605,11 @@ db_err db_open(const char *path, DB **out)
      * 整个裁掉 ⇒ 无条件调用就是链接失败（实测于 MM=relational）。
      */
 #if DB_HAS_DOC
+    /*
+     * 页链的建链/还链要先注册：它们需要 DbInstance（写 WAL），
+     * 而 db_json_init 只负责纯模态内的注册（渲染器/编码器/函数表）。
+     */
+    (void)db_json_ovf_init(inst);
     db_json_init();
 #endif
 

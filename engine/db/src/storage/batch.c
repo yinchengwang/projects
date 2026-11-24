@@ -97,6 +97,32 @@ int val_batch_decode(const RecLayout *L, const ColDesc *cols, int ncols,
                  *    长度原样保留，字节原样指向记录缓冲。
                  */
                 u16 n = (u16)(e - s);
+
+                /*
+                 * ============ JSON 溢出标记：本层解不了 ============
+                 *
+                 * 标记指向一条 PT_JSON_OVF 页链，而读链需要 Pager
+                 * （列批里没有这个上下文 —— AmBatchCol 只是个字节池）。
+                 *
+                 * ⇒ 返回 E_NOTSUP，让执行器对**这一批**退回逐行解码。
+                 *
+                 * 【为什么不整条语句报错】
+                 * 一行大文档就让整表查询失败，不可接受。
+                 *
+                 * 【为什么不算计出 Pager 来】
+                 * 那要把 Pager 塞进 AmBatchCol —— 而 AmBatchCol 是
+                 * SPI 契约（spi/storage_am.h），属于"模态无关"的那一层。
+                 * 让它认识 Pager 只会把页链的知识扩散出去。
+                 *
+                 * 【为什么可以就地退回】
+                 * 返回发生在写 out->nrows **之前**，所以列批状态没被破坏；
+                 * 执行器手上还留着本批的 refs[]（行字节仍在），
+                 * 直接对这些 ref 逐行 am->decode 即可。
+                 */
+                if (cols[c].type == T_JSON &&
+                    rec_json_ovf_is_marker(buf + s, n))
+                    return E_NOTSUP;
+
                 if (cols[c].type == T_TEXT && n >= VAL_TEXT_MAX)
                     n = (u16)(VAL_TEXT_MAX - 1);
 

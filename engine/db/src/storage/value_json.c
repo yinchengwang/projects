@@ -106,6 +106,72 @@ int val_set_json_encoder(JsonEncodeFn fn)
 }
 
 /*
+ * ============ JSON 列赋值的注册表 ============
+ *
+ * 实现方是 db 层（db_json_ovf.c）—— 因为它要写 WAL，而 WAL 钩子的
+ * ctx 是 DbInstance，L1 与 L4 都看不到那个结构。
+ */
+static JsonToColumnFn g_json_to_column = NULL;
+static void          *g_json_to_column_ctx = NULL;
+
+int val_set_json_to_column(JsonToColumnFn fn, void *ctx)
+{
+    if (!fn)
+        return E_INVAL;
+    if (g_json_to_column)
+        return E_INVAL;      /* 重复注册：覆盖是静默换行为 */
+    g_json_to_column = fn;
+    g_json_to_column_ctx = ctx;
+    return OK;
+}
+
+int val_json_to_column(u32 xid, const DbValue *text, DbValue *out)
+{
+    if (!g_json_to_column)
+        return E_NOTSUP;     /* 没有 JSON 列能力 => 明确报错，不静默 */
+    return g_json_to_column(g_json_to_column_ctx, xid, text, out);
+}
+
+/* 纯编码：文本 → JSONB 字节，字节归调用方 free */
+int val_json_text_to_bytes(const DbValue *text, u8 **bytes_out, u32 *len_out)
+{
+    u8 *text_bytes = NULL;
+    u32 text_len = 0;
+    int rc;
+
+    if (!text || !bytes_out || !len_out)
+        return E_INVAL;
+    *bytes_out = NULL;
+    *len_out = 0;
+    if (text->is_null || text->type != T_TEXT)
+        return E_INVAL;
+    if (!g_json_encoder)
+        return E_NOTSUP;
+
+    /*
+     * 长 SQL 字面量是外部值，必须先物化成连续字节。
+     *
+     * 【为什么要拆成两个缓冲】
+     * 不能把 text_bytes 直接当编码器的输出缓冲 ——
+     * 输入与输出别名时，编码器写输出的那一刻输入已经被覆盖了。
+     */
+    if (text->external) {
+        rc = val_detoast(text, &text_bytes, &text_len);
+        if (rc != OK)
+            return rc;
+    } else {
+        text_bytes = (u8 *)text->s;
+        text_len = text->len;
+    }
+
+    rc = g_json_encoder((const char *)text_bytes, text_len,
+                        bytes_out, len_out);
+    if (text->external)
+        free(text_bytes);
+    return rc;
+}
+
+/*
  * ============ JSON 内联上限 ============
  *
  * 0 表示"模态没注册"。查询层拿到 0 时不做内联/页链分流判断 ——
