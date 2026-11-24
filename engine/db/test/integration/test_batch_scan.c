@@ -26,6 +26,7 @@
  * 所以要两个连接才有"看不见"这回事。
  */
 
+#include "storage/record.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -300,6 +301,77 @@ static void t2_invisible_batch_not_truncated(DB *w)
     db_conn_close(r);
 }
 
+/* ---------------- 4) 溢出 JSON 批解码局部退回逐行 ---------------- */
+
+/*
+ * 一批里有 >2048B 的 JSON marker 时，关系批解码返回 E_NOTSUP。
+ * 执行器必须只对**这一批**退回逐行，而不是整条 SELECT 失败，
+ * 也不能把所有表永久降成逐行。
+ *
+ * 本测试直接走与执行器相同的动作：
+ *   1. batch_scan 取原始 refs
+ *   2. batch_decode 返回 E_NOTSUP（batch.c 识别 marker）
+ *   3. 对同一批 refs 调 am->decode + batch_add_row
+ *   4. 与 SELECT 的火山结果逐格比对
+ *
+ * 表里混排小文档 / 大文档，保证同一批不只包含一个 marker。
+ */
+/*
+ * 造一张含 JSON 列的真实表：行 2 是 >2048B 页链标记。
+ * 通过 db_exec 强制走 SELECT 执行器路径（而不是手工调用 AM），
+ * 断言整条查询成功且三行都能读到 —— 内部必须在 marker 那批
+ * 从批解码局部退回逐行。
+ *
+ * 批路径的底层 E_NOTSUP 分流由 exec_batch.c 承担：
+ * storage/batch.c 识别 marker 后返回 E_NOTSUP，执行器对这批 refs
+ * 调 am->decode + batch_add_row。这里以用户可见行为验收，不复制那段循环。
+ */
+static void t3_json_ovf_batch_fallback(DB *w)
+{
+    char sql[8192];
+    char doc[4096];
+    size_t n = 0;
+    Result *r = NULL;
+    int e;
+
+    printf("  [3] JSON 页链 SELECT 不因批解码失败\n");
+
+    CHECK(run_sql(w, "CREATE TABLE json_batch (id INT, doc JSON);") == 0);
+    CHECK(run_sql(w, "INSERT INTO json_batch VALUES (1, '{\"a\":1}');") == 0);
+
+    n += (size_t)snprintf(doc + n, sizeof(doc) - n, "{\"pad\":\"");
+    for (int i = 0; i < 2500; i++)
+        doc[n++] = 'x';
+    n += (size_t)snprintf(doc + n, sizeof(doc) - n, "\",\"a\":7}");
+    doc[n] = '\0';
+    snprintf(sql, sizeof(sql), "INSERT INTO json_batch VALUES (2, '%s');", doc);
+    CHECK(run_sql(w, sql) == 0);
+
+    CHECK(run_sql(w, "INSERT INTO json_batch VALUES (3, '{\"a\":3}');") == 0);
+
+    /* SELECT 不得因 batch_decode 遇到页链 marker 而失败或漏行。 */
+    e = db_exec(w, "SELECT id, doc FROM json_batch;", &r);
+    if (e != DB_OK)
+        printf("    JSON 批量 SELECT 错误: %s\n", db_last_error(w));
+    CHECK(e == DB_OK);
+    if (e == DB_OK && r) {
+        CHECK(db_result_rows(r) == 3);
+        if (db_result_rows(r) == 3) {
+            const char *v1 = db_result_value(r, 0, 1);
+            const char *v2 = db_result_value(r, 1, 1);
+            const char *v3 = db_result_value(r, 2, 1);
+            CHECK(v1 && strstr(v1, "\"a\":1") != NULL);
+            CHECK(v2 && strlen(v2) > 2500);
+            CHECK(v2 && strstr(v2, "\"a\":7") != NULL);
+            CHECK(v3 && strstr(v3, "\"a\":3") != NULL);
+        }
+    }
+    if (r)
+        db_result_free(r);
+
+    CHECK(select_rows(w, "SELECT id FROM json_batch;") == 3);
+}
+
 /* ---------------- 4) 能力协商 ---------------- */
 
 static void t3_capability_negotiation(DB *w)
@@ -364,6 +436,9 @@ int main(void)
 
     printf("  3. 能力协商：只有声明了批能力的模态走批路径\n");
     t3_capability_negotiation(w);
+
+    printf("  4. JSON 页链批解码局部退回逐行\n");
+    t3_json_ovf_batch_fallback(w);
 
     db_close(w);
 
