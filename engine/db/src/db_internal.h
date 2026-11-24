@@ -248,6 +248,28 @@ typedef struct DbInstance {
 } DbInstance;
 
 /*
+ * ---------------- 开库的恢复阶段（db_recover.c 实现） ----------------
+ */
+
+/*
+ * 恢复阶段：开 WAL → 陈旧日志处置 → clog 初始化 → 从日志重建 clog
+ * → 读 checkpoint_lsn → recovery_run。
+ *
+ * path           —— 数据文件路径（日志与 clog 的路径由它派生）
+ * datafile_exists —— 开库前数据文件是否存在
+ *                    （区分"全新库"与"崩溃后留下的 0 字节库"——两种情况的
+ *                      WAL 处置完全相反，见 db_recover.c 的注释）
+ * pg / inst / db —— 已开好的 pager / 实例 / 连接（由调用方准备）
+ * did_recover_out —— 本次是否真的重放过（调用方据此决定要不要重建索引）
+ *
+ * ⚠️ 失败时**不清理**任何资源 —— 由调用方按坑 M4-48 的顺序
+ *    （先 pager_close、再 wal_close）统一清理。
+ */
+int  db_recover_stage(const char *path, bool datafile_exists,
+                      Pager *pg, DbInstance *inst, DB *db,
+                      bool *did_recover_out);
+
+/*
  * ---------------- checkpoint（v1.2 步骤 6，db_ckpt.c 实现） ----------------
  */
 
