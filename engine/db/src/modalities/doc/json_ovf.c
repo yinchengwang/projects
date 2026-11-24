@@ -238,15 +238,62 @@ bool json_should_ovf(u32 len)
  *   做法是：分配新页 ⇒ 回填**上一页**的 next ⇒ 重算上一页的校验和 ⇒ 放上一页。
  *   （上一页一直 pin 着，指针有效，不用重新取。）
  */
-int json_ovf_write(Pager *pg, const u8 *data, u32 len, u64 *ext_key_out)
+/*
+ * 把一串页号逐页归还给全局页分配器。
+ *
+ * 【为什么不能复用 json_ovf_free】
+ * json_ovf_free 是**按链走**的：它从首页出发沿 next 前进，
+ * 一旦发现某页不是 PT_JSON_OVF 就判定链坏了并中止。
+ * 而写入失败时，链的后半段**还没写过内容**（页是 pager_alloc 清零的），
+ * 页头不是 PT_JSON_OVF ⇒ 按链走会在半路中止，后半段页泄漏。
+ *
+ * 写入路径自己记着完整页号列表，逐页归还才对。
+ */
+/*
+ * 归还单个页号（不管它现在是 PT_JSON_OVF 还是全 0）。
+ *
+ * 语义与 json_ovf_free 的"逐页"部分一致：清零 → unpin → 进 freelist。
+ * 不校验页类型 —— 调用方已经确认这一页是本次新建的。
+ */
+static int json_ovf_free_one(Pager *pg, u32 pid)
 {
+    PageFrame *fr = NULL;
+    int rc;
+
+    if (pid == PAGE_ID_NIL)
+        return OK;
+
+    rc = pager_get(pg, pid, &fr);
+    if (rc != OK)
+        return rc;
+
+    memset(fr->data, 0, PAGE_SIZE);
+
+    rc = pager_unpin(pg, pid, true);
+    if (rc != OK)
+        return rc;
+
+    return pager_free(pg, pid);
+}
+
+static void ovf_free_page_list(Pager *pg, const u32 *ids, u32 n)
+{
+    u32 i;
+
+    for (i = 0; i < n; i++) {
+        (void)json_ovf_free_one(pg, ids[i]);
+    }
+}
+
+int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
+                   const u8 *data, u32 len, u64 *ext_key_out)
+{
+    u32 page_ids[JSON_OVF_MAX_PAGES];
+    u8 zeros[PAGE_SIZE];
     u32 npages;
     u32 off = 0;
     u32 i;
-    u32 first = PAGE_ID_NIL;
-    u32 prev = PAGE_ID_NIL;
-    PageFrame *prev_fr = NULL;
-    int rc;
+    int rc = OK;
 
     if (!pg || !ext_key_out)
         return E_INVAL;
@@ -263,58 +310,133 @@ int json_ovf_write(Pager *pg, const u8 *data, u32 len, u64 *ext_key_out)
     npages = (len == 0)
                  ? 1u
                  : ((len + JSON_OVF_PAY_CAP - 1u) / JSON_OVF_PAY_CAP);
+    if (npages > JSON_OVF_MAX_PAGES)
+        return E_NOSPACE;
 
+    /*
+     * ============ 第一阶段：先把**所有**页号拿下 ============
+     *
+     * 【为什么不能边分配边写】
+     * 页 i 的 next 指向页 i+1，而页 i+1 的页号在分配之前是未知的。
+     * 老实现的办法是"分配页 i+1 → 回填页 i 的 next" —— 这让**页 i 被改两次**：
+     *   ① 写载荷（next 暂填 PAGE_ID_NIL）
+     *   ② 回填 next
+     * 于是 WAL 里页 i 有两条 LOG_PAGEDATA，第二条的 before 镜像
+     * 不是"全 0"，而是"载荷 + next=NIL"。undo 只会撤销第二条 ⇒
+     * 结果是"首页还在、后面断了"的废链。
+     *
+     * 一次拿齐页号之后，每页的内容（载荷 + 最终 next）可以**一次算出来**，
+     * 于是每页恰好一条 WAL 记录，before 恒为全 0 ⇒ undo 语义干净。
+     *
+     * ⚠️ 分配后立刻 unpin：17 页同时 pin 会白白占住帧池。
+     *    丢 pin 之后页可能在第二阶段之前被逐出，第二阶段用 pager_get 重新取
+     *    即可 —— 内容还没写过，取回来的就是 pager_alloc 清过的空页。
+     */
+    memset(zeros, 0, sizeof(zeros));
     for (i = 0; i < npages; i++) {
-        u32 pid = PAGE_ID_NIL;
         PageFrame *fr = NULL;
+
+        rc = pager_alloc(pg, &page_ids[i], &fr);
+        if (rc != OK) {
+            /* 回滚：把已经拿到的页号逐一还回去（不留下半条链） */
+            ovf_free_page_list(pg, page_ids, i);
+            return rc;
+        }
+        /* 立刻放开 pin：17 页同时 pin 会白白占住帧池 */
+        rc = pager_unpin(pg, page_ids[i], false);
+        if (rc != OK) {
+            ovf_free_page_list(pg, page_ids, i + 1u);
+            return rc;
+        }
+    }
+
+    /*
+     * ============ 第二阶段：逐页写"最终内容"，每页只改一次 ============
+     *
+     * 顺序铁律（loghook.h）：**先写日志，再改页**。
+     * 所以每页先算出完整的内容快照，用它当 after；before 是全 0
+     * （pager_alloc 已经把整页清零，含复用出来的空闲页 —— 见 pager.c）。
+     */
+    for (i = 0; i < npages; i++) {
+        PageFrame *fr = NULL;
+        u8 before[PAGE_SIZE];
+        u8 after[PAGE_SIZE];
         u32 chunk = len - off;
+        u32 lsn = 0;
 
         if (chunk > JSON_OVF_PAY_CAP)
             chunk = JSON_OVF_PAY_CAP;
 
-        rc = pager_alloc(pg, &pid, &fr);
-        if (rc != OK) {
-            /* 回滚：把已经建好的那一段释放掉（不留下半条链） */
-            if (prev_fr != NULL) {
-                (void)pager_unpin(pg, prev, true);
-                prev_fr = NULL;
-            }
-            if (first != PAGE_ID_NIL)
-                (void)json_ovf_free(pg, (u64)first);
-            return rc;
-        }
+        rc = pager_get(pg, page_ids[i], &fr);
+        if (rc != OK)
+            goto fail;
 
-        page_init(fr->data, (u8)PT_JSON_OVF);
+        /*
+         * ============ before 镜像必须是"空闲页"，不是全 0 ============
+         *
+         * 这一页的**逻辑前状态**是"无主的空闲页"：
+         *   - 若是从空闲栈复用来的，它原本就是 PT_FREE；
+         *   - 若是文件尾新扩的，它从没被写过。
+         *
+         * 两种情况下 undo 都该让它回到"可回收"的形态。
+         *
+         * 【为什么不能用全 0 当 before】
+         * undo 把全 0 盖回去 ⇒ 页头 H_TYPE = 0 ⇒ 既不是 PT_JSON_OVF
+         * 也不是 PT_FREE ⇒ `pager_free_rebuild` 扫页时**两头都认不出它**
+         * ⇒ 这个页号永久泄漏（既不在 freelist，也无人引用）。
+         *
+         * 用 PT_FREE 当 before，undo 后页回到空闲态 ⇒ 开库重建空闲栈时
+         * 能被扫出来并回收 ⇒ 未提交事务留下的链页不会泄漏。
+         */
+        memcpy(before, zeros, PAGE_SIZE);
+        (void)page_init(before, (u8)PT_FREE);
+
+        /* 在**本地快照**里把最终内容拼好，不碰页 */
+        memcpy(after, zeros, PAGE_SIZE);
+        (void)page_init(after, (u8)PT_JSON_OVF);
         if (chunk)
-            memcpy(fr->data + JSON_OVF_DATA_OFF, data + off, chunk);
-        put_u32(fr->data + JSON_OVF_LEN_OFF, chunk);
-        put_u32(fr->data + JSON_OVF_NEXT_OFF, PAGE_ID_NIL);
-        page_set_checksum(fr->data);
+            memcpy(after + JSON_OVF_DATA_OFF, data + off, chunk);
+        put_u32(after + JSON_OVF_LEN_OFF, chunk);
+        put_u32(after + JSON_OVF_NEXT_OFF,
+                (i + 1u < npages) ? page_ids[i + 1] : PAGE_ID_NIL);
+        page_set_checksum(after);
 
-        if (prev_fr != NULL) {
-            /* 回填上一页的 next，并重算它的校验和 */
-            put_u32(prev_fr->data + JSON_OVF_NEXT_OFF, pid);
-            page_set_checksum(prev_fr->data);
-            rc = pager_unpin(pg, prev, true);
-            if (rc != OK)
-                return rc;
-            prev_fr = NULL;
-        } else {
-            first = pid;
+        if (wal != NULL && wal->fn != NULL) {
+            rc = wal->fn(wal->ctx, wal->xid, (u8)LOG_PAGEDATA,
+                         page_ids[i], PAGE_SLOT_NONE, LOG_NO_SLOT_OFF,
+                         before, (u16)PAGE_SIZE,
+                         after, (u16)PAGE_SIZE, &lsn);
+            if (rc != OK) {
+                (void)pager_unpin(pg, page_ids[i], false);
+                goto fail;
+            }
         }
 
-        prev = pid;
-        prev_fr = fr;
+        /* 日志已经落定，这时才改页 */
+        memcpy(fr->data, after, PAGE_SIZE);
+        if (lsn)
+            page_set_lsn(fr->data, lsn);
+
+        rc = pager_unpin(pg, page_ids[i], true);
+        if (rc != OK)
+            goto fail;
+
         off += chunk;
     }
 
-    /* 最后一页的 next 本来就是 PAGE_ID_NIL（链尾） */
-    rc = pager_unpin(pg, prev, true);
-    if (rc != OK)
-        return rc;
-
-    *ext_key_out = (u64)first;
+    *ext_key_out = (u64)page_ids[0];
     return OK;
+
+fail:
+    /*
+     * 补偿：整条链都是本次新建的，没有 tuple 引用它 ⇒ 全部归还。
+     *
+     * ⚠️ 用逐页归还而**不是** json_ovf_free：
+     *    失败时链的后半段还没写内容（页头是全 0），按链走会在半路
+     *    判成"链损坏"并中止 ⇒ 后半段页泄漏。
+     */
+    ovf_free_page_list(pg, page_ids, npages);
+    return rc;
 }
 
 /* ---------------- 读取 ---------------- */
@@ -382,7 +504,7 @@ int json_ovf_read(Pager *pg, u64 ext_key, u8 *buf, u16 cap, u16 *len_out)
 int json_ovf_free(Pager *pg, u64 ext_key)
 {
     u32 ids[JSON_OVF_MAX_PAGES];
-    u32 total = 0;
+    u32 pid;
     u32 pages = 0;
     u32 i;
     int rc;
@@ -392,12 +514,55 @@ int json_ovf_free(Pager *pg, u64 ext_key)
     if (ext_key > 0xFFFFFFFFu)
         return E_INVAL;
 
-    /* 先把整条链走一遍（顺便记下每一页的页号）：
-     * 链要是坏的，就一个页都不释放 —— 免得"释放到一半发现链断了"。 */
-    rc = json_ovf_walk(pg, (u32)ext_key, NULL, 0, &total, &pages, ids);
-    if (rc != OK)
-        return rc;
+    /*
+     * ============ 幂等契约 ============
+     *
+     * VACUUM 是长事务，中途崩溃后再跑一次就会重复调用本函数。
+     * 所以这里**不靠"不会重复调用"的假设**，而是靠页头自证：
+     *
+     *   - 首页已经不是 PT_JSON_OVF ⇒ 这条链早被释放过（或已被别人接管）
+     *     ⇒ 直接返回 OK（空操作）；
+     *   - 首页是 PT_JSON_OVF、但中间某页不是 ⇒ 链真的坏了
+     *     ⇒ 返回 E_CORRUPT，且**一个页都不释放**。
+     *
+     * 第二种是"链被改坏"，不是"已释放"，两者必须区分开 ——
+     * 把损坏的链当已释放就会静默丢数据。
+     */
+    pid = (u32)ext_key;
+    while (pid != PAGE_ID_NIL) {
+        PageFrame *fr = NULL;
 
+        /* 闸门：链比这还长 ⇒ 成环了 */
+        if (pages >= JSON_OVF_MAX_PAGES)
+            return E_CORRUPT;
+
+        rc = pager_get(pg, pid, &fr);
+        if (rc != OK) {
+            if (pages == 0)
+                return OK;      /* 首页都取不到 ⇒ 早就不存在了 */
+            return E_CORRUPT;
+        }
+
+        if (fr->data[H_TYPE] != (u8)PT_JSON_OVF ||
+            !page_verify_checksum(fr->data)) {
+            (void)pager_unpin(pg, pid, false);
+            return (pages == 0) ? OK : E_CORRUPT;
+        }
+
+        ids[pages] = pid;
+        pid = get_u32(fr->data + JSON_OVF_NEXT_OFF);
+        pages++;
+        (void)pager_unpin(pg, ids[pages - 1], false);
+    }
+
+    /*
+     * 先"拆链"再"还页"：把首页标记清掉，后续任何重复调用都会走
+     * "首页不是 PT_JSON_OVF ⇒ OK" 那条快捷路径。
+     *
+     * ⚠️ 顺序很重要：如果先还页、再清标记，中途崩溃会留下
+     *    "页已进 freelist、页头还是 PT_JSON_OVF" 的状态 ⇒
+     *    重跑时会再还一次 ⇒ double-free。
+     */
     for (i = 0; i < pages; i++) {
         PageFrame *fr = NULL;
 

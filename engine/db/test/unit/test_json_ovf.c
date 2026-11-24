@@ -37,6 +37,33 @@
 
 #define PATH "test/tmp/g15_json_ovf.db"
 
+typedef struct {
+    u32 calls;
+    u32 next_lsn;
+    u32 bad_calls;
+} WalCapture;
+
+static int capture_wal(void *ctx, u32 xid, u8 logtype, u32 page_id,
+                       u16 slot, u16 slot_off,
+                       const u8 *before, u16 before_len,
+                       const u8 *after, u16 after_len,
+                       u32 *lsn_out)
+{
+    WalCapture *cap = (WalCapture *)ctx;
+    (void)xid;
+    (void)slot;
+    (void)slot_off;
+    if (logtype != LOG_PAGEDATA || page_id == PAGE_ID_NIL ||
+        before == NULL || before_len != PAGE_SIZE ||
+        after == NULL || after_len != PAGE_SIZE || lsn_out == NULL) {
+        cap->bad_calls++;
+        return E_INVAL;
+    }
+    cap->calls++;
+    *lsn_out = ++cap->next_lsn;
+    return OK;
+}
+
 static int failures = 0;
 static Pager *pg = NULL;
 
@@ -101,7 +128,7 @@ static void t_sizes(void)
 
         fill(src, n, si + 1u);
 
-        rc = json_ovf_write(pg, src, n, &key);
+        rc = json_ovf_write(pg, NULL, src, n, &key);
         CHECK(rc == OK);
         if (rc != OK) {
             free(src);
@@ -160,7 +187,7 @@ static void t_roundtrip(void)
 
         fill(src, n, n);
 
-        rc = json_ovf_write(pg, src, n, &key);
+        rc = json_ovf_write(pg, NULL, src, n, &key);
         if (rc != OK) {
             CHECK(rc == OK);
             break;
@@ -213,7 +240,7 @@ static void t_two_call(void)
     }
 
     fill(src, n, 99u);
-    CHECK(json_ovf_write(pg, src, n, &key) == OK);
+    CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
 
     /* 第一次：只问长度 */
     len = 0;
@@ -298,7 +325,7 @@ static void t_page_count(void)
     }
 
     fill(src, n, 7u);
-    CHECK(json_ovf_write(pg, src, n, &key) == OK);
+    CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
 
     CHECK(json_ovf_page_count(pg, key, &npages) == OK);
     real = walk_chain(pg, key);
@@ -343,7 +370,7 @@ static void t_corruption(void)
         u16 len = 0;
         PageFrame *fr = NULL;
 
-        CHECK(json_ovf_write(pg, src, n, &key) == OK);
+        CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
         CHECK(pager_get(pg, (u32)key, &fr) == OK);
         if (fr != NULL) {
             fr->data[H_TYPE] = 0x02;   /* 假装自己是 heap 页 */
@@ -368,7 +395,7 @@ static void t_corruption(void)
         u16 len = 0;
         PageFrame *fr = NULL;
 
-        CHECK(json_ovf_write(pg, src, n, &key) == OK);
+        CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
         CHECK(pager_get(pg, (u32)key, &fr) == OK);
         if (fr != NULL) {
             fr->data[JSON_OVF_DATA_OFF + 5] ^= 0xFFu;   /* 改内容，不改校验和 */
@@ -392,7 +419,7 @@ static void t_corruption(void)
         u16 len = 0;
         PageFrame *fr = NULL;
 
-        CHECK(json_ovf_write(pg, src, n, &key) == OK);
+        CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
         CHECK(pager_get(pg, (u32)key, &fr) == OK);
         if (fr != NULL) {
             put_u32(fr->data + JSON_OVF_NEXT_OFF, 0x0FFFFFFEu);  /* 不存在的页 */
@@ -417,7 +444,7 @@ static void t_corruption(void)
         u16 len = 0;
         PageFrame *fr = NULL;
 
-        CHECK(json_ovf_write(pg, src, n, &key) == OK);
+        CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
         CHECK(pager_get(pg, (u32)key, &fr) == OK);
         if (fr != NULL) {
             put_u32(fr->data + JSON_OVF_LEN_OFF, 0xFFFFFFFFu);
@@ -462,7 +489,7 @@ static void t_free(void)
 
     fill(src, n, 23u);
 
-    CHECK(json_ovf_write(pg, src, n, &key) == OK);
+    CHECK(json_ovf_write(pg, NULL, src, n, &key) == OK);
     CHECK(json_ovf_page_count(pg, key, &npages) == OK);
     CHECK(npages == expect_pages(n));
 
@@ -487,87 +514,156 @@ static void t_free(void)
     free(src); free(buf);
 }
 
-/* ---------------- 第 8 组：写入时页池耗尽的回滚 ---------------- */
+/* ---------------- 第 9 组：写入中途失败的回滚 ---------------- */
 
 /*
- * 【这一组验的是"真实可达"的分配失败】
+ * 【为什么不再伪造"页池耗尽"】
  *
- * 帧池只有 1 帧：写一份两页的文档时，第一页还没 unpin 就要求第二帧
- * ⇒ 第二次 pager_alloc 返回 E_NOSPACE。
+ * 老实现是"边分配边写"，第一页还 pin 在手里就要求第二帧 ⇒
+ * 单帧池自然触发 E_NOSPACE。新实现改成"先一次拿齐全部页号、再逐页写内容"，
+ * 每页拿到后立刻 unpin ⇒ **同时只 pin 一帧**，池子再小也不会因为
+ * "占着不放"而耗尽。那条故障路径已经不存在了。
+ *
+ * 现在真正可达的失败点是 **WAL 写失败**：第 N 页的日志写不进去，
+ * 这一页就不许改，整条链必须回滚。这正是本组要验的。
  *
  * 要求：
- *   - 返回那个分配错误，不是"看起来成功"；
+ *   - 返回那个 WAL 错误，不是"看起来成功"；
  *   - ext_key_out 保持 PAGE_ID_NIL（调用方拿不到句柄）；
- *   - 页数回到调用前（不留未引用的空洞页号）；
- *   - 帧全部释放（没有 pin 泄漏）；
- *   - 之后还能正常写一份单页文档（页确实还回去了）。
- *
- * ⚠️ 这个测试**不伪造 unpin 错误**：pager_unpin 的失败只可能来自
- *    "pin 不配对 / 不是本线程持锁"，那是调用方违反 Pager 所有权合同，
- *    同线程此时也无法安全 free —— 不属于本函数可恢复的故障。
+ *   - 整条链的页全部回到空闲栈（一页都不泄漏）；
+ *   - 之后还能正常写一份新文档（帧确实没被占死）。
  */
-static void t_alloc_fail_rollback(void)
+typedef struct {
+    u32 fail_at_call;   /* 第几次 wal 调用开始失败（1 起算；0 = 从不失败） */
+    u32 calls;
+} WalFail;
+
+static int failing_wal(void *ctx, u32 xid, u8 logtype, u32 page_id,
+                       u16 slot, u16 slot_off,
+                       const u8 *before, u16 before_len,
+                       const u8 *after, u16 after_len,
+                       u32 *lsn_out)
 {
-    const char *path = "test/tmp/g15_json_ovf_1frame.db";
-    u32 n = JSON_OVF_PAY_CAP + 1u;
+    WalFail *f = (WalFail *)ctx;
+    (void)xid; (void)logtype; (void)page_id;
+    (void)slot; (void)slot_off; (void)before; (void)before_len;
+    (void)after; (void)after_len;
+
+    f->calls++;
+    if (f->fail_at_call != 0 && f->calls >= f->fail_at_call)
+        return E_IO;               /* 日志写不进去 */
+    if (lsn_out)
+        *lsn_out = f->calls;
+    return OK;
+}
+
+static void t_write_wal_fail_rollback(void)
+{
+    const char *path = "test/tmp/g15_json_ovf_rollback.db";
+    u32 n = JSON_OVF_PAY_CAP * 2u;   /* 恰好两页 */
     u8 *src = (u8 *)malloc(n);
-    Pager *small = NULL;
-    u64 key = 0;
-    u32 free_before = 0;
-    u32 pid = 0;
-    PageFrame *fr = NULL;
+    u64 key = 999;
+    u32 free_before;
+    WalFail wf;
+    JsonOvfWal wal;
+    Pager *own = NULL;
     int rc;
 
-    printf("  [8] 写入时页池耗尽：错误返回且不留半条链\n");
+    printf("  [9] 写入中途 WAL 失败：整条链回滚\n");
 
     if (src == NULL) {
         CHECK(0);
         return;
     }
-
     fill(src, n, 91u);
 
+    /*
+     * 用**独立的、空闲栈为空**的 pager：
+     * 主 pg 的空闲栈里已有别的测试回收的页，写两页时可能先从栈里弹出 ⇒
+     * "回滚后空闲页 +2" 这个断言会被分配时的 pop 抵掉，变得不可算。
+     */
     remove(path);
-    CHECK(pager_open(path, 1u, &small) == OK);
-    if (small == NULL) {
+    CHECK(pager_open(path, 32u, &own) == OK);
+    if (own == NULL) {
         CHECK(0);
         free(src);
         return;
     }
+    CHECK(pager_free_count(own) == 0u);
 
-    free_before = pager_free_count(small);
-    rc = json_ovf_write(small, src, n, &key);
-    CHECK(rc != OK);                       /* 第二帧拿不到 ⇒ 分配失败 */
-    CHECK(rc == E_NOSPACE);
+    /* 第 2 页的日志失败 ⇒ 第 1 页已经写好，必须一起回滚 */
+    memset(&wf, 0, sizeof(wf));
+    wf.fail_at_call = 2u;
+    wal.fn = failing_wal;
+    wal.ctx = &wf;
+    wal.xid = 5u;
+
+    free_before = pager_free_count(own);
+    rc = json_ovf_write(own, &wal, src, n, &key);
+    CHECK(rc != OK);
+    CHECK(rc == E_IO);
     CHECK(key == (u64)PAGE_ID_NIL);        /* 调用方拿不到句柄 */
 
-    /*
-     * 回滚的正确口径是"已分配的页进了空闲栈"，不是 npages 变小：
-     * pager_free 只把页号放回空闲栈，文件里的页仍然存在。
-     *
-     * ⚠️ 不要断言 pager_frames_used() == 0：它数的是**常驻帧**
-     *    （page_id != NIL），页释放后仍留在缓冲池里是正常行为。
-     *    "没有 pin 泄漏"由下一段的单帧重分配证明。
-     */
-    CHECK(pager_free_count(small) == free_before + 1u);
+    /* 两页都要回到空闲栈 —— 一页都不许泄漏 */
+    CHECK(pager_free_count(own) == free_before + 2u);
 
-    /* 帧真的还回去了：同样的单帧池能再写一份一页的文档 */
-    key = 0;
-    rc = json_ovf_write(small, src, JSON_OVF_PAY_CAP, &key);
-    CHECK(rc == OK);
-    CHECK(key != (u64)PAGE_ID_NIL);
-    if (rc == OK)
-        CHECK(json_ovf_free(small, key) == OK);
+    /* 帧确实没被占死：同一池子还能再写一份两页文档并读回来 */
+    {
+        WalCapture capture;
+        JsonOvfWal okwal;
+        u64 key2 = PAGE_ID_NIL;
+        u8 *dst = (u8 *)malloc(n);
+        u16 len = 0;
 
-    /* 再确认一次分配仍正常 */
-    pid = 0;
-    fr = NULL;
-    CHECK(pager_alloc(small, &pid, &fr) == OK);
-    if (fr != NULL)
-        CHECK(pager_unpin(small, pid, true) == OK);
+        memset(&capture, 0, sizeof(capture));
+        okwal.fn = capture_wal;
+        okwal.ctx = &capture;
+        okwal.xid = 6u;
 
-    (void)pager_close(small);
+        CHECK(json_ovf_write(own, &okwal, src, n, &key2) == OK);
+        CHECK(key2 != (u64)PAGE_ID_NIL);
+        if (dst != NULL) {
+            CHECK(json_ovf_read(own, key2, dst, (u16)n, &len) == OK);
+            CHECK(len == (u16)n);
+            CHECK(memcmp(src, dst, n) == 0);
+            free(dst);
+        }
+        CHECK(json_ovf_free(own, key2) == OK);
+    }
+
+    (void)pager_close(own);
     remove(path);
+    free(src);
+}
+
+/* ---------------- 第 8 组：WAL 写入与幂等释放 ---------------- */
+
+static void t_wal_and_idempotent_free(void)
+{
+    const u32 n = JSON_OVF_PAY_CAP + 9u;
+    u8 *src = (u8 *)malloc(n);
+    u64 key = PAGE_ID_NIL;
+    WalCapture capture;
+    JsonOvfWal wal;
+
+    printf("  [8] WAL 写入与幂等释放\n");
+    memset(&capture, 0, sizeof(capture));
+    wal.fn = capture_wal;
+    wal.ctx = &capture;
+    wal.xid = 7u;
+    if (src == NULL) {
+        CHECK(0);
+        return;
+    }
+    fill(src, n, 17u);
+
+    CHECK(json_ovf_write(pg, &wal, src, n, &key) == OK);
+    CHECK(capture.calls == expect_pages(n));
+    CHECK(capture.bad_calls == 0);
+    CHECK(json_ovf_free(pg, key) == OK);
+    /* 第二次不能重复把同一页压入 freelist。 */
+    CHECK(json_ovf_free(pg, key) == OK);
+    CHECK(capture.bad_calls == 0);
     free(src);
 }
 
@@ -608,7 +704,8 @@ int main(void)
     t_corruption();
     t_free();
     t_threshold();
-    t_alloc_fail_rollback();
+    t_write_wal_fail_rollback();
+    t_wal_and_idempotent_free();
 
     (void)pager_close(pg);
     pg = NULL;

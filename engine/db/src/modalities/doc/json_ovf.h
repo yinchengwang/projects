@@ -71,6 +71,7 @@
  */
 
 #include "common/error.h"
+#include "common/loghook.h"
 #include "common/types.h"
 #include "storage/pager.h"
 
@@ -133,25 +134,21 @@ extern "C" {
  */
 bool json_should_ovf(u32 len);
 
+typedef struct {
+    LogHookFn fn;
+    void *ctx;
+    u32 xid;
+} JsonOvfWal;
+
 /*
  * 把一份内容写成页链。
  *
- * ext_key_out 拿到**首页的页号**（外部值的 ext_key 就是它）。
- * ext_off 固定为 0（一个外置文档就是一个整体，没有"偏移"可言 ——
- * 与 vector 同一个口径）。
- *
- * 页链是**新建**的（不接管已有链）。
- *
- * ⚠️ **并发合同（调用方串行化）**：同一 ext_key 的 read/write/free
- *    不得并发执行；调用方必须在上层串行化（例如持有同一把表/行锁）。
- *    本层**不提供**链级锁、读者引用计数或快照语义。
- *
- * ⚠️ **失败语义**：pager_alloc 失败时会回收本次已建的部分链，
- *    ext_key_out 保持 PAGE_ID_NIL。若失败来自 pager_unpin 的
- *    ownership 违规（pin 不配对 / 非本线程持锁），那属于调用方
- *    违反 Pager 合同，本层无法在同线程安全恢复，只返回错误。
+ * wal == NULL 只保留给旧的独立页链单测；生产写路径必须传 WAL 上下文。
+ * 每页的最终内容只写一次，调用 wal->fn 前不改页，避免恢复 undo 的
+ * before 镜像出现"先写载荷、后回填 next"的半成品状态。
  */
-int json_ovf_write(Pager *pg, const u8 *data, u32 len, u64 *ext_key_out);
+int json_ovf_write(Pager *pg, const JsonOvfWal *wal,
+                   const u8 *data, u32 len, u64 *ext_key_out);
 
 /*
  * 按页链读一份内容。
