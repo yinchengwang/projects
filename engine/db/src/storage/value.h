@@ -94,6 +94,19 @@
 typedef int (*DetoastFn)(void *ctx, u64 key, u64 off,
                          u8 *buf, u16 cap, u16 *len_out);
 
+/*
+ * 外部值的来源种类。
+ *
+ * 【为什么用枚举而不是 bool 标志位】
+ * 以后还会有别的来源（比如按帧读的 blob、按整体读的 vector 都可能复用
+ * T_JSON 之外的路径）。一个 u8 计数能放到 255 种，而 bool 到第二种就要重构。
+ */
+typedef enum {
+    VAL_EXT_NONE       = 0,   /* 不是外部值 */
+    VAL_EXT_MEM        = 1,   /* 内容在堆缓冲里：谁分配谁释放 */
+    VAL_EXT_PAGE_CHAIN = 2    /* 内容在页链里：ctx 是稳定对象，链归 tuple */
+} ValExtKind;
+
 typedef struct {
     bool is_null;
     u8   type;                  /* ColType */
@@ -113,6 +126,31 @@ typedef struct {
      * 这样 DbValue 依然可以按值随意拷贝，不会出现"谁负责 free"的问题。
      */
     bool      external;
+
+    /*
+     * 外部值的**来源种类**（仅 external == true 时有效）。
+     *
+     * 【为什么必须有它】
+     * 外部 JSON 有两种来源，释放语义完全不同：
+     *
+     *   VAL_EXT_MEM        内容在堆缓冲里（256..2048B 的临时外部值）
+     *                      ⇒ 谁分配谁释放，val_json_free 可以 free(ext_ctx)
+     *
+     *   VAL_EXT_PAGE_CHAIN 内容在 PT_JSON_OVF 页链里（>2048B）
+     *                      ⇒ ext_ctx 是**实例级稳定对象**（不是堆分配），
+     *                        绝不能 free；链的所有权在 tuple 上
+     *
+     * 用 ext_fn 的指针身份判断来源是不行的：函数指针相等比较虽然合法，
+     * 但那把"释放策略"藏进了实现细节，且换一个 detoast 包装就失效。
+     *
+     * 【为什么它是 u8 而不是枚举类型字段】
+     * 布局：实测 sizeof(DbValue) == 320，external 在偏移 282、
+     * ext_key 在 288 ⇒ 283..287 是 5 字节填充。
+     * 把 u8 放进这个空洞里，sizeof 与所有字段偏移**一个字节都不变**
+     * —— 全仓有 memcpy(row, DbValue*n) 这类按值假设的地方，布局不能动。
+     * 文件末尾有 _Static_assert 钉住。
+     */
+    u8        ext_kind;      /* ValExtKind */
     u64       ext_key;
     u64       ext_off;
     DetoastFn ext_fn;
@@ -143,9 +181,23 @@ void val_external_text(DbValue *v, u64 key, u64 off,
  *   - >2048B 的 JSON：doc 模态用 PT_JSON_OVF 页链，ext_fn = json_ovf_detoast。
  *
  * value 层只收通用句柄和 DetoastFn，不依赖 json_ovf 或任何模态头。
+ *
+ * ⚠️ 本函数产出的值 ext_kind == VAL_EXT_MEM（默认）。
+ *    页链来源请用 val_external_json_kind()。
  */
 void val_external_json(DbValue *v, u64 key, u64 off,
                        DetoastFn fn, void *ctx);
+
+/*
+ * 同上，但显式指定来源种类。
+ *
+ * 【为什么需要单独的入口而不是给原函数加参数】
+ * 现有 4 处调用点都是"内存外部值"，加参数会让它们全部要改 ——
+ * 而它们改错的后果是 val_json_free 走错释放路径（free 一个非堆指针）。
+ * 保留原函数 = 默认安全，新来源显式声明。
+ */
+void val_external_json_kind(DbValue *v, u64 key, u64 off,
+                            DetoastFn fn, void *ctx, u8 kind);
 
 /*
  * 通用「内存外部值」读者：内容就在 ctx 指向的那块内存里。
@@ -258,10 +310,38 @@ int  val_set_json_encoder(JsonEncodeFn fn);
 int  val_json_from_text(const DbValue *text, DbValue *value);
 
 /*
- * 释放 val_json_from_text 产出的外部缓冲。
- * 非外部值时是空操作（可重复调用）。
+ * ============ 释放 JSON 外部值 ============
+ *
+ * 两种来源的处理完全不同（见 DbValue.ext_kind 的说明）：
+ *
+ *   VAL_EXT_MEM        free(ext_ctx) —— 缓冲是这里分配的
+ *   VAL_EXT_PAGE_CHAIN **不碰链** —— ctx 是实例级稳定对象，链归 tuple
+ *
+ * 两种情况都会清掉 external 标记，所以可以安全地重复调用。
+ *
+ * ⚠️ 别指望它归还页链：那是 val_json_release_chain 的职责。
  */
 void val_json_free(DbValue *value);
+
+/*
+ * ============ 主动归还页链（写路径失败补偿专用） ============
+ *
+ * 与 val_json_free 的分工：
+ *   val_json_free        清掉运行时标记，**不碰链**（保证拷贝安全）
+ *   val_json_release_chain  真的把链还回页分配器
+ *
+ * 【为什么必须分开】
+ * val_copy 会拷 ext_ctx 指针 —— 副本被清时若顺手释放共享的链，
+ * 原值就悬空了。所以清标记和还链是两个语义相反的动作。
+ *
+ * 【为什么通过注册而不是直接调】
+ * 值层是 L1、json_ovf 在 L4；直接调就是反向依赖，分层门禁会红。
+ * doc 模态在 db_json_init 里注册归还函数。
+ *
+ * 非页链值调用本函数返回 E_INVAL（调用方用错了）。
+ */
+int  val_set_json_chain_free(int (*fn)(void *pager, u64 head));
+int  val_json_release_chain(DbValue *value);
 
 /*
  * 渲染成新分配的 C 字符串（调用方 free）。

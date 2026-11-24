@@ -1,5 +1,6 @@
 #include "storage/value.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,12 @@
 static void val_reset(DbValue *v)
 {
     v->is_null = false;
+    /*
+     * ext_kind 必须和 external 一起清 —— 否则一个"曾经是页链句柄"的值
+     * 被复用成内联值时，ext_kind 还留着 VAL_EXT_PAGE_CHAIN。
+     * 现在读路径只看 external，但"残留的字段"是典型的定时炸弹。
+     */
+    v->ext_kind = (u8)VAL_EXT_NONE;
     v->type = 0;
     v->i = 0;
     v->d = 0.0;
@@ -96,6 +103,7 @@ void val_copy(DbValue *dst, const DbValue *src)
     dst->d = src->d;
     dst->len = src->len;
     dst->external = src->external;
+    dst->ext_kind = src->ext_kind;
     dst->ext_key = src->ext_key;
     dst->ext_off = src->ext_off;
     dst->ext_fn = src->ext_fn;
@@ -124,6 +132,7 @@ void val_external_text(DbValue *v, u64 key, u64 off,
     val_reset(v);
     v->type = T_TEXT;
     v->external = true;
+    v->ext_kind = (u8)VAL_EXT_MEM;
     v->ext_key = key;
     v->ext_off = off;
     v->ext_fn = fn;
@@ -137,16 +146,24 @@ void val_external_text(DbValue *v, u64 key, u64 off,
  * 这样调用方可以在 detoast 后按 JSONB 解析，而不会把二进制字节
  * 当成 UTF-8 文本输出。
  */
-void val_external_json(DbValue *v, u64 key, u64 off,
-                       DetoastFn fn, void *ctx)
+void val_external_json_kind(DbValue *v, u64 key, u64 off,
+                            DetoastFn fn, void *ctx, u8 kind)
 {
     val_reset(v);
     v->type = T_JSON;
     v->external = true;
+    v->ext_kind = (kind == (u8)VAL_EXT_NONE) ? (u8)VAL_EXT_MEM : kind;
     v->ext_key = key;
     v->ext_off = off;
     v->ext_fn = fn;
     v->ext_ctx = ctx;
+}
+
+void val_external_json(DbValue *v, u64 key, u64 off,
+                       DetoastFn fn, void *ctx)
+{
+    /* 默认来源是"内存外部值" —— 现有 4 处调用点都是这一种 */
+    val_external_json_kind(v, key, off, fn, ctx, (u8)VAL_EXT_MEM);
 }
 
 /*
@@ -594,3 +611,21 @@ ValFunc val_func_find(const char *name)
     }
     return NULL;
 }
+
+/*
+ * ==================== DbValue 布局断言 ====================
+ *
+ * `ext_kind` 是**塞进原有填充字节**的：external 在偏移 282，
+ * ext_key 在 288，中间 283..287 有 5 字节空洞。
+ *
+ * 这条断言存在的意义：全仓有多处按值假设的地方
+ * （memcpy(row, DbValue×n)、与固定偏移相关的调试代码）。
+ * 一旦有人给 DbValue 加字段把布局撑大了，这里会编译失败 ——
+ * 比"某个性能基准悄悄变慢"或"某处越界读"好得多。
+ */
+_Static_assert(sizeof(DbValue) == 320u,
+               "DbValue 布局变了：检查 ext_kind 是否挤占了别的字段");
+_Static_assert(offsetof(DbValue, external) == 282u,
+               "DbValue.external 偏移变了");
+_Static_assert(offsetof(DbValue, ext_key) == 288u,
+               "DbValue.ext_key 偏移变了");

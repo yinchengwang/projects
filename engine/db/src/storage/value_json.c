@@ -164,12 +164,96 @@ void val_json_free(DbValue *value)
 {
     if (!value)
         return;
-    if (value->type == T_JSON && value->external && value->ext_ctx) {
-        free(value->ext_ctx);
+    if (value->type != T_JSON || !value->external)
+        return;
+
+    /*
+     * ============ 按来源分派（这是必须的，不是优化） ============
+     *
+     * VAL_EXT_MEM：ext_ctx 是 malloc 出来的缓冲 ⇒ free 它。
+     *
+     * VAL_EXT_PAGE_CHAIN：ext_ctx 是**实例级稳定对象**（表上下文 /
+     * 锁对象，不是堆分配）⇒ **绝不能 free**。free 它等于把表锁的
+     * 内存还回堆，之后所有读这条链的路径都会踩已释放内存。
+     *
+     * 页链的**所有权在 tuple 上**：这里只清运行时标记，
+     * 链本身由 VACUUM 或启动孤儿扫描回收（设计 §6.4 / §7）。
+     * 写入失败要主动还链的话，用 val_json_release_chain（显式表达意图）。
+     */
+    if (value->ext_kind == (u8)VAL_EXT_PAGE_CHAIN) {
         value->ext_ctx = NULL;
         value->ext_fn = NULL;
         value->external = false;
+        value->ext_kind = (u8)VAL_EXT_NONE;
+        value->ext_key = 0;
+        value->ext_off = 0;
+        return;
     }
+
+    if (value->ext_ctx) {
+        free(value->ext_ctx);
+        value->ext_ctx = NULL;
+    }
+    value->ext_fn = NULL;
+    value->external = false;
+    value->ext_kind = (u8)VAL_EXT_NONE;
+}
+
+/*
+ * ============ 主动归还页链（写路径失败补偿专用） ============
+ *
+ * 【为什么不能复用 val_json_free】
+ * val_json_free 的语义是"清掉运行时标记" —— 它**不碰链**。
+ * 那条纪律保证"拷贝出去的值"不会因为副本被清而把共享的链释放掉。
+ *
+ * 而写路径失败时需要真的把链还回去（否则空间泄漏到下次启动）。
+ * 两者语义相反，必须是两个函数：一个清标记、一个还链。
+ *
+ * 【为什么要注册回调而不是直接调 json_ovf_free】
+ * 值层是 L1，json_ovf 在 L4。直接调就是 L1→L4 反向依赖，
+ * tools/check_deps.sh 会红。所以由 doc 模态注册一个归还函数。
+ */
+static int (*g_json_chain_free)(void *pager, u64 head);
+
+int val_set_json_chain_free(int (*fn)(void *pager, u64 head))
+{
+    if (!fn)
+        return E_INVAL;
+    if (g_json_chain_free)
+        return E_INVAL;      /* 重复注册：覆盖是静默换行为 */
+    g_json_chain_free = fn;
+    return OK;
+}
+
+int val_json_release_chain(DbValue *value)
+{
+    u64 head;
+    void *pager;
+    int rc;
+
+    if (!value)
+        return E_INVAL;
+    if (value->type != T_JSON || !value->external)
+        return E_INVAL;
+    if (value->ext_kind != (u8)VAL_EXT_PAGE_CHAIN)
+        return E_INVAL;      /* 不是页链值，不该走这条路 */
+    if (!g_json_chain_free)
+        return E_NOTSUP;
+
+    head = value->ext_key;
+    pager = value->ext_ctx;   /* doc 模态注册时约定：ctx 就是 Pager */
+
+    rc = g_json_chain_free(pager, head);
+
+    /* 无论成功与否都清标记：链要么还了、要么留成孤儿由启动扫描回收，
+     * 但**不能重复归还**（重复归还 = double-free）。 */
+    value->ext_ctx = NULL;
+    value->ext_fn = NULL;
+    value->external = false;
+    value->ext_kind = (u8)VAL_EXT_NONE;
+    value->ext_key = 0;
+    value->ext_off = 0;
+    return rc;
 }
 
 /*
