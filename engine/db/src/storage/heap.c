@@ -197,6 +197,15 @@ int heap_open(Pager *pg, FreeList *fl, u32 root_page, u16 table_id,
     h->wal = fn;
     h->wal_ctx = ctx;
 
+    /*
+     * 表级 JSON 链锁在这里初始化（C5.3b-b Task 5）。
+     *
+     * 放在 freelist_grow 之前：那之后的失败路径会调 heap_destroy，
+     * 而 heap_destroy 无条件 destroy 这把锁 ⇒ 必须先 init 过，
+     * 否则是对未初始化对象调 destroy。
+     */
+    json_ovf_table_lock_init(&h->json_ovf_lock);
+
     int rc = freelist_grow(fl, (u32)pager_npages(pg));
     if (rc != OK) {
         heap_destroy(h);
@@ -234,6 +243,7 @@ void heap_destroy(Heap *h)
 {
     if (!h)
         return;
+    json_ovf_table_lock_destroy(&h->json_ovf_lock);
     pthread_mutex_destroy(&h->plist_mu);
     free(h->plist);
     free(h);
@@ -618,6 +628,11 @@ u32 heap_npages(const Heap *h)
 Pager *heap_pager(const Heap *h)
 {
     return h ? h->pager : NULL;
+}
+
+JsonOvfTableLock *heap_json_ovf_lock(Heap *h)
+{
+    return h ? &h->json_ovf_lock : NULL;
 }
 
 u64 heap_wal_calls(const Heap *h)

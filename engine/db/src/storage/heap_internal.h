@@ -82,6 +82,19 @@ struct Heap {
 
     /* WAL 调用次数（同上：实例级共享的计数器） */
     _Atomic u64 wal_calls;
+
+    /*
+     * JSON 页链的读/释放互斥锁（C5.3b-b Task 5）。
+     *
+     * 【为什么挂在表上】
+     * 链是**这张表某些 tuple** 的，读者与回收者都按表操作；
+     * 每表一把就不会让不相干的表互相排队。
+     *
+     * 【为什么是值而不是指针】
+     * DbRwLock 本身就是定长结构（原子量 + 一把互斥量），
+     * 内联进 Heap 少一次分配，也不会出现"锁没建好就被用"的窗口。
+     */
+    JsonOvfTableLock json_ovf_lock;
 };
 
 struct HeapScan {

@@ -380,6 +380,23 @@ db_err db_open(const char *path, DB **out)
     db->db.pager = pg;
 
     /*
+     * 回收无主的 JSON 溢出页链（C5.3b-b Task 6 / 设计 §8）。
+     *
+     * 【为什么必须放在这里】
+     *   - catalog 已打开 ⇒ 能遍历所有关系表、拿到 schema 与 heap 句柄；
+     *   - 还没有任何连接、任何模态打开 ⇒ **释放链与读链天然互斥**，
+     *     不需要额外加锁，也不会把别人正在读的页还回去。
+     *   放在 catalog 之前拿不到表；放在模态注册之后就有并发读者了。
+     *
+     * 【失败不阻塞开库】
+     * 设计 §8/§11 的裁决：回收失败最多是这次没要回空间，下次开库再试。
+     * 所以这里是 (void)，不参与 rc 判定 —— 与 pager_free_rebuild 同款取舍。
+     */
+#if DB_HAS_DOC
+    (void)db_reclaim_json_orphans(inst, NULL);
+#endif
+
+    /*
      * blob 模态（v0.8）。
      *
      * blob 存储是**实例级共享**的 —— 所有连接看同一片对象空间。

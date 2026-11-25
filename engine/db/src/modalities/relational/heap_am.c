@@ -179,6 +179,61 @@ static int heap_am_get(StorageAM *am, Rid rid, u8 *buf, u16 cap, u16 *len)
     return heap_get(c->heap, rid, buf, cap, len);
 }
 
+/*
+ * 把解码出来的页链 JSON 值就地物化成内存外部值（C5.3b-b Task 5 的读锁闭环）。
+ *
+ * ==================== 为什么必须在**这里**物化 ====================
+ *
+ * 不解码成"句柄 + 延迟物化"的原因，是一次实测出来的：
+ *
+ *   val_from_record_layout_ctx 只产出一个 ext_fn/ext_ctx 句柄，
+ *   **真正的页读发生在调用方随后调的 val_detoast 上**。
+ *   若只在解码函数体内加读锁，锁早在读页之前就放掉了 ——
+ *   等于没加锁。设计 §9.2 要求的"整行 JSON 读取期间持读锁"落不了地。
+ *
+ * 所以这里改成：拿到句柄后**立刻**在锁内读完，把值换成 VAL_EXT_MEM
+ * （内容在堆缓冲里，之后不再碰页）。锁的区间因此真实覆盖了"沿 next
+ * 走完整条链"的整个过程，VACUUM 的写锁就不可能插进来。
+ *
+ * ==================== 代价 ====================
+ *
+ * 每行大 JSON 多一次堆分配（原本是延迟到真要用时才读）。换来的是
+ * 读/释放互斥真的成立 —— 也不再有"句柄活到锁外"的悬空窗口。
+ * 缓冲的所有者是调用方：val_json_free 会 free 它（VAL_EXT_MEM 那条路径）。
+ */
+static int materialize_chain_json(HeapAmCtx *c, DbValue *vals)
+{
+    JsonOvfTableLock *lock = heap_json_ovf_lock(c->heap);
+
+    for (int i = 0; i < c->ncols; i++) {
+        DbValue *v = &vals[i];
+        u8 *bytes = NULL;
+        u32 n = 0;
+        int rc;
+
+        if (v->type != T_JSON || v->is_null || !v->external)
+            continue;
+        if (v->ext_kind != (u8)VAL_EXT_PAGE_CHAIN)
+            continue;
+
+        /*
+         * 读锁罩住"整条链读完"。json_ovf_lock_rdlock 在 lock == NULL 时
+         * 是空安全包装（写路径构造的值还没有归属表），所以不需要额外判空。
+         */
+        rc = json_ovf_lock_rdlock(lock);
+        if (rc != OK)
+            return rc;
+        rc = val_detoast(v, &bytes, &n);
+        (void)json_ovf_lock_rdunlock(lock);
+        if (rc != OK)
+            return rc;
+
+        /* 换成内存外部值：从此这一行不再依赖任何页 */
+        val_external_json(v, (u64)(uintptr_t)bytes, n, val_mem_detoast, bytes);
+    }
+    return OK;
+}
+
 static int heap_am_decode(StorageAM *am, const u8 *buf, u16 len, DbValue *out)
 {
     HeapAmCtx *c = ctx_of(am);
@@ -195,8 +250,12 @@ static int heap_am_decode(StorageAM *am, const u8 *buf, u16 len, DbValue *out)
      * ⚠️ Pager 是实例级对象，活得比任何查询都久 ⇒ 放进 ext_ctx 不会悬空。
      *    （对比：如果传的是 HeapAmCtx 的地址，查询结束就成了野指针。）
      */
-    return val_from_record_layout_ctx(&c->layout, c->cols, c->ncols,
-                                      buf, len, heap_pager(c->heap), out);
+    int rc = val_from_record_layout_ctx(&c->layout, c->cols, c->ncols,
+                                        buf, len, heap_pager(c->heap), out);
+    if (rc != OK)
+        return rc;
+
+    return materialize_chain_json(c, out);
 }
 
 static bool heap_am_visible(StorageAM *am, const u8 *buf, u16 len,
@@ -352,6 +411,79 @@ static int heap_am_remove(StorageAM *am, u32 xid, Rid rid)
 /* ---------------- 维护操作 ---------------- */
 
 /*
+ * 从一条 tuple 记录里找出所有 JSON 溢出链的首页（C5.3b-b Task 5）。
+ *
+ * ctx 是 HeapAmCtx（它有布局与列定义这两样"怎么找标记"的全部信息）。
+ *
+ * 【为什么用 rec_json_ovf_* 而不是 include 文档模态的头】
+ * 分层铁律禁止 modalities/relational 依赖 modalities/doc（两条腿互不相认）。
+ * 溢出的 12 字节标记协议住在 **storage/record.h（L1）** —— 那一层才是
+ * "tuple 里怎么表示外置值"的权威，L4 两个模态都只消费它。
+ */
+static int am_json_heads(void *ctx, const u8 *rec, u16 len,
+                         u64 *heads, u32 cap, u32 *n_out)
+{
+    const HeapAmCtx *c = (const HeapAmCtx *)ctx;
+    Value vals[REC_MAX_COLS];
+
+    if (!c || !rec || !heads || !n_out || cap == 0u)
+        return E_INVAL;
+
+    *n_out = 0;
+    if (rec_decode_layout(&c->layout, c->cols, rec, len, vals) != OK)
+        return E_CORRUPT;      /* 解不开 ⇒ 这条 tuple 的链这次不回收 */
+
+    for (int i = 0; i < c->ncols && *n_out < cap; i++) {
+        u32 head = 0;
+        u32 chain_len = 0;
+
+        if (c->cols[i].type != T_JSON || vals[i].is_null)
+            continue;
+        if (!rec_json_ovf_is_marker(vals[i].u.text.p, vals[i].u.text.n))
+            continue;
+        /*
+         * 解不开的标记（head 非法 / chain_len 超 u16）**跳过**：
+         * 那是一行坏数据，读它的人会拿到 E_CORRUPT；但它指向的链
+         * 有没有人用已经说不清了 ⇒ 宁可留给启动扫描，也不在这里猜。
+         */
+        if (rec_json_ovf_decode(vals[i].u.text.p, vals[i].u.text.n,
+                                &head, &chain_len) != OK)
+            continue;
+
+        (void)chain_len;        /* 释放只需要首页 */
+        heads[(*n_out)++] = (u64)head;
+    }
+    return OK;
+}
+
+/*
+ * 把一条 JSON 溢出链还给页分配器（C5.3b-b Task 5）。
+ *
+ * ctx 是 Pager*。
+ *
+ * 【为什么绕道值层的 val_json_release_chain 而不是直接调 json_ovf_free】
+ * `json_ovf_free` 在 modalities/doc（L4），与本地（L4 relational）平级
+ * 且互不可见。值层早就有一个注册表（doc 模态在 db_json_init 时注册了
+ * 归还函数），这里借它的分派能力，等于复用了既有的 L4→L1 回调通道。
+ *
+ * 值层会顺手清掉 ext_ctx 等运行时标记 —— 这只是个临时句柄，不影响 tuple。
+ */
+static int am_json_chain_free(void *ctx, u64 head)
+{
+    DbValue v;
+    int rc;
+
+    if (!ctx)
+        return E_INVAL;
+
+    memset(&v, 0, sizeof(v));
+    v.type = T_JSON;
+    val_external_json_kind(&v, head, 0, NULL, ctx, (u8)VAL_EXT_PAGE_CHAIN);
+    rc = val_json_release_chain(&v);
+    return rc;
+}
+
+/*
  * 版本回收（VACUUM）。
  *
  * 只有"有版本"的模态需要。blob 的对象不可变 → 没有版本。
@@ -364,7 +496,9 @@ static int heap_am_vacuum(StorageAM *am, TxnTable *txns, u32 xid,
         return E_INVAL;
 
     VacuumStats st;
-    int rc = vacuum_table(c->heap, txns, xid, &st);
+    int rc = vacuum_table(c->heap, txns, xid, &st,
+                          am_json_heads, c,
+                          am_json_chain_free, heap_pager(c->heap));
     if (rc != OK)
         return rc;
 

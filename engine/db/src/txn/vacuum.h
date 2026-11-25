@@ -56,7 +56,47 @@ typedef struct {
     u64 compacted_pages; /* 整理过（页内 compact）的页数 */
     u64 freed_bytes;     /* 页内 compact 回收的空间（字节） */
     u64 frag_pct;        /* 整理**前**的全表碎片率（百分比） */
+    u64 json_chains;     /* 回收的 JSON 溢出页链数（C5.3b-b） */
 } VacuumStats;
+
+/* ---------------- JSON 溢出页链的回收回调（C5.3b-b Task 5） ---------------- */
+
+/*
+ * 为什么是回调而不是直接调用
+ *
+ * txn/ 是 L2，`modalities/doc/json_ovf.h` 是 L4。`#include` 它就是
+ * L2 → L4 的反向依赖，`tools/check_deps.sh` 会直接红。
+ *
+ * 而且"12 字节溢出标记在哪一列的变长区里"这件事 txn 层根本不知道 ——
+ * 那要 schema（列定义）。schema 只有 heap AM（modalities/relational）有。
+ *
+ * 所以 txn 层只负责**时序**（什么时候读标记、什么时候释放、什么时候删 slot），
+ * "怎么从一条记录里找出链首页"和"怎么把链还给分配器"都由调用方注入。
+ */
+
+/*
+ * 从一条 tuple 记录里取出所有 JSON 溢出链的首页。
+ *
+ * rec/len —— 这条记录的字节（**仍然可读**时才调）
+ * heads   —— 输出数组，每项一条链的首页页号
+ * cap     —— heads 的容量（调用方按表的 JSON 列数给）
+ * n_out   —— 实际写出几个
+ *
+ * 返回 OK 表示解析成功（没有 JSON 链也是 OK，n_out = 0）。
+ * 返回值不是 OK ⇒ 这条 tuple 的链这次不回收（宁可留垃圾，不可错还页）。
+ */
+typedef int (*VacuumJsonHeadsFn)(void *ctx, const u8 *rec, u16 len,
+                                 u64 *heads, u32 cap, u32 *n_out);
+
+/*
+ * 把一条链还给页分配器。
+ *
+ * 实现方（关系 AM）必须在**持有表级写锁**的情况下调用真正的释放，
+ * 否则可能与正在读这条链的查询撞上（见 common/json_ovf_lock.h）。
+ *
+ * 幂等由释放实现本身保证：重复释放同一条链不得重复还页。
+ */
+typedef int (*VacuumJsonChainFreeFn)(void *ctx, u64 head);
 
 /*
  * 对一张表做 vacuum。
@@ -67,8 +107,13 @@ typedef struct {
  * WAL 日志，日志里的 xid 必须是真正干活的这个事务，
  * 不能是"某个共享状态里的当前值"（多连接下会串号）。
  *
+ * json_heads / json_heads_ctx、json_free / json_free_ctx 为 NULL 表示
+ * 这张表没有 JSON 溢出链（或调用方不关心）—— 行为与改造前完全一致。
+ *
  * 返回值：统计信息。错误码 E_* 表示失败。
  */
-int  vacuum_table(Heap *h, TxnTable *txn, u32 xid, VacuumStats *stats);
+int  vacuum_table(Heap *h, TxnTable *txn, u32 xid, VacuumStats *stats,
+                  VacuumJsonHeadsFn json_heads, void *json_heads_ctx,
+                  VacuumJsonChainFreeFn json_free, void *json_free_ctx);
 
 #endif /* DB_TXN_VACUUM_H */

@@ -10,6 +10,8 @@
 #include "storage/page.h"
 #include "storage/pager.h"
 
+#include "common/json_ovf_lock.h"
+
 /*
  * 堆表 AM
  *
@@ -154,6 +156,24 @@ u64  heap_wal_calls(const Heap *h);
  * heap AM 就能在解码时把 Pager 当 decode_ctx 传给 val_from_record_layout_ctx。
  */
 Pager *heap_pager(const Heap *h);
+
+/*
+ * 这张表的 JSON 页链锁（C5.3b-b Task 5）。
+ *
+ * 【谁用它】
+ *   - 关系 AM 的 decode：读锁罩住"整行页链读完"（materialize_chain_json）
+ *   - VACUUM 的回收回调：写锁罩住"整条链还回分配器"
+ *
+ * 【为什么挂在 Heap 上而不是进程级静态表】
+ * 锁的粒度必须是"每张表一把"：不同表的 JSON 链互不相干，
+ * 共用一把锁会把两张表的读写排成一条队。
+ * 而 Heap 的生命周期正好等于"这张表在本次会话里存在"——
+ * 表被 catalog_close 拆掉时锁一起拆，不会泄漏。
+ *
+ * 【为什么用访问器而不是让调用方看 heap_internal.h】
+ * 同 heap_pager：Heap 的布局是实现细节。调用方只需要一个 JsonOvfTableLock*。
+ */
+JsonOvfTableLock *heap_json_ovf_lock(Heap *h);
 
 /* ---------------- 页内 compact（v1.2 步骤 5） ---------------- */
 

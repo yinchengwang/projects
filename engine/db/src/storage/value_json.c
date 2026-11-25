@@ -118,8 +118,26 @@ int val_set_json_to_column(JsonToColumnFn fn, void *ctx)
 {
     if (!fn)
         return E_INVAL;
-    if (g_json_to_column)
-        return E_INVAL;      /* 重复注册：覆盖是静默换行为 */
+    /*
+     * 同一个实现可以重复注册 —— 但**必须换掉 ctx**。
+     *
+     * 【这是踩过的真实缺陷，不是理论洁癖】
+     * ctx 生产路径上是 DbInstance，而 DbInstance 每次 db_open 都是新的。
+     * 原实现把"已注册"一律当冲突拒掉（返回 E_INVAL），而 db_json_ovf_init
+     * 又把 E_INVAL 当"别的连接注册过了"忽略 ⇒ 同一进程里第二次开库之后，
+     * 注册表里留着的还是**上次那个已经 free 掉的实例指针**。
+     * 表现为：重开库后写 JSON 列直接 E_INVAL 或段错误（悬空 ctx）。
+     *
+     * 现有测试都只 open 一次，所以这条一直没被发现；
+     * test_json_ovf_reclaim 在同一进程里反复开库才把它暴露出来。
+     *
+     * 【为什么"换实现"仍然拒绝】
+     * 两个不同实现抢同一个口子是静默换行为（调用方看不出来）。
+     * 而"同一个实现 + 新实例"是唯一正确的组合：实现是纯代码，
+     * 每实例只有 ctx 不同。
+     */
+    if (g_json_to_column && g_json_to_column != fn)
+        return E_INVAL;
     g_json_to_column = fn;
     g_json_to_column_ctx = ctx;
     return OK;

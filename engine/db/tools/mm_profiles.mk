@@ -59,7 +59,7 @@ MM_FILES_vector := $(wildcard src/modalities/vector/*.c) src/db_vec.c src/repl_v
 MM_FILES_ft     := $(wildcard src/modalities/ft/*.c) src/db_ft.c src/db_ft_txn.c src/repl_ft.c
 MM_FILES_geo    := $(wildcard src/modalities/geo/*.c) src/db_geo.c src/db_geo_query.c src/repl_geo.c
 MM_FILES_ts     := $(wildcard src/modalities/ts/*.c) src/db_ts.c src/repl_ts.c
-MM_FILES_doc    := $(wildcard src/modalities/doc/*.c) src/db_json_ovf.c
+MM_FILES_doc    := $(wildcard src/modalities/doc/*.c) src/db_json_ovf.c src/db_json_reclaim.c
 MM_FILES_relational := src/storage/heap.c src/storage/heap_compact.c src/storage/heap_scan.c \
                        src/storage/record.c src/storage/value.c \
                        $(wildcard src/catalog/*.c) $(wildcard src/index/*.c) \

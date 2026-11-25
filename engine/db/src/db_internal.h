@@ -262,6 +262,17 @@ typedef struct DbInstance {
 int  db_json_ovf_init(DbInstance *inst);
 
 /*
+ * 回收无主的 JSON 溢出页链（db_json_reclaim.c 实现，C5.3b-b Task 6）。
+ *
+ * 调用时机：catalog 打开**之后**、模态注册**之前**。
+ * 那时还没有任何连接能读 JSON 值 ⇒ 释放链与读链天然互斥。
+ *
+ * ⚠️ **失败不阻塞开库**（设计 §8 / §11）：最多是这次没要到空间。
+ *    调用方不要拿它的返回值决定 db_open 的成败。
+ */
+int  db_reclaim_json_orphans(DbInstance *inst, u32 *freed_pages_out);
+
+/*
  * ---------------- 开库的恢复阶段（db_recover.c 实现） ----------------
  */
 
