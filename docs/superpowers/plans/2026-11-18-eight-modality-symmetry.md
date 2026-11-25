@@ -1681,7 +1681,7 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
   详见 `docs/superpowers/specs/2026-11-23-json-column-long-literal-design.md`
   与实施计划 `docs/superpowers/plans/2026-11-23-json-column-long-literal.md`。
 
-- [ ] **C5.3b-b：`PT_JSON_OVF` 页链所有权与 MVCC 生命周期（待独立设计）**
+- [x] **C5.3b-b：`PT_JSON_OVF` 页链所有权与 MVCC 生命周期**
 
   用户已确认目标所有权模型：每个 heap tuple 版本独占一条页链；运行时 abort 回收本
   事务创建且没有被已提交版本接管的链；DELETE 只标记 `xmax`；只有 VACUUM 在旧版本
@@ -1712,8 +1712,24 @@ int eval_where(const Expr *e, BatchCtx *bc, const ColDesc *cols,
   6. 孤儿链 —— 启动时扫 tuple 判定（不用"扫页 + 走 next"那套，因为它发现不了
      "首页被引用、后续页是孤儿"的混合情况）；`DetoastFn` 的 u16 上限 65535 保留为公开契约。
 
-  ⚠️ **本子步仍未实现**：设计已定，代码待写。在实现与故障注入测试完成前，
-  仍然禁止把 JSON 溢出页链接入生产 heap 写路径。
+  **（2026-11-25 状态）实现已完成并回归绿**，见
+  `docs/superpowers/plans/2026-11-24-json-ovf-ownership-implementation.md`
+  的执行状态段。实测：`mingw32-make clean && mingw32-make all` 零诊断、
+  `sh test/run.sh` 120 个测试全通过（新增 `test_json_ovf_reclaim` 覆盖
+  VACUUM 回收 / 启动孤儿扫描 / 活链不许动）、两个门禁 ✓、九个 profile 与
+  八个 smoke 全 `rc=0`。
+
+  与设计的两处**有意偏差**（细节见实现计划的执行状态段与
+  `engine/db/docs/MODALITIES.md` 的坑 M7-38..42）：
+  1. **读锁的落点**：设计设想"解码期间持读锁"，但实测无效 —— 解码只产出未物化
+     句柄，真正的页读发生在其后的 `val_detoast`。实现改为在 `heap_am_decode` 里
+     当场物化成 `VAL_EXT_MEM`，锁区间才真实覆盖整条链；
+  2. **VACUUM 释放顺序**：设计 §7.1 写"先删 slot、最后释放链"，实现取
+     "先还链、再删 slot"（slot 删掉后读不出链首页）。两个崩溃窗口由
+     `json_ovf_free` 的幂等性兜住 —— 与设计 §7.4 的最终方案一致。
+
+  ⚠️ 仍未做的只有"完整失败矩阵"（9 个注入点只覆盖 VACUUM 中途崩溃与
+  >65535 两处）与提交动作本身。
 
 - [ ] **附：TEXT 列长值落点评估（不实现）**
 

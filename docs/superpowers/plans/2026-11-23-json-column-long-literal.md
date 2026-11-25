@@ -19,6 +19,25 @@
 - 临时产物只放 `test/tmp/`，任务结束前清理；不要提交 `test/tmp/` 下的任何文件。
 - 每个任务结束提交一次，提交后立即 `git push origin main`。
 
+## 执行状态（2026-11-25 回填）
+
+> 勾选框按**代码与测试的实际落地情况**回填，不是按计划写作顺序。
+
+| 门禁 | 结果 |
+|---|---|
+| `mingw32-make clean && mingw32-make all` | **零诊断** |
+| `sh test/run.sh` | **120 个测试：120 通过** |
+| `sh tools/check_deps.sh` / `check_a7.sh` | 均 ✓ |
+| 九个 profile + 八个 smoke | 全部 `rc=0` |
+
+Task 1–6 的全部步骤已落地（对应提交 `5a7e2bbc0`、`cb9bde747`、`c4d3310b0`、
+`0e01f9968`、`0a15a24bb`，以及 `0d4471143` 的文档同步）。Task 7 的 Step 1–5
+（全量门禁、九个 profile、`MODALITIES.md` M7-35/36/37 三条坑、注释措辞、
+C5.3b-a 计划段落）也已完成。
+
+**仍未做**：Step 6 的临时产物清理与提交、Step 7 的父仓指针更新 —— 这两步是
+"提交动作"，本轮不代用户执行。全量门禁在本轮重新跑过（见上表）。
+
 ---
 
 ### Task 1: 词法器 —— 字符串字面量不再静默截断
@@ -36,7 +55,7 @@
   - `Token.len`（`u16`）：字符串字面量的**精确**解码后长度（`''` 按一个字节计）。
   - 词法错误：长度 > `TK_STR_MAX` ⇒ 返回 `E_INVAL`，`tok->text` 写人类可读原因（含上限数字），`tok->type = TK_EOF`。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 创建 `test/unit/test_lexer_string.c`：
 
@@ -159,7 +178,7 @@ int main(void)
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -169,7 +188,7 @@ sh test/run.sh 2>&1 | grep -E 'test_lexer_string|个测试：'
 
 预期：`test_lexer_string` 编译通过但运行失败（长度断言红），其余 113 个测试仍通过。
 
-- [ ] **Step 3: 实现 `Token.str_value` 与分层存储**
+- [x] **Step 3: 实现 `Token.str_value` 与分层存储**
 
 修改 `src/query/lexer.h`：
 
@@ -273,7 +292,7 @@ sh test/run.sh 2>&1 | grep -E 'test_lexer_string|个测试：'
     }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -283,7 +302,7 @@ sh test/run.sh 2>&1 | grep -E 'test_lexer_string|个测试：'
 
 预期：`test_lexer_string` PASS，总数 115 个测试全通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd C:/code/projects
@@ -316,7 +335,7 @@ git push origin main
   - `Expr.text_len`（`u16`）：长字面量长度。
   - `Expr.lit`：长字面量时是**外部 `T_TEXT`**（`val_external_text` + `val_mem_detoast`），`len` 字段不设（协议是长度靠 detoast 问）。
 
-- [ ] **Step 1: 追加失败的测试**
+- [x] **Step 1: 追加失败的测试**
 
 在 `test/unit/test_lexer_string.c` 的 `main()` 末尾（`if (failures == 0)` 之前）插入：
 
@@ -362,7 +381,7 @@ git push origin main
 #include "storage/value.h"
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -372,7 +391,7 @@ sh test/run.sh 2>&1 | grep -E 'test_lexer_string|个测试：'
 
 预期：编译失败（`Expr` 没有 `text_owned` 字段）。
 
-- [ ] **Step 3: 实现所有权移交**
+- [x] **Step 3: 实现所有权移交**
 
 `src/query/parser.h` 的 `Expr` 里，在 `Expr *r;` 之后加：
 
@@ -462,7 +481,7 @@ void p_advance(Parser *p)
     return OK;
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -472,7 +491,7 @@ sh test/run.sh 2>&1 | grep -E 'test_lexer_string|个测试：'
 
 预期：`test_lexer_string` PASS，115 个测试全通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd C:/code/projects
@@ -508,7 +527,7 @@ git push origin main
   - `int val_to_json_alloc(const DbValue *v, char **out, u32 *len);` —— 渲染成新分配的 C 字符串（长度由渲染器先测后写），调用方 `free`；未注册渲染器 ⇒ `E_NOTSUP`。
   - `val_to_record()` 现在会物化**外部 `T_TEXT`**（此前写进记录的是空串）。
 
-- [ ] **Step 1: 写失败的测试（记录编码修复）**
+- [x] **Step 1: 写失败的测试（记录编码修复）**
 
 创建 `test/unit/test_text_len.c`：
 
@@ -580,7 +599,7 @@ int main(void)
 }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -590,7 +609,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|个测试：'
 
 预期：`test_text_len` 运行失败（`rlen > 300` 与 `back.len == 300` 断言红）。
 
-- [ ] **Step 3: 实现 `val_to_record` 的 `T_TEXT` 物化**
+- [x] **Step 3: 实现 `val_to_record` 的 `T_TEXT` 物化**
 
 `src/storage/value.c` 的 `val_to_record()` 里，把 `case T_TEXT:` 改成：
 
@@ -628,7 +647,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|个测试：'
             break;
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -638,7 +657,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|个测试：'
 
 预期：`test_text_len` PASS，116 个测试全通过。
 
-- [ ] **Step 5: 实现分配式 JSON 编码与渲染接口**
+- [x] **Step 5: 实现分配式 JSON 编码与渲染接口**
 
 `src/storage/value.h`，在 `JsonRenderFn` 相关声明之后加：
 
@@ -826,7 +845,7 @@ int val_to_json_alloc(const DbValue *v, char **out, u32 *len)
 }
 ```
 
-- [ ] **Step 6: 追加值层测试并运行**
+- [x] **Step 6: 追加值层测试并运行**
 
 在 `test/unit/test_value_json.c` 追加第 7 组（编码器未注册时的行为）：
 
@@ -860,7 +879,7 @@ sh test/run.sh 2>&1 | grep -E 'test_value_json|test_text_len|个测试：'
 
 预期：两个都 PASS，116 个测试全通过。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 cd C:/code/projects
@@ -889,7 +908,7 @@ git push origin main
 - Consumes: Task 3 的 `JsonEncodeFn`
 - Produces: `db_json_init()` 注册 `fn_json_encode_alloc`，使 `val_json_from_text` 可用。
 
-- [ ] **Step 1: 追加失败的测试**
+- [x] **Step 1: 追加失败的测试**
 
 在 `test/unit/test_json_func.c` 追加：
 
@@ -922,7 +941,7 @@ git push origin main
 
 （`test_json_func.c` 已有 `db_json_init()` 的调用；确认文件顶部 include 了 `storage/value.h`。）
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -932,7 +951,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_func|个测试：'
 
 预期：运行失败（`val_json_from_text` 返回 `E_NOTSUP`，因为还没注册编码器）。
 
-- [ ] **Step 3: 实现 `fn_json_encode_alloc`**
+- [x] **Step 3: 实现 `fn_json_encode_alloc`**
 
 在 `src/modalities/doc/json_func.c` 里，`fn_json_extract` 之前加：
 
@@ -994,7 +1013,7 @@ static int fn_json_encode_alloc(const char *text, u32 text_len,
 
 文件顶部 include 补 `modalities/doc/json_ovf.h`（取 `JSON_INLINE_MAX`）。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1004,7 +1023,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_func|个测试：'
 
 预期：`test_json_func` PASS，116 个测试全通过。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd C:/code/projects
@@ -1030,7 +1049,7 @@ git push origin main
 - Consumes: Task 3 的 `val_json_from_text` / `val_json_free`、Task 4 的注册
 - Produces: 无新公开接口（行为变化）。
 
-- [ ] **Step 1: 追加失败的测试**
+- [x] **Step 1: 追加失败的测试**
 
 在 `test/unit/test_text_len.c` 的 `main()` 末尾追加 SQL 层用例：
 
@@ -1095,7 +1114,7 @@ git push origin main
 
 （已有的第 7 组覆盖 >2048B 拒绝，保持不变。）
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1105,7 +1124,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|test_json_column|个测试：'
 
 预期：`test_text_len` 的 SQL 用例失败（当前 300B 写入静默成功）；`test_json_column` 的 1200B 用例失败。
 
-- [ ] **Step 3: 实现 `coerce_to_col` 的 TEXT 长度校验**
+- [x] **Step 3: 实现 `coerce_to_col` 的 TEXT 长度校验**
 
 `src/query/exec_write.c` 的 `case T_TEXT:` 改成：
 
@@ -1151,7 +1170,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|test_json_column|个测试：'
         break;
 ```
 
-- [ ] **Step 4: 实现 INSERT 的 JSON 编码中转**
+- [x] **Step 4: 实现 INSERT 的 JSON 编码中转**
 
 `src/query/exec_write.c` 的 `exec_insert()` 里，把 JSON 分支改成用 `val_json_from_text`：
 
@@ -1204,7 +1223,7 @@ fail:
     return rc;
 ```
 
-- [ ] **Step 5: 实现 UPDATE 的 JSON 编码中转**
+- [x] **Step 5: 实现 UPDATE 的 JSON 编码中转**
 
 `src/query/exec_write.c` 的 `exec_update()` 里，把 JSON 分支改成同一形态：
 
@@ -1252,7 +1271,7 @@ fail:
 nv.external = false;`），让所有权唯一地落在 `row[set_idx]` 上，
 再由统一的释放点回收。
 
-- [ ] **Step 6: 运行测试确认通过**
+- [x] **Step 6: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1262,7 +1281,7 @@ sh test/run.sh 2>&1 | grep -E 'test_text_len|test_json_column|个测试：'
 
 预期：两个都 PASS，116 个测试全通过。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 cd C:/code/projects
@@ -1290,7 +1309,7 @@ git push origin main
 - Consumes: Task 3 的 `val_to_json_alloc`
 - Produces: 无新公开接口。
 
-- [ ] **Step 1: 确认测试已存在且当前为红**
+- [x] **Step 1: 确认测试已存在且当前为红**
 
 Task 5 已把 `test_json_column.c` 的 1200B 断言写好；本任务先确认它此刻仍红
 （因为 `b_push()` 还在用 512 字节栈缓冲）：
@@ -1303,7 +1322,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_column|个测试：'
 
 预期：`test_json_column` 仍 FAIL（`strlen(buf) > 1200` 红）。
 
-- [ ] **Step 2: 实现 `b_push()` 的 JSON 分支**
+- [x] **Step 2: 实现 `b_push()` 的 JSON 分支**
 
 `src/query/exec.c` 的 `b_push()` 里，把 `T_JSON` 分支改成：
 
@@ -1353,7 +1372,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_column|个测试：'
         }
 ```
 
-- [ ] **Step 3: 运行测试确认通过**
+- [x] **Step 3: 运行测试确认通过**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1363,7 +1382,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_column|个测试：'
 
 预期：`test_json_column` PASS，116 个测试全通过。
 
-- [ ] **Step 4: 提交**
+- [x] **Step 4: 提交**
 
 ```bash
 cd C:/code/projects
@@ -1388,7 +1407,7 @@ git push origin main
 - Consumes: Task 1–6 的全部产出
 - Produces: 无代码接口。
 
-- [ ] **Step 1: 跑完整门禁**
+- [x] **Step 1: 跑完整门禁**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1401,7 +1420,7 @@ sh tools/check_a7.sh
 
 预期：零诊断；测试全通过；两个门禁都打印 ✓。
 
-- [ ] **Step 2: 跑九个模态 profile**
+- [x] **Step 2: 跑九个模态 profile**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -1415,7 +1434,7 @@ done
 
 预期：九个都是 `rc=0`。
 
-- [ ] **Step 3: 补 MODALITIES.md 的坑记录**
+- [x] **Step 3: 补 MODALITIES.md 的坑记录**
 
 在 `engine/db/docs/MODALITIES.md` 的 §9.9 末尾追加三条（编号接在现有 M7-34 之后）：
 
@@ -1443,7 +1462,7 @@ done
 （`JSON_INLINE_MAX`）；>2048B 在写 heap 之前明确拒绝。
 ```
 
-- [ ] **Step 4: 同步既有注释的措辞**
+- [x] **Step 4: 同步既有注释的措辞**
 
 `engine/db/test/unit/test_blob_am.c` 与 `engine/db/test/integration/test_spi_it.c` 里
 "塞不进 SQL 的标量值（上限 255）"改成：
@@ -1452,7 +1471,7 @@ done
  * blob 的一帧是 4076 字节，塞不进 SQL 的标量值（TEXT 列上限 255 字节）。
 ```
 
-- [ ] **Step 5: 同步计划文档**
+- [x] **Step 5: 同步计划文档**
 
 在 `docs/superpowers/plans/2026-11-18-eight-modality-symmetry.md` 的 C5.3b-a 段落里，
 把"编码缓冲长度受 2048B 限制"改成：

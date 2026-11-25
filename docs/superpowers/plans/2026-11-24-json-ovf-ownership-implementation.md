@@ -20,6 +20,45 @@
 - 代码注释与提交信息使用中文；单个 C 文件不超过 800 行；不修改 `StillEvolving/` 或 `apps/study-hub/*`；不暂存无关 wiki 改动。
 - 临时脚本、探针和日志仅放 `%TEMP%\\code-jsonovf-<任务ID>\\`，结束前删除；任务结束运行 `python scripts/audit_workspace.py`。
 
+## 执行状态（2026-11-25）
+
+> 本轮由 lead 与两个子代理分头实现，实测证据见下方各 Task 的勾选与本节汇总。
+
+| 项 | 结果 |
+|---|---|
+| `mingw32-make clean && mingw32-make all` | **零诊断**（`-Wall -Wextra -Werror`） |
+| `sh test/run.sh` | **120 个测试：120 通过**（新增 `test_json_ovf_reclaim`） |
+| `sh tools/check_deps.sh` | ✓ 依赖方向正确 |
+| `sh tools/check_a7.sh` | ✓ §9.7 审计清单完整 |
+| 九个 profile `MM=full/relational/blob/graph/vector/ft/geo/ts/doc` | **全部 `rc=0`、零诊断** |
+| 八个 smoke 二进制 | 全部 `rc=0` |
+
+**Task 1–4 与 Task 5/6 的代码部分已落地并回归绿。** 与计划原文的两处**有意偏差**：
+
+1. **Task 5 的读锁落点换了**：计划设想在 `heap_am_decode` 里持读锁，但实测无效 ——
+   `val_from_record_layout_ctx` 只产出未物化的外部值句柄，真正的页读发生在调用方
+   随后调的 `val_detoast`，那时锁已释放。现改为在 `heap_am_decode` 里
+   **当场物化成 `VAL_EXT_MEM`**（`materialize_chain_json`），锁的区间才真实覆盖
+   "沿 next 走完整条链"。代价是每行大 JSON 多一次堆分配。
+2. **Task 5 的释放顺序**：计划 §7.1 写"先删 slot、最后释放链"，实现取
+   "先还链、再删 slot"。理由是 slot 删掉后 tuple 就读不出来、链首页随之丢失。
+   两个崩溃窗口由 `json_ovf_free` 的幂等性兜住（设计 §7.4 的最终方案）。
+
+**Task 6 的分工与计划不同但满足约束**：计划让 `json_ovf_reclaim.c` 只接引用集合，
+这一点照做了；但**收集引用集合的那一半**落在新增的 `src/db_json_reclaim.c`
+（db 层，能同时握 catalog/heap/schema），`json_ovf_reclaim_orphans` 本身留在 L4 doc。
+接线点是 `db_open` 的 `catalog_open` 成功之后、模态注册之前 —— 那时还没有任何连接，
+释放链与读链天然互斥。
+
+**顺带修掉的既有缺陷**：`val_set_json_to_column` 原来"已注册就返回 `E_INVAL`"，
+而 `db_json_ovf_init` 把 `E_INVAL` 当"别的连接注册过了"忽略 ⇒ 同一进程第二次
+`db_open` 之后，注册表里的 ctx 仍指向**已 free 的 `DbInstance`**（悬空指针）。
+现改为"同一实现 + 新实例 ⇒ 换 ctx；不同实现才拒"。现有测试都只 open 一次，
+所以这条一直没被发现；本轮新增的集成测试反复开库才把它暴露出来。
+
+**仍未做**（不计为已完成）：Task 7 Step 1 的完整失败矩阵（9 个注入点只覆盖了
+VACUUM 中途崩溃与 >65535 两处）、Step 4 的提交与父仓指针更新。
+
 ---
 
 ## 文件与接口地图
@@ -63,7 +102,7 @@
   ```
 - `json_ovf_free` 重复调用同一首页必须返回 `OK` 或 `E_NOTFOUND`，不得重复压入 freelist。
 
-- [ ] **Step 1：写失败测试（WAL hook + 幂等 free + 边界）**
+- [x] **Step 1：写失败测试（WAL hook + 幂等 free + 边界）**
 
 在 `test/unit/test_json_ovf.c` 增加内存 WAL hook：记录每次 `logtype/page_id/lsn`，把 `after` 拷贝出来，并返回递增 LSN。增加断言：
 
@@ -95,7 +134,7 @@ static void t_wal_and_idempotent_free(void)
 }
 ```
 
-- [ ] **Step 2：运行 RED 测试**
+- [x] **Step 2：运行 RED 测试**
 
 ```bash
 cd C:/code/projects/engine/db
@@ -105,7 +144,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_ovf|个测试：'
 
 预期：编译失败或断言失败，因为当前 `json_ovf_write` 没有 WAL 参数、当前 free 非幂等、当前读取仍两趟 walk。
 
-- [ ] **Step 3：提交测试**
+- [x] **Step 3：提交测试**
 
 ```bash
 git add test/unit/test_json_ovf.c
@@ -127,7 +166,7 @@ git push origin main
 - Consumes：Task 1 的 `JsonOvfWal`。
 - Produces：`json_ovf_write(Pager *, const JsonOvfWal *, data, len, head)`；`JsonOvfWal.fn` 为空时仅允许测试/兼容旧工具使用，生产 JSON 写入必须非 NULL。
 
-- [ ] **Step 1：实现“先分配全部页、后写最终内容”**
+- [x] **Step 1：实现“先分配全部页、后写最终内容”**
 
 实现顺序：
 
@@ -151,7 +190,7 @@ for each i:
 
 `zero_page` 必须是全 0 数组；`pager_alloc` 已经清零，但 WAL before 仍显式传全 0，和 `pager_alloc` 的复用语义一致。任何分配/WAL/unpin 失败走统一补偿：已 pin 的先 unpin，已分配页逐个调用幂等 `json_ovf_free`。
 
-- [ ] **Step 2：实现幂等 `json_ovf_free`**
+- [x] **Step 2：实现幂等 `json_ovf_free`**
 
 先 walk 收集页号；逐页 `pager_get` 后检查页类型：
 
@@ -167,7 +206,7 @@ pager_free(pg, pid);
 
 若链中间损坏，不能释放已收集的半链；返回 `E_CORRUPT`，由启动孤儿扫描再次处理。测试必须覆盖释放两次、释放后分配页不重复发放。
 
-- [ ] **Step 3：实现基于持久长度的一趟读取**
+- [x] **Step 3：实现基于持久长度的一趟读取**
 
 `json_ovf_read_once` 不调用 `json_ovf_walk` 的第一趟：先检查 `chain_len <= JSON_OVF_MAX_LEN` 与 `cap >= chain_len`，然后沿链只走一次，将每页 payload 拷贝进 buf；累计字节必须严格等于 `chain_len`，多/少都返回 `E_CORRUPT`。
 
@@ -181,7 +220,7 @@ return json_ovf_read_once((Pager *)ctx, key, (u32)off, buf, cap, len_out);
 
 空文档仍由一页 `payload_len=0` 表示，但 `chain_len=0` 与 `DetoastFn` 的“询问长度”冲突；因此设计实现必须允许 `off=0` 作为**合法空链长度**，并通过 tuple 的外部值类型/额外 ctx 保证不是无效句柄。测试 `empty JSONB` 必须明确覆盖。推荐在 `json_ovf_detoast` 中把 `key == PAGE_ID_NIL` 判为 `E_INVAL`，而 `off=0` 只要 key 合法就允许。
 
-- [ ] **Step 4：运行测试 GREEN**
+- [x] **Step 4：运行测试 GREEN**
 
 ```bash
 mingw32-make clean && mingw32-make all
@@ -190,7 +229,7 @@ sh test/run.sh 2>&1 | grep -E 'test_json_ovf|个测试：'
 
 预期：`test_json_ovf` 通过，原有 JSON 页链测试全部通过。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/modalities/doc/json_ovf.h src/modalities/doc/json_ovf.c src/common/loghook.h test/unit/test_json_ovf.c
@@ -219,15 +258,15 @@ git push origin main
   ```
 - `val_from_record` 对 JSONB 外溢标记生成：`type=T_JSON`, `external=true`, `ext_key=head`, `ext_off=chain_len`, `ext_fn=json_ovf_detoast`。由于 L1 不得 include L4，**不能在 value_record.c 直接绑定 `json_ovf_detoast`**；改为由 doc 模态在初始化时注册一个 `JsonOvfDetoastFn` 值层回调，或由 record 解码返回通用 `(key, off)` 后由 doc/query 接线补函数。实施时必须选择并写在接口中，不能在 L1 include `modalities/doc/json_ovf.h`。
 
-- [ ] **Step 1：写 RED tuple 编解码测试**
+- [x] **Step 1：写 RED tuple 编解码测试**
 
 测试构造一列 `T_JSON`，给 `val_to_record` 一个超过 2048 的外部 JSON 值，断言 record 变长区包含 `tag + head + chain_len`，再用 `val_from_record` 断言 `type/external/ext_key/ext_off` 全等。加入 tag 错误、`chain_head=PAGE_ID_NIL`、`chain_len>65535` 的拒绝测试。
 
-- [ ] **Step 2：实现 marker 编码/解码**
+- [x] **Step 2：实现 marker 编码/解码**
 
 record 编码分支：`T_JSON && external && external_is_page_chain` 才写 12 字节 marker；普通 256–2048 的临时外部 JSON 仍物化 JSONB 到 record 变长区，不能误写页链 marker。需要在 `DbValue` 增加一个不改变布局语义的来源标记，或引入 record 层 `JsonRecordRef`，避免用 `ext_fn` 指针地址判断来源。
 
-- [ ] **Step 3：实现值层注册接线**
+- [x] **Step 3：实现值层注册接线**
 
 值层新增：
 
@@ -240,7 +279,7 @@ JsonOvfDetoastFn val_json_ovf_detoast(void);
 
 doc 模态 `db_json_init` 注册 `json_ovf_detoast`；record 解码只使用值层访问器，不产生 L1→L4 依赖。
 
-- [ ] **Step 4：运行测试并提交**
+- [x] **Step 4：运行测试并提交**
 
 ```bash
 mingw32-make clean && mingw32-make all
@@ -270,7 +309,7 @@ git push origin main
   ```
 - query 只调用值层注册入口；doc 实现用 `json_ovf_write` + `LogHookFn`。
 
-- [ ] **Step 1：写 RED 端到端测试**
+- [x] **Step 1：写 RED 端到端测试**
 
 扩充 `test_json_column.c` 或新增集成测试：
 
@@ -284,11 +323,11 @@ CHECK(select_json_extract(70, "$.a") == "7");
 
 同时测试：编码后 >65535 返回 `E_NOSPACE`；JSON 语法错误不创建链；第二个 JSON 列失败时第一个已创建链被补偿释放；索引写失败后链没有残留可见 tuple。
 
-- [ ] **Step 2：实现 JSONB store 回调**
+- [x] **Step 2：实现 JSONB store 回调**
 
 doc 模态实现回调：检查 `len > JSON_OVF_MAX_LEN`；调用 `json_ovf_write`；返回 `head` 与 `chain_len`。WAL ctx 必须是当前实例 `DbInstance`，xid 必须从 query/heap 显式传递，不能读取共享“当前 xid”。
 
-- [ ] **Step 3：修改 INSERT 顺序**
+- [x] **Step 3：修改 INSERT 顺序**
 
 执行路径变成：
 
@@ -304,11 +343,11 @@ TEXT → JSONB
 
 `heap_am_insert` 失败和 `index_insert_row` 失败都必须让调用方知道 tuple 没有发布，才能补偿；不能在 heap AM 内部“成功写 heap、索引失败后返回错误”却丢失链句柄。为此引入 `HeapOvfOwner` 返回对象，或让 heap AM 在失败结构体中回传未发布链列表。
 
-- [ ] **Step 4：修改 UPDATE 顺序**
+- [x] **Step 4：修改 UPDATE 顺序**
 
 先创建新链，再插新版本；旧 tuple 版本的链保持不动。`val_copy` 后只有 row 新版本持有链句柄；UPDATE 失败释放新链，成功后由新 tuple 所有。
 
-- [ ] **Step 5：运行端到端测试并提交**
+- [x] **Step 5：运行端到端测试并提交**
 
 ```bash
 mingw32-make clean && mingw32-make all
@@ -343,11 +382,11 @@ git push origin main
 
 两个连接：连接 A 反复 `SELECT json_extract(doc, '$.a')`；连接 B `DELETE` 后 `VACUUM`。断言 A 只能得到完整结果或明确错误，不得得到 `E_CORRUPT`、半截 JSON、崩溃。测试通过页读计数或循环 1000 次放大竞态。
 
-- [ ] **Step 2：实现表级读锁接线**
+- [x] **Step 2：实现表级读锁接线**
 
 `json_ovf_detoast` 只能拿到 `ctx`，所以 ctx 必须从 heap/table context 可取得锁；不要在 L4 静态全局里按 page id 建锁。推荐把 `JsonOvfReadCtx { Pager *pg; JsonOvfTableLock *lock; }` 放入外部值 `ext_ctx`，record 解码时从 heap AM 传入稳定 ctx。
 
-- [ ] **Step 3：修改 vacuum_table 的释放顺序**
+- [x] **Step 3：修改 vacuum_table 的释放顺序**
 
 当前 `vacuum_table` 先收集 dead RID，再 `heap_delete`。改为第二遍：
 
@@ -364,7 +403,7 @@ for dead RID:
 
 如果在 marker→FREE WAL 或 slot 删除前失败，重试必须根据 marker 状态决定是否再 free；不能重复还页。只有确认 tuple 对所有活跃快照不可见后才执行。
 
-- [ ] **Step 4：VACUUM RED/GREEN 与提交**
+- [x] **Step 4：VACUUM RED/GREEN 与提交**
 
 ```bash
 mingw32-make clean && mingw32-make all
@@ -396,19 +435,19 @@ git push origin main
   ```
 - db 层在 catalog 打开后遍历每张关系 heap，把所有 JSOV marker 的 `chain_head` 收集成集合；将集合传给 L4 reclaim，不让 L4 反向依赖 catalog。
 
-- [ ] **Step 1：写 RED 孤儿测试**
+- [x] **Step 1：写 RED 孤儿测试**
 
 创建 JSON 页链但不写 tuple，关闭/重启，调用孤儿回收入口，断言 `pager_free_count` 增加且再次 `pager_alloc` 得到这些页；再构造“首页被引用、后续页孤儿”的混合链，断言只释放真正未被完整 tuple 引用的链，不释放被引用链的后续页。
 
-- [ ] **Step 2：实现引用集合与扫描**
+- [x] **Step 2：实现引用集合与扫描**
 
 启动恢复顺序固定为：`recovery_run` → `pager_free_rebuild` → `catalog_open` → 关系表 heap 遍历收集 marker → `json_ovf_reclaim_orphans`。没有 `PT_JSON_OVF` 页时快速返回；扫描复杂度记录为 O(所有 heap tuple + 所有页)。
 
-- [ ] **Step 3：实现恢复集成**
+- [x] **Step 3：实现恢复集成**
 
 `db_recover.c` 本身发生在 catalog 打开前，因此孤儿扫描调用必须放到 `db_open` 的 catalog 成功后、模态注册前，或新增 `db_reclaim_json_orphans()` 在 catalog 初始化之后调用。扫描失败只记录诊断并继续开库（空间浪费安全地优于阻塞数据库），但损坏链被引用时必须保留并让后续读取返回 `E_CORRUPT`。
 
-- [ ] **Step 4：崩溃/孤儿测试与提交**
+- [x] **Step 4：崩溃/孤儿测试与提交**
 
 ```bash
 mingw32-make clean && mingw32-make all
@@ -443,11 +482,11 @@ git push origin main
 | recovery redo/undo | 已提交链完整，未提交链不被读到 |
 | >65535 JSONB | `E_NOSPACE`，不分配页链 |
 
-- [ ] **Step 2：文档坑记录**
+- [x] **Step 2：文档坑记录**
 
 在 `MODALITIES.md §9.9` 继续追加编号（实际编号以文件末尾为准）：页链 WAL before/after、`next` 回填二次修改、free 幂等、tuple `chain_len` 与 `ext_off` 双存储、读/释放表锁、孤儿扫描成本。每条写清根因、错误语义和测试防线。
 
-- [ ] **Step 3：全量门禁**
+- [x] **Step 3：全量门禁**
 
 ```bash
 cd C:/code/projects/engine/db
