@@ -1,5 +1,10 @@
-build/
-build_biglock/
+# 构建目录。Makefile 除了 build/ 还会按目标名生成变体：
+# build_biglock/ / build_b2/ / build_e4/ / build_mm_doc/ / build_ts_dir/ ……。
+# 逐个列举总会漏（实测：2026-11-25 就有三个漏网的目录，当时靠下面的
+# *.o / *.d 规则兜底才没被提交 —— 但它们里面的 .exe 没有对应规则）。
+# 用前缀匹配把 build/ 与所有 build_*/ 一网打尽。
+build*/
+
 db
 db.exe
 *.o
