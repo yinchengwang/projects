@@ -47,11 +47,70 @@ function todayStamp(date) {
   return y + "-" + m + "-" + day
 }
 
+/** 分层抽样的最小层样本量 */
+const STRATUM_MIN = 5
+
+/**
+ * 按「来源 × 难度」分层抽样。
+ *
+ * 每层至少 STRATUM_MIN 题，层内按比例分配（比例按层大小，总量由 sample 定）。
+ * 层的键是 source|difficulty；字段缺失的归入 (空) 层，照样至少抽 STRATUM_MIN 题。
+ * @param {object[]} units
+ * @param {{sample?: number}} opts
+ * @returns {object[]}
+ */
+function pickStratifiedTargets(units, opts) {
+  const o = opts || {}
+  const list = (Array.isArray(units) ? units : []).filter(function (unit) {
+    return unit.reviewed !== true
+  })
+  if (list.length === 0) return []
+
+  const strata = {}
+  const order = []
+  list.forEach(function (unit) {
+    const key = String(unit.source || "(空)") + "|" + String(unit.difficulty || "(空)")
+    if (!strata[key]) {
+      strata[key] = []
+      order.push(key)
+    }
+    strata[key].push(unit)
+  })
+
+  const total = list.length
+  const wanted = Number(o.sample) > 0 ? Number(o.sample) : list.length
+  const perLayer = {}
+  order.forEach(function (key) {
+    const bySize = Math.round((strata[key].length / total) * wanted)
+    perLayer[key] = Math.max(STRATUM_MIN, bySize)
+  })
+  // 总量超了就从最多的层往下削，削到不低于 STRATUM_MIN 为止
+  let sum = order.reduce(function (acc, key) { return acc + perLayer[key] }, 0)
+  while (sum > wanted) {
+    let biggest = ""
+    order.forEach(function (key) {
+      if (perLayer[key] > STRATUM_MIN && (biggest === "" || perLayer[key] > perLayer[biggest])) {
+        biggest = key
+      }
+    })
+    if (biggest === "") break
+    perLayer[biggest] -= 1
+    sum -= 1
+  }
+
+  const out = []
+  order.forEach(function (key) {
+    const take = Math.min(perLayer[key], strata[key].length)
+    out.push.apply(out, strata[key].slice(0, take))
+  })
+  return out
+}
+
 /**
  * 挑出待抽检的单元：还没被人看过（reviewed 不为 true）的单元。
  * 排序：已验证优先，其次待校验，再次待补内容、已打回；同级按 id 升序。
  * @param {object[]} units
- * @param {{sample?: number, track?: string}} opts
+ * @param {{sample?: number, track?: string, stratify?: boolean}} opts
  * @returns {object[]}
  */
 function pickReviewTargets(units, opts) {
@@ -74,6 +133,9 @@ function pickReviewTargets(units, opts) {
       const ib = String(b.id || "")
       return ia < ib ? -1 : ia > ib ? 1 : 0
     })
+  if (o.stratify === true) {
+    return pickStratifiedTargets(list, o)
+  }
   const sample = Number(o.sample) > 0 ? Number(o.sample) : list.length
   return list.slice(0, sample)
 }
@@ -157,7 +219,9 @@ function applyReview(opts) {
 module.exports = {
   REVIEW_SECTION: REVIEW_SECTION,
   STATUS_PRIORITY: STATUS_PRIORITY,
+  STRATUM_MIN: STRATUM_MIN,
   todayStamp: todayStamp,
   pickReviewTargets: pickReviewTargets,
+  pickStratifiedTargets: pickStratifiedTargets,
   applyReview: applyReview,
 }

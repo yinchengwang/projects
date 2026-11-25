@@ -67,3 +67,63 @@ test("给未达标的单元写回抽检结论要被拒", function () {
   const after = fs.readFileSync(path.join(unitsDir, "b.md"), "utf8")
   assert.ok(after.indexOf("reviewed: true") === -1, "被拒的抽检不该写文件")
 })
+
+test("分层抽样：每层至少 5 题，层内按比例", function () {
+  const units = []
+  const sources = [
+    { src: "leetcode", dif: "medium", n: 404 },
+    { src: "leetcode", dif: "easy", n: 226 },
+    { src: "nowcoder", dif: "easy", n: 29 },
+    { src: "nowcoder", dif: "medium", n: 28 },
+  ]
+  sources.forEach(function (g) {
+    for (let i = 0; i < g.n; i += 1) {
+      units.push({
+        id: g.src + ":" + g.dif + ":" + i,
+        track: "algorithm",
+        kind: "problem",
+        title: "题 " + i,
+        statement: "题面",
+        entry: { demo: "", reference: "", graded: "user", script: "" },
+        status: "verified",
+        reviewed: false,
+        source: g.src,
+        difficulty: g.dif,
+      })
+    }
+  })
+  const targets = review.pickReviewTargets(units, { stratify: true })
+  const layers = {}
+  targets.forEach(function (t) {
+    const key = String(t.source || "") + "|" + String(t.difficulty || "")
+    layers[key] = (layers[key] || 0) + 1
+  })
+  assert.strictEqual(targets.length >= 74, true, "至少抽 74 题，实际 " + targets.length)
+  // 每层至少 5 题
+  Object.keys(layers).forEach(function (key) {
+    assert.ok(layers[key] >= 5, key + " 层只抽了 " + layers[key] + " 题")
+  })
+  // 四层都要抽到
+  assert.strictEqual(Object.keys(layers).length, 4, JSON.stringify(layers))
+})
+
+test("分层抽样：同一层的题不重复", function () {
+  const units = []
+  for (let i = 0; i < 20; i += 1) {
+    units.push({
+      id: "leetcode:easy:" + i,
+      track: "algorithm",
+      kind: "problem",
+      title: "题 " + i,
+      statement: "题面",
+      entry: { demo: "", reference: "", graded: "user", script: "" },
+      status: "verified",
+      reviewed: false,
+      source: "leetcode",
+      difficulty: "easy",
+    })
+  }
+  const targets = review.pickReviewTargets(units, { stratify: true })
+  const ids = targets.map(function (t) { return t.id })
+  assert.strictEqual(new Set(ids).size, ids.length, "不该有重复")
+})
