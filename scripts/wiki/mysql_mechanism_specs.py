@@ -2,19 +2,36 @@
 """MySQL 机制清单（P4 首批三库之三）。
 
 盘点方法：先用 GitHub 的 tree API 拿到 `mysql-8.0.40` 的完整文件清单做导航，
-再把机制盘点实际会引用的实现文件按文件级稀疏检出到本地
-（`raw.githubusercontent.com` 单文件并行下载），然后在这些文件里逐个确认
-函数定义位置（`find_defs.py` 逐行切分，区分定义与调用），最后按机制簇归并。
+然后在本地检出的源码里逐个确认函数定义位置（逐行切分，区分定义与调用），
+最后按机制簇归并。
 
-**这不是整仓克隆**：mysql-server 的整仓 `--depth 1` 克隆在本机实测 25 分钟
-pack 仍为 0 字节，整仓 tarball 约 370 MB，而单连接实测带宽约 80 KB/s。
-因此本地检出是**文件级稀疏检出**：只包含本清单引用到的文件，每个文件
-与上游 tag `mysql-8.0.40` 逐字节一致。**未下载的文件不在本地**，因此不能对
-未列出的路径做 refs 校验——这一点必须与整仓检出的 postgres / redis / sqlite
-区分开。
+**本地检出的构成（2026-11-25 实测，与 postgres / redis / sqlite 不同）**：
+
+- 源码文件树：GitHub tarball API 全量下载
+  （`api.github.com/repos/mysql/mysql-server/tarball/mysql-8.0.40`，459.8 MB）
+- git 元数据：本地 init + `commit-tree` 构造，tag `mysql-8.0.40` 指向该提交
+- 溯源说明：`.cache/repos/mysql-server/.upstream-provenance.txt` 记着上游提交号
+  `89e1c722476deebc3ddc8675e779869f6da654c0`
+
+**为什么不是 git clone**：本机网络下 mysql-server 的 git 传输路径完全不可用。
+`--depth 1`、`--filter=blob:none`、`--single-branch`、`http.version=HTTP/1.1`
+四种组合都在 pack 传输阶段卡死——`.git/objects/pack/` 下的 `tmp_pack` 持续为
+0 字节，且进程没有活动网络连接。同一时段 postgres / redis / sqlite 的 clone
+正常完成（postgres 107528 commits / 144 MB，redis 21183 / 220 MB，
+sqlite 37694 / 590 MB），说明是该仓库的服务端传输路径问题，不是本机带宽。
+
+**因此本目录的边界必须说清**：
+
+1. 源码**是全量的**（tag `mysql-8.0.40` 的完整文件树，38821 个文件），
+   refs 校验覆盖的是整个 tag，不存在「未下载的文件不能校验」的问题——
+   这点与早先的文件级稀疏检出不同。
+2. 但**历史只有 1 个提交**（本地构造），不含上游的真实提交历史，
+   因此**无法按任意历史版本核验 refs**。要按历史核验，得先把完整历史取回。
+3. tarball 尾部有截断，受影响的是 `unittest/` 目录；该目录不在任何页面的
+   refs 引用范围内，`unittest/` 已被排除在检出目录之外。
 
 **篇数不是按文件数折算**：像 `sql/sql_parse.cc` 这种巨型文件承载大量机制，
-也有只贡献一个机制的小文件；本清单是逐条盘点后合并/拆分/移组得到的 67 个
+也有只贡献一个机制的小文件；本清单是逐条盘点后合并、拆分、移组得到的 67 个
 机制单元。
 
 refs 里的每个 `(path, symbol)` 都已用

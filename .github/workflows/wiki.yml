@@ -4,7 +4,7 @@
 #   wiki-lint      结构门禁（六个必含章节 + 条件章节 + front-matter 键）
 #   wiki-manifest  manifest 与机制的契约一致性
 #   wiki-refs      引用门禁（符号必须在 refs 声明的文件里真实出现）
-#   wiki-tests     工装层的单元测试（含 151 页契约测试）
+#   wiki-tests     工装层的单元测试
 #
 # 路径说明（2026-11-23 实测）：
 #   `docs/wiki/` 根下还有 `wiki-schema.md`（契约文档，无 front-matter）、
@@ -16,9 +16,16 @@
 # **projects 仓根**，因此**不要写 `working-directory: projects`** —— 那是顶层
 # 聚合仓 `C:\code` 的相对写法，在子仓里会变成不存在的 `projects/projects`。
 #
-# refs 门禁需要该库的本地源码。CI 里没有 `.cache/repos/postgres`，
-# 所以先由 repo_cache.ensure_repo 浅克隆，再跑 refs。
-# clone 失败即 job 失败并打印库名，不静默跳过。
+# refs 门禁需要各库的本地源码。CI 里没有 `.cache/repos/<lib>`，所以先由
+# repo_cache.ensure_repo 检出，再跑 refs。clone 失败即 job 失败并打印库名，
+# 不静默跳过。
+#
+# **检出方式：全量克隆（partial clone，blob 按需下载）**。
+# 浅克隆（--depth 1）只有 1 个 commit、0 个 tag，机制盘点时无法对着历史版本
+# 核验 refs；全量克隆保留完整提交历史与全部 tag，blob 在需要时才拉取。
+# 实测（2026-11-25）：postgres 107528 commits / 701 tags / 144 MB，
+# redis 21183 commits / 427 tags / 220 MB，sqlite 37694 commits / 392 tags / 590 MB。
+# mysql-server 的历史更大（100 万+ commit），partial clone 耗时显著更长。
 
 name: wiki
 
@@ -75,13 +82,30 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 四个库各有一份清单，逐一过门禁。
       - name: manifest 门禁
-        run: python scripts/wiki/wiki_manifest_lint.py docs/wiki/projects/postgres/_manifest.yml
+        run: |
+          for lib in postgres redis mysql-server sqlite; do
+            python scripts/wiki/wiki_manifest_lint.py "docs/wiki/projects/$lib/_manifest.yml" || exit 1
+          done
 
-  # ============ 引用门禁（需要 postgres 浅克隆）============
+  # ============ 引用门禁（需要各库源码）============
   wiki-refs:
     name: Wiki 引用门禁
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        lib:
+          - name: postgres
+            url: https://github.com/postgres/postgres
+          - name: redis
+            url: https://github.com/redis/redis
+          - name: sqlite
+            url: https://github.com/sqlite/sqlite
+          - name: mysql-server
+            url: https://github.com/mysql/mysql-server
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,29 +118,34 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 缓存键用 refs 里引用的 postgres 提交（仓内记录为 9b5d4e33）。
-      # 换库或换 checkout 时需要手动改这个键，避免用到旧源码导致 refs 误判。
-      - name: 缓存 postgres 浅克隆
+      # 缓存键用库名 + 仓内记录的 refs 锚点提交；换 checkout 时需手动改键，
+      # 避免用到旧源码导致 refs 误判。
+      - name: 缓存源码检出
         uses: actions/cache@v4
         with:
-          path: .cache/repos/postgres
-          key: wiki-repo-postgres-9b5d4e3331753b3399e84965093109cac8f364bf
+          path: .cache/repos/${{ matrix.lib.name }}
+          key: wiki-repo-${{ matrix.lib.name }}-${{ github.sha }}
 
-      - name: 浅克隆 postgres
+      # 全量克隆（partial clone）：保留完整提交历史与全部 tag，blob 按需下载。
+      # 浅克隆只剩 1 个 commit、0 个 tag，机制盘点无法对着历史版本核验 refs。
+      - name: 全量克隆 ${{ matrix.lib.name }}
         run: |
-          python -c "import sys; sys.path.insert(0, 'scripts/wiki'); from repo_cache import ensure_repo; print(ensure_repo('https://github.com/postgres/postgres', 'postgres'))" || {
-            echo "::error::浅克隆 postgres 失败（refs 门禁需要该库源码）"
+          python -c "import sys; sys.path.insert(0, 'scripts/wiki'); from repo_cache import ensure_repo; print(ensure_repo('${{ matrix.lib.url }}', '${{ matrix.lib.name }}', full=True))" || {
+            echo "::error::全量克隆 ${{ matrix.lib.name }} 失败（refs 门禁需要该库源码）"
             exit 1
           }
+
+      - name: 检出工作树
+        run: git -C ".cache/repos/${{ matrix.lib.name }}" reset --hard HEAD
 
       - name: 引用门禁
         run: |
           python scripts/wiki/wiki_refs.py \
-            --repo-root .cache/repos/postgres \
-            docs/wiki/projects/postgres \
+            --repo-root ".cache/repos/${{ matrix.lib.name }}" \
+            "docs/wiki/projects/${{ matrix.lib.name }}" \
             --quiet
 
-  # ============ 工装测试（含 151 页契约测试）============
+  # ============ 工装测试 ============
   wiki-tests:
     name: Wiki 工装测试
     runs-on: ubuntu-22.04

@@ -57,12 +57,32 @@
 | 库 | 机制单元 | 组数 | 规格模块 | 清单 | 本地检出方式 |
 |---|---|---|---|---|---|
 | redis | 63 | 13 | `scripts/wiki/redis_mechanism_specs.py` | `docs/wiki/projects/redis/_manifest.yml` | 整仓检出 |
-| mysql-server | 67 | 14 | `scripts/wiki/mysql_mechanism_specs.py` | `docs/wiki/projects/mysql-server/_manifest.yml` | **文件级稀疏检出** |
-| sqlite | 86 | 14 | `scripts/wiki/sqlite_mechanism_specs.py` | `docs/wiki/projects/sqlite/_manifest.yml` | 整仓检出 |
+| mysql-server | 67 | 14 | `scripts/wiki/mysql_mechanism_specs.py` | `docs/wiki/projects/mysql-server/_manifest.yml` | tarball 全量源码 + 本地 git 仓 |
+| sqlite | 86 | 14 | `scripts/wiki/sqlite_mechanism_specs.py` | `docs/wiki/projects/sqlite/_manifest.yml` | 全量克隆（partial clone） |
 
-**MySQL 的检出方式必须与另两库区分开**：整仓 `git clone --depth 1 --single-branch` 在本机实测 25 分钟 pack 仍为 0 字节（已终止并删除半成品），整仓 tarball 约 370 MB，而 `raw.githubusercontent.com` 单文件并行下载实测约 320 KB/s。因此改为**文件级稀疏检出**：先用 GitHub tree API 拿到 tag `mysql-8.0.40` 的完整清单做导航，再只下载清单引用到的 256 个文件（16.8 MB），每个文件与上游 tag 逐字节一致。
+**检出方式（2026-11-25 复核并改用全量）**：三个库的浅克隆（`--depth 1 --single-branch`，只有 1 个 commit、0 个 tag）已全部换成**全量克隆**（partial clone，blob 按需下载），保留完整提交历史与全部 tag：
 
-**代价与边界**：未下载的文件不在本地，**不能对未列出的路径做 refs 校验**——这一点与 postgres / redis / sqlite 的整仓检出不同，写进规格模块的头注释里，避免后续读者误以为已覆盖全仓。
+| 库 | commits | tags | pack 体积 | 耗时 |
+|---|---|---|---|---|
+| postgres | 107528 | 701 | 144 MB | ~9 分钟 |
+| redis | 21183 | 427 | 220 MB | ~4 分钟 |
+| sqlite | 37694 | 392 | 590 MB | ~1 分钟 |
+
+浅克隆只有 1 个 commit、0 个 tag，**机制盘点时无法对着历史版本核验 refs**——这是把检出改成全量的直接原因。
+
+**MySQL 的 git 协议路径在本机完全不可用**：`--depth 1`、`--filter=blob:none`、`--single-branch`、`http.version=HTTP/1.1` 四种组合都在 pack 传输阶段卡死——`.git/objects/pack/` 下的 `tmp_pack` 持续为 0 字节，且进程**没有活动网络连接**。同一时段另三个库的 clone 正常完成，说明是该仓库的服务端传输路径问题，不是本机带宽。
+
+因此 MySQL 改用**tarball 全量源码 + 本地构造 git 仓**：
+
+- 源码文件树：GitHub tarball API 全量下载（459.8 MB，解压后 38821 个文件）
+- git 元数据：本地 `init` + `commit-tree` 构造，tag `mysql-8.0.40` 指向该提交
+- 溯源说明：`.cache/repos/mysql-server/.upstream-provenance.txt` 记着上游提交号 `89e1c722476deebc3ddc8675e779869f6da654c0`
+
+**MySQL 的边界必须说清**：
+
+1. 源码**是全量的**（tag `mysql-8.0.40` 的完整文件树），refs 校验覆盖整个 tag，**不存在「未下载的文件不能校验」的问题**——这比早先的文件级稀疏检出严格。
+2. 但**历史只有 1 个提交**（本地构造），不含上游真实提交历史，**无法按任意历史版本核验 refs**。要按历史核验，得先在网络条件允许时把完整历史取回。
+3. tarball 尾部有截断，受影响的是 `unittest/` 目录；该目录不在任何页面的 refs 引用范围内，已被排除在检出目录之外。
 
 **工具侧**：`scripts/wiki/dump_defs.py` 扩展到支持 C++ 成员函数（`Class::method`）与多行返回类型；另有逐行切分的定义抽取脚本（临时目录 `code-wiki-p4-mysql/`）用于区分「定义」与「调用点」，避免 PowerShell `Select-String` 造成的误判。
 
@@ -89,8 +109,19 @@
 |---|---|
 | `scripts/wiki/gen_manifest.py` | 已能生成 redis / mysql-server / sqlite 三份清单，`--verify` 逐条核对 refs（失败 0 条） |
 | `scripts/wiki/wiki_lint.py` | 四库目录级全过 |
-| `scripts/wiki/wiki_refs.py` | 四库目录级全过（含 `_index.md`） |
+| `scripts/wiki/wiki_refs.py` | 四库目录级全过（含 `_index.md`），在**全量检出**下同样 0 失败 |
 | `scripts/wiki/wiki_manifest_lint.py` | 四份清单全 PASS |
+| `scripts/wiki/repo_cache.py` | 新增 `full=True` 参数：全量克隆走 `--filter=blob:none`（partial clone），保留完整历史与全部 tag；新增 4 个单元测试 |
+| `py -3 -m unittest discover -s scripts/wiki` | **Ran 357 tests，OK (skipped=1)**（新增 4 个 `full` 相关测试） |
+
+### CI 接入（2026-11-25 更新）
+
+`projects/.github/workflows/wiki.yml` 的 `wiki-refs` job 从「只跑 postgres」扩成**四库矩阵**（`postgres` / `redis` / `sqlite` / `mysql-server`），每个矩阵项独立克隆、独立跑 refs；`wiki-manifest` job 也从单个库扩到四个库逐一校验。
+
+- 克隆方式改为 `ensure_repo(..., full=True)`，即 partial clone 全量检出，不用浅克隆。
+- 缓存键从写死的 postgres commit 改为 `wiki-repo-<lib>-${{ github.sha }}`，避免换 checkout 时用到旧源码。
+- 矩阵 `fail-fast: false`，一个库失败不影响其他库的结果可见性。
+- **未做**：`actionlint` 本地不可用，workflow 只做了人工核对 + 本地复现全部命令的真实跑通；GitHub Actions 侧仍需等下一次 push 后的记录。
 
 ---
 
@@ -99,5 +130,6 @@
 1. 对比页（`_compare/`）未做（计划 §6 说首批三库后才做样板）。
 2. `openGauss`（Gitee）与 `pklite`（404）两条占位需清单维护决策。
 3. `actionlint` 未装，workflow 只做了人工与本地命令验证，未经 GitHub Actions 实跑。
-4. MySQL 本地检出为文件级稀疏检出，若后续要扩展机制面（如补 MVCC 内部、DDL、复制拓扑更多细节），需先补下载对应源文件。
-5. CI 里 `wiki-refs` job 目前只浅克隆 postgres；新增三库的 refs 校验尚未接入 CI（mysql 因是稀疏检出，CI 侧需另行处理检出方式）。
+4. **MySQL 的完整历史仍未取回**——本机网络下该仓库的 git 传输路径不可用（四种 clone 组合均在 pack 传输阶段卡死且无网络连接），现用的是 tarball 全量源码 + 本地构造的 git 仓。若要按历史版本核验 refs，需在网络条件允许时重跑全量克隆。
+5. 清单扩容（原计划 §2.2 的 152 → 270）未做。
+6. `%TEMP%\study-hub-judge-*` 残留 32 个目录（最早 2026-11-21），属 study-hub 自身问题，不在本任务范围。

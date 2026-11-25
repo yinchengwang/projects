@@ -307,6 +307,91 @@ class TestEnsureRepo(unittest.TestCase):
         self.assertIn("--single-branch", cmd)
         self.assertEqual(cmd[-2:], ["file:///up.git", os.path.join(cache, "demo")])
 
+    # ---------- full=True：全量克隆 ----------
+
+    def test_full_clone_keeps_all_commits(self):
+        """full=True 必须拿到完整历史，不是 depth=1。"""
+        with tempfile.TemporaryDirectory() as d:
+            url = _make_upstream(d, commits=5)
+            cache = os.path.join(d, "cache")
+            target = ensure_repo(url, "demo", cache_dir=cache, full=True)
+            self.assertEqual(_commit_count(target), 5)
+            self.assertFalse(
+                os.path.isfile(os.path.join(target, ".git", "shallow")),
+                "全量克隆不该留下 shallow 标记",
+            )
+
+    def test_full_clone_keeps_all_branches(self):
+        """full=True 必须拿到全部分支，fetch refspec 应是通配。"""
+        with tempfile.TemporaryDirectory() as d:
+            url = _make_upstream(d, extra_branch=True)
+            cache = os.path.join(d, "cache")
+            target = ensure_repo(url, "demo", cache_dir=cache, full=True)
+            spec = _git(["config", "--get", "remote.origin.fetch"], target)
+            self.assertEqual(spec.returncode, 0, spec.stderr)
+            self.assertIn("*", spec.stdout, "fetch refspec 不是通配，说明走了单分支")
+            refs = _git(
+                ["for-each-ref", "refs/remotes/", "--format=%(refname)"], target
+            )
+            self.assertEqual(refs.returncode, 0, refs.stderr)
+            names = [line.strip() for line in refs.stdout.splitlines() if line.strip()]
+            self.assertIn("refs/remotes/origin/extra", names)
+
+    def test_full_clone_argv_has_no_depth_or_single_branch(self):
+        """直接核对传给 git 的参数：全量克隆不能带 --depth / --single-branch。
+
+        全量克隆用 `--filter=blob:none`（partial clone）——保留完整提交历史与
+        全部 tag，blob 按需下载。实测 postgres 全量 pack 传输会卡死 25 分钟，
+        改用 filter 后 9 分钟完成，因此参数里必须有 --filter。
+        """
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _Proc()
+
+        with tempfile.TemporaryDirectory() as d, mock.patch(
+            "repo_cache.subprocess.run", side_effect=_fake_run
+        ):
+            cache = os.path.join(d, "cache")
+            os.makedirs(cache)
+            ensure_repo("file:///up.git", "demo", cache_dir=cache, full=True)
+
+        cmd = captured["cmd"]
+        self.assertEqual(cmd[:2], ["git", "clone"])
+        self.assertNotIn("--depth", cmd)
+        self.assertNotIn("--single-branch", cmd)
+        self.assertIn("--filter=blob:none", cmd)
+        self.assertEqual(cmd[-2:], ["file:///up.git", os.path.join(cache, "demo")])
+
+    def test_default_is_still_shallow(self):
+        """不传 full 时保持浅克隆——那是只跑门禁场景的快路径。"""
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _Proc()
+
+        with tempfile.TemporaryDirectory() as d, mock.patch(
+            "repo_cache.subprocess.run", side_effect=_fake_run
+        ):
+            cache = os.path.join(d, "cache")
+            os.makedirs(cache)
+            ensure_repo("file:///up.git", "demo", cache_dir=cache)
+
+        self.assertIn("--depth", captured["cmd"])
+        self.assertIn("--single-branch", captured["cmd"])
+
     def test_bad_url_raises(self):
         with tempfile.TemporaryDirectory() as d:
             cache = os.path.join(d, "cache")

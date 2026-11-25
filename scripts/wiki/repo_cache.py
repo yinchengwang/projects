@@ -106,11 +106,18 @@ def _cleanup_partial(target: str) -> str:
 
 
 def ensure_repo(
-    repo_url: str, name: str, cache_dir=None, depth: int = 1
+    repo_url: str, name: str, cache_dir=None, depth: int = 1, full: bool = False
 ) -> str:
     """确保本地有一份该项目源码，返回目录路径。
 
     已存在则直接返回（幂等，不改动既有工作树）。失败抛 RepoCacheError。
+
+    `full=True` 时做**全量克隆**（完整历史 + 全部 tag + 全部分支），
+    不加 `--depth` / `--single-branch`。这是机制盘点的默认要求：refs 要能
+    对着任意历史版本核验，浅克隆只有 1 个 commit、0 个 tag，做不到。
+
+    `full=False` 时保留原来的浅克隆（`--depth <depth> --single-branch`），
+    供只跑门禁、不需要历史的场景使用。
 
     克隆失败时，若 target 是本函数这次新建的，会把它清理掉：半成品目录留着会让
     后续调用把它当成「已有缓存」，也会掩盖真正的失败原因。target 若是调用方事先
@@ -139,13 +146,15 @@ def ensure_repo(
     except OSError as exc:
         raise RepoCacheError("缓存目录不可用 (%s): %s" % (cache_dir, exc))
 
-    cmd = [
-        "git", "clone",
-        "--depth", str(depth),
-        "--single-branch",
-        repo_url,
-        target,
-    ]
+    cmd = ["git", "clone"]
+    if full:
+        # partial clone：保留完整提交历史与全部 tag，blob 按需下载。
+        # 实测（2026-11-25）：postgres 全量克隆在 25 分钟内 pack 仍为 0 字节
+        # 而卡死；改用 --filter=blob:none 后 9 分钟完成（107528 commits / 144 MB）。
+        cmd += ["--filter=blob:none"]
+    else:
+        cmd += ["--depth", str(depth), "--single-branch"]
+    cmd += [repo_url, target]
     try:
         proc = subprocess.run(
             cmd,
