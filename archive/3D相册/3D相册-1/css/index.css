@@ -1,113 +1,102 @@
-html{
+/*
+ * CSS 3D 旋转相册
+ *
+ * 结构：.wrap（居中容器，负责 perspective）→ .cube（旋转体）→ 六面（内外各一层）。
+ * 尺寸全部走自定义属性，改一处即可整体缩放，不用改 12 条 transform。
+ */
+
+:root {
+	--size: 200px;   /* 外层立方体边长 */
+	--half: 100px;   /* = --size / 2，translateZ 的位移量 */
+	--gap: .4s;      /* 悬停展开的过渡时长 */
+}
+
+html {
 	background: #000;
-    height: 100%;	
+	height: 100%;
 }
-/*最外层容器样式*/
-.wrap{
-	position: relative;
+
+/* 最外层容器：负责居中与 3D 纵深。
+ * perspective 必须挂在这里而不是 .cube —— .cube 自己是旋转体，
+ * 把 perspective 写在它身上不产生纵深（规范要求透视在父元素上）。 */
+.wrap {
 	position: absolute;
-	top: 0;
-	right: 0;
-	bottom: 0;
-	left: 0;
-	width: 200px;
-	height: 200px;
+	inset: 0;
+	width: var(--size);
+	height: var(--size);
 	margin: auto;
-	/*改变左右上下,图片方块移动*/
-	
+	perspective: 1000px;
 }
-/*包裹所有容器样式*/
-.cube{
-	width: 200px;
-	height: 200px;
+
+/* 旋转体：保住子元素的 3D 空间，并让整个立方体自转 */
+.cube {
+	width: var(--size);
+	height: var(--size);
 	margin: 0 auto;
 	transform-style: preserve-3d;
 	transform: rotateX(-30deg) rotateY(-80deg);
-	-webkit-animation: rotate 20s infinite;
-	/*匀速*/
-	animation-timing-function: linear;
+	animation: rotate 20s linear infinite;
 }
-@-webkit-keyframes rotate{
-	from{transform: rotateX(0deg) rotateY(0deg);}
-	to{transform: rotateX(360deg) rotateY(360deg);}
+
+/* 原来只写了 -webkit-animation 的简写、又混用无前缀的 animation-timing-function，
+ * 在非 WebKit 内核（Firefox 等）里动画根本不启动。这里补标准属性 + 前缀弹性写法，
+ * timing-function 直接并进简写，避免出现"孤儿声明"。 */
+@keyframes rotate {
+	from { transform: rotateX(0deg) rotateY(0deg); }
+	to   { transform: rotateX(360deg) rotateY(360deg); }
 }
-.cube div{
+
+/* 六面共用的定位与过渡 */
+.cube div,
+.cube span {
 	position: absolute;
-	width: 200px;
-	height: 200px;
-	opacity: 0.8;
-	transition: all .4s;
+	opacity: .8;
+	transition: transform var(--gap) ease;
 }
-/*定义所有图片样式*/
-.pic{
-	width: 200px;
-	height: 200px;
+
+/* 外层六面 */
+.cube div {
+	width: var(--size);
+	height: var(--size);
 }
-.cube .out_front{
-	transform: rotateY(0deg) translateZ(100px);
+
+/* object-fit: cover —— 原图是 1080×1620 竖图，塞进 200×200 方框会被压扁 34%。
+ * 裁切保留中心区域，不拉伸。图片本身已预处理成 400×400，cover 不会再裁到内容。 */
+.pic,
+.in_pic {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block;
 }
-.cube .out_back{
-	transform: translateZ(-100px) rotateY(180deg);
+
+.cube .out_front  { transform: rotateY(0deg)   translateZ(var(--half)); }
+.cube .out_back   { transform: translateZ(calc(var(--half) * -1)) rotateY(180deg); }
+.cube .out_left   { transform: rotateY(90deg)  translateZ(var(--half)); }
+.cube .out_right  { transform: rotateY(-90deg) translateZ(var(--half)); }
+.cube .out_top    { transform: rotateX(90deg)  translateZ(var(--half)); }
+.cube .out_bottom { transform: rotateX(-90deg) translateZ(var(--half)); }
+
+/* 内层小立方体：边长取外层一半，并以 50px 内缩居中 */
+.cube span {
+	display: block;   /* 原来是 bloack，拼错导致 span 退化成 inline，尺寸不生效 */
+	width: calc(var(--size) / 2);
+	height: calc(var(--size) / 2);
+	top: calc(var(--size) / 4);
+	left: calc(var(--size) / 4);
 }
-.cube .out_left{
-	transform: rotateY(90deg) translateZ(100px);
-}
-.cube .out_right{
-	transform: rotateY(-90deg) translateZ(100px);
-}
-.cube .out_top{
-	transform: rotateX(90deg) translateZ(100px);
-}
-.cube .out_bottom{
-	transform: rotateX(-90deg) translateZ(100px);
-}
-/*定义小正方体样式*/
-.cube span{
-	display: bloack;
-	width: 100px;
-	height: 100px;
-	position: absolute;
-	top: 50px;
-	left: 50px;
-}
-.cube .in_pic{
-	width: 100px;
-	height: 100px;
-}
-.cube .in_front{
-	transform: rotateY(0deg) translateZ(50px);
-}
-.cube .in_back{
-	transform: translateZ(-50px) rotateY(180deg);
-}
-.cube .in_left{
-	transform: rotateY(90deg) translateZ(50px);
-}
-.cube .in_right{
-	transform: rotateY(-90deg) translateZ(50px);
-}
-.cube .in_top{
-	transform: rotateX(90deg) translateZ(50px);
-}
-.cube .in_bottom{
-	transform: rotateX(-90deg) translateZ(50px);
-}
-/*鼠标移入后样式*/
-.cube:hover .out_front{
-	transform: rotateY(0deg) translateZ(200px);
-}
-.cube:hover .out_back{
-	transform: translateZ(-200px) rotateY(180deg);
-}
-.cube:hover .out_left{
-	transform: rotateY(90deg) translateZ(200px);
-}
-.cube:hover .out_right{
-	transform: rotateY(-90deg) translateZ(200px);
-}
-.cube:hover .out_top{
-	transform: rotateX(90deg) translateZ(200px);
-}
-.cube:hover .out_bottom{
-	transform: rotateX(-90deg) translateZ(200px);
-}
+
+.cube .in_front  { transform: rotateY(0deg)   translateZ(calc(var(--size) / 4)); }
+.cube .in_back   { transform: translateZ(calc(var(--size) / -4)) rotateY(180deg); }
+.cube .in_left   { transform: rotateY(90deg)  translateZ(calc(var(--size) / 4)); }
+.cube .in_right  { transform: rotateY(-90deg) translateZ(calc(var(--size) / 4)); }
+.cube .in_top    { transform: rotateX(90deg)  translateZ(calc(var(--size) / 4)); }
+.cube .in_bottom { transform: rotateX(-90deg) translateZ(calc(var(--size) / 4)); }
+
+/* 鼠标移入：六面沿各自法线向外推开，立方体"炸开"再收拢 */
+.cube:hover .out_front  { transform: rotateY(0deg)   translateZ(calc(var(--size) * 1)); }
+.cube:hover .out_back   { transform: translateZ(calc(var(--size) * -1)) rotateY(180deg); }
+.cube:hover .out_left   { transform: rotateY(90deg)  translateZ(calc(var(--size) * 1)); }
+.cube:hover .out_right  { transform: rotateY(-90deg) translateZ(calc(var(--size) * 1)); }
+.cube:hover .out_top    { transform: rotateX(90deg)  translateZ(calc(var(--size) * 1)); }
+.cube:hover .out_bottom { transform: rotateX(-90deg) translateZ(calc(var(--size) * 1)); }

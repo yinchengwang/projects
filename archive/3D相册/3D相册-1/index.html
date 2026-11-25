@@ -1,56 +1,36 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 	<head>
 		<meta charset="utf-8" />
-		<title>css-3d旋转</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>CSS 3D 旋转相册</title>
 		<link rel="stylesheet" href="css/index.css" />
 	</head>
 	<body>
-		<!--/*外层最大容器*/-->
+		<!-- 外层最大容器。perspective 挂在这一层：3D 纵深只对它的直接子元素生效 -->
 		<div class="wrap">
-	<!--	/*包裹所有元素的容器*/-->
-		<div class="cube">
-			<!--前面图片 -->
-			<div class="out_front">
-				<img src="img/1.jpg"  class="pic"/>
+			<!-- 包裹所有元素的容器 -->
+			<div class="cube">
+				<!-- 外层立方体的六个面（边长 200px） -->
+				<div class="out_front"><img src="img/1.jpg" class="pic" alt="相册照片 1" /></div>
+				<div class="out_back"><img src="img/2.jpg" class="pic" alt="相册照片 2" /></div>
+				<div class="out_left"><img src="img/3.jpg" class="pic" alt="相册照片 3" /></div>
+				<div class="out_right"><img src="img/4.jpg" class="pic" alt="相册照片 4" /></div>
+				<div class="out_top"><img src="img/5.jpg" class="pic" alt="相册照片 5" /></div>
+				<div class="out_bottom"><img src="img/6.jpg" class="pic" alt="相册照片 6" /></div>
+
+				<!--
+					内层小立方体（边长 100px）。
+					复用外层同一批图片：原来这里用 7.jpg..12.jpg，但那 6 个文件
+					与外层 1.jpg..6.jpg 逐字节相同（SHA256 一致），是同一批照片的重复副本。
+				-->
+				<span class="in_front"><img src="img/1.jpg" class="in_pic" alt="" /></span>
+				<span class="in_back"><img src="img/2.jpg" class="in_pic" alt="" /></span>
+				<span class="in_left"><img src="img/3.jpg" class="in_pic" alt="" /></span>
+				<span class="in_right"><img src="img/4.jpg" class="in_pic" alt="" /></span>
+				<span class="in_top"><img src="img/5.jpg" class="in_pic" alt="" /></span>
+				<span class="in_bottom"><img src="img/6.jpg" class="in_pic" alt="" /></span>
 			</div>
-			<!--后面图片 -->
-			<div class="out_back">
-				<img src="img/2.jpg"  class="pic"/>
-			</div>
-			<!--左图片 -->
-			<div class="out_left">
-				<img src="img/3.jpg"  class="pic"/>
-			</div>
-			<div class="out_right">
-				<img src="img/4.jpg"  class="pic"/>
-			</div>
-			<div class="out_top">
-				<img src="img/5.jpg"  class="pic"/>
-			</div>
-			<div class="out_bottom">
-				<img src="img/6.jpg"  class="pic"/>
-			</div>
-			<!--小正方体 --> 
-			<span class="in_front">
-				<img src="img/7.jpg" class="in_pic" />
-			</span>
-			<span class="in_back">
-			     <img src="img/8.jpg" class="in_pic" />
-			</span>
-			<span class="in_left">
-				<img src="img/9.jpg" class="in_pic" />
-			</span>
-			<span class="in_right">
-				<img src="img/10.jpg" class="in_pic" />
-			</span>
-			<span class="in_top">
-				<img src="img/11.jpg" class="in_pic" />
-			</span>
-			<span class="in_bottom">
-				<img src="img/12.jpg" class="in_pic" />
-			</span>
-		</div>
 		</div>
 	</body>
 </html>
