@@ -128,3 +128,16 @@ test("组合根：同一路径方法不匹配时返回 405 并带 Allow 头", as
   assert.strictEqual(r.status, 405)
   assert.ok(r.headers.allow && r.headers.allow.indexOf("GET") >= 0, "405 响应必须带 Allow 头")
 })
+
+test("外壳：首页含六个模块导航入口", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const r = await request(app.server, "/")
+  assert.strictEqual(r.status, 200)
+  const expected = ["/workbench/", "/knowledge/", "/trip/", "/games/", "/study/", "/wiki/"]
+  expected.forEach(function (href) {
+    assert.ok(r.body.indexOf(href) >= 0, "外壳应含入口：" + href)
+  })
+})
