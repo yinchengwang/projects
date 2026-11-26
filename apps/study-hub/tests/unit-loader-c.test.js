@@ -303,6 +303,62 @@ test("不传 path → 不产出单元，只给一条中文警告（G42）", func
   assert.ok(res.warnings[0].indexOf("path") !== -1, res.warnings[0])
 })
 
+test("loader C：附加字段装进 unit.extra", function () {
+  const front = [
+    "id: ai:kv-cache-formula",
+    "track: ai",
+    "kind: card",
+    "title: KV Cache 公式",
+    "difficulty: medium",
+    "topics: [infra:显存]",
+    "source: generated",
+    "language: python",
+    "demo: units/ai/kv-cache-formula.demo.py",
+    "graded: script",
+    "script: units/ai/kv-cache-formula.assert.py",
+    "status: draft",
+    "reviewed: false",
+    "reviewed_at:",
+    "runs_local: yes",
+    "needs: [vram, nvcc]",
+    "fallback: 读文档代替",
+    "timeout_s: 120",
+  ].join("\n")
+  const res = loaderC.parseUnitFile(makeUnitFile(front, "## 讲解\n\n正文\n"), {
+    path: "ai/kv-cache-formula.md",
+  })
+  assert.ok(res.unit, JSON.stringify(res.warnings))
+  assert.strictEqual(res.unit.extra.runs_local, "yes")
+  assert.deepStrictEqual(res.unit.extra.needs, ["vram", "nvcc"])
+  assert.strictEqual(res.unit.extra.fallback, "读文档代替")
+  assert.strictEqual(res.unit.extra.timeout_s, 120)
+})
+
+test("loader C：没有附加字段时 extra 落缺省（runs_local = 空串，未标注）", function () {
+  const res = loaderC.parseUnitFile(makeUnitFile(GOOD_FRONT, GOOD_BODY), {
+    path: "database/mvcc.md",
+  })
+  assert.ok(res.unit)
+  // 缺省是「未标注」的空串，不是 "no"——"no" 是「明确断言本机跑不了」。
+  // 算法轨与数据库轨的存量单元从未声明过本机可跑性，落 "no" 等于替它们做了断言。
+  assert.strictEqual(res.unit.extra.runs_local, "")
+  assert.deepStrictEqual(res.unit.extra.needs, [])
+  assert.strictEqual(res.unit.extra.fallback, "")
+  assert.strictEqual(res.unit.extra.timeout_s, 30)
+})
+
+test("loader C：附加字段的脏值被归一，不让单元整个报废", function () {
+  const front = GOOD_FRONT + "\nruns_local: 胡说\nneeds: [vram, 外星]\ntimeout_s: abc"
+  const res = loaderC.parseUnitFile(makeUnitFile(front, GOOD_BODY), {
+    path: "database/mvcc.md",
+  })
+  assert.ok(res.unit, JSON.stringify(res.warnings))
+  // 脏值不是「断言跑不了」，归回未标注的空串。
+  assert.strictEqual(res.unit.extra.runs_local, "")
+  assert.deepStrictEqual(res.unit.extra.needs, ["vram"])
+  assert.strictEqual(res.unit.extra.timeout_s, 30)
+})
+
 test("带 tol 的用例：丢弃 tol 并留中文警告", function () {
   const front = [
     "id: algo:lc-00007",
