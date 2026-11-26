@@ -56,7 +56,7 @@
 **Interfaces:**
 - Consumes: 无（首个任务）
 - Produces:
-  - `core/unit/extra.js` 导出 `EXTRA_KEYS`（`["runs_local", "needs", "fallback", "timeout_s"]`）、`RUNS_LOCAL_VALUES`（`["yes", "partial", "no"]`）、`NEEDS_VALUES`（`["gpu-count", "vram", "nvcc", "fp8-train", "ram"]`）、`DEFAULT_TIMEOUT_S`（`30`）、`MAX_TIMEOUT_S`（`600`）、`makeExtra(input)`、`normalizeExtra(unit)`。
+  - `core/unit/extra.js` 导出 `EXTRA_KEYS`（`["runs_local", "needs", "fallback", "timeout_s"]`）、`RUNS_LOCAL_VALUES`（`["", "yes", "partial", "no"]`）、`NEEDS_VALUES`（`["gpu-count", "vram", "nvcc", "fp8-train", "ram"]`）、`DEFAULT_TIMEOUT_S`（`30`）、`MAX_TIMEOUT_S`（`600`）、`makeExtra(input)`、`normalizeExtra(unit)`。
   - `createUnit(input)` 新增接受 `input.extra`（对象），产出 `unit.extra` 恒存在、四个键恒在。
 
 - [ ] **Step 1: 写失败测试**
@@ -83,22 +83,24 @@ test("EXTRA_KEYS 是约定的四个键，顺序固定", function () {
 })
 
 test("RUNS_LOCAL_VALUES 是 yes / partial / no", function () {
-  assert.deepStrictEqual(extra.RUNS_LOCAL_VALUES, ["yes", "partial", "no"])
+  assert.deepStrictEqual(extra.RUNS_LOCAL_VALUES, ["", "yes", "partial", "no"])
 })
 
 test("makeExtra：不给输入时四个键都在，值全是缺省", function () {
   const e = extra.makeExtra()
-  assert.strictEqual(e.runs_local, "no")
+  assert.strictEqual(e.runs_local, "")
   assert.deepStrictEqual(e.needs, [])
   assert.strictEqual(e.fallback, "")
   assert.strictEqual(e.timeout_s, extra.DEFAULT_TIMEOUT_S)
 })
 
-test("makeExtra：runs_local 非法值落回 no（宁可说跑不了，也不误报能跑）", function () {
+test("makeExtra：runs_local 非法值落回空串（未标注 ≠ 断言跑不了）", function () {
   assert.strictEqual(extra.makeExtra({ runs_local: "yes" }).runs_local, "yes")
-  assert.strictEqual(extra.makeExtra({ runs_local: "PARTIAL" }).runs_local, "no")
-  assert.strictEqual(extra.makeExtra({ runs_local: "也许" }).runs_local, "no")
-  assert.strictEqual(extra.makeExtra({ runs_local: "" }).runs_local, "no")
+  assert.strictEqual(extra.makeExtra({ runs_local: "partial" }).runs_local, "partial")
+  assert.strictEqual(extra.makeExtra({ runs_local: "no" }).runs_local, "no")
+  assert.strictEqual(extra.makeExtra({ runs_local: "PARTIAL" }).runs_local, "")
+  assert.strictEqual(extra.makeExtra({ runs_local: "也许" }).runs_local, "")
+  assert.strictEqual(extra.makeExtra({ runs_local: "" }).runs_local, "")
 })
 
 test("makeExtra：needs 只留枚举内的值", function () {
@@ -128,7 +130,7 @@ test("createUnit：产出的单元恒有 extra（loader A/B 走这条路）", fu
   })
   assert.ok(unit.extra, "extra 必须在场")
   assert.deepStrictEqual(Object.keys(unit.extra).sort(), extra.EXTRA_KEYS.slice().sort())
-  assert.strictEqual(unit.extra.runs_local, "no")
+  assert.strictEqual(unit.extra.runs_local, "")
 })
 
 test("createUnit：传入 extra 时原样带上", function () {
@@ -163,14 +165,14 @@ test("createUnit：extra 里的非法值被归一，不让脏值进 Unit", funct
     path: "units/ai/probe2.md",
     extra: { runs_local: "胡说", needs: ["vram", "外星"], timeout_s: 999999 },
   })
-  assert.strictEqual(unit.extra.runs_local, "no")
+  assert.strictEqual(unit.extra.runs_local, "")
   assert.deepStrictEqual(unit.extra.needs, ["vram"])
   assert.strictEqual(unit.extra.timeout_s, extra.MAX_TIMEOUT_S)
 })
 
 test("normalizeExtra：对象不是 extra 就当全缺省", function () {
   const e = extra.normalizeExtra(undefined)
-  assert.strictEqual(e.runs_local, "no")
+  assert.strictEqual(e.runs_local, "")
   assert.deepStrictEqual(e.needs, [])
   assert.strictEqual(e.fallback, "")
   assert.strictEqual(e.timeout_s, extra.DEFAULT_TIMEOUT_S)
@@ -205,8 +207,18 @@ Expected: FAIL，错误是 `Cannot find module '../core/unit/extra.js'`
 /** extra 的四个键，顺序固定 */
 const EXTRA_KEYS = ["runs_local", "needs", "fallback", "timeout_s"]
 
-/** runs_local 的取值域：yes = 本机真跑得起来；partial = 只能玩具化；no = 跑不了 */
-const RUNS_LOCAL_VALUES = ["yes", "partial", "no"]
+/**
+ * runs_local 的取值域：
+ *   ""        = 未标注（本机可跑性对这个单元不适用，或单元没写这个字段）——缺省
+ *   "yes"     = 本机真跑得起来，现象可复现并测量
+ *   "partial" = 只能玩具化 / 缩小版复现
+ *   "no"      = 明确断言：本机跑不了
+ *
+ * 为什么空串与 "no" 要分开：算法轨与数据库轨的存量单元从来没有声明过本机可跑性，
+ * 那是「未标注」而不是「跑不了」。把缺省落成 "no" 会替它们做一个未经声明的断言，
+ * 按这一列筛「跑不起来的单元」时会把几百道存量题误算进去。
+ */
+const RUNS_LOCAL_VALUES = ["", "yes", "partial", "no"]
 
 /** needs 的取值域：缺什么 */
 const NEEDS_VALUES = ["gpu-count", "vram", "nvcc", "fp8-train", "ram"]
@@ -226,10 +238,10 @@ const MAX_TIMEOUT_S = 600
 function makeExtra(input) {
   const src = input && typeof input === "object" ? input : {}
 
-  // runs_local：非法值落 "no"。宁可把能跑的误标成跑不了（用户会自己发现），
-  // 也不能把跑不了的误标成能跑——后者会让人卡在一个永远跑不通的实验上。
+  // runs_local：非法值落空串（未标注）。**不落 "no"** —— 脏值不该被当成
+  // 「断言跑不了」；「未标注」与「跑不了」是两件事，见上面 RUNS_LOCAL_VALUES 的注释。
   const rawRuns = String(src.runs_local === undefined || src.runs_local === null ? "" : src.runs_local).trim()
-  const runs_local = RUNS_LOCAL_VALUES.indexOf(rawRuns) !== -1 ? rawRuns : "no"
+  const runs_local = RUNS_LOCAL_VALUES.indexOf(rawRuns) !== -1 ? rawRuns : ""
 
   const rawNeeds = Array.isArray(src.needs) ? src.needs : []
   const needs = []
@@ -371,12 +383,12 @@ test("loader C：附加字段装进 unit.extra", function () {
   assert.strictEqual(res.unit.extra.timeout_s, 120)
 })
 
-test("loader C：没有附加字段时 extra 落缺省（runs_local = no）", function () {
+test("loader C：没有附加字段时 extra 落缺省（runs_local = 空串，未标注）", function () {
   const res = loaderC.parseUnitFile(makeUnitFile(GOOD_FRONT, GOOD_BODY), {
     path: "database/mvcc.md",
   })
   assert.ok(res.unit)
-  assert.strictEqual(res.unit.extra.runs_local, "no")
+  assert.strictEqual(res.unit.extra.runs_local, "")
   assert.deepStrictEqual(res.unit.extra.needs, [])
   assert.strictEqual(res.unit.extra.fallback, "")
   assert.strictEqual(res.unit.extra.timeout_s, 30)
@@ -388,7 +400,7 @@ test("loader C：附加字段的脏值被归一，不让单元整个报废", fun
     path: "database/mvcc.md",
   })
   assert.ok(res.unit, JSON.stringify(res.warnings))
-  assert.strictEqual(res.unit.extra.runs_local, "no")
+  assert.strictEqual(res.unit.extra.runs_local, "")
   assert.deepStrictEqual(res.unit.extra.needs, ["vram"])
   assert.strictEqual(res.unit.extra.timeout_s, 30)
 })
@@ -397,7 +409,7 @@ test("loader C：附加字段的脏值被归一，不让单元整个报废", fun
 - [ ] **Step 2: 跑测试确认失败**
 
 Run: `cd apps/study-hub && node tests/unit-loader-c.test.js`
-Expected: FAIL，错误形如 `Expected values to be strictly equal: 'no' !== 'yes'`（`unit.extra` 还没有内容）
+Expected: FAIL，错误形如 `Expected values to be strictly equal: '' !== 'yes'`（`unit.extra` 还没有内容）
 
 - [ ] **Step 3: 改 loader C**
 
@@ -744,8 +756,8 @@ Expected: FAIL，`rows[0].runs_local` 是 `undefined` 或 `""`（还没写进去
 
 ```javascript
       // runs_local 来自 unit.extra（Task 1 的嵌套袋）。
-      // extra 缺失时写空串——loader A/B 的单元没有这层信息，空串比 "no" 诚实：
-      // "no" 是一个断言（跑不了），空串是「没标」。
+      // 缺省值是**空串（未标注）**，不是 "no"——算法轨/数据库轨的存量单元从来没有
+      // 声明过本机可跑性，那是「未标注」不是「跑不了」。详见设计文档 §4.3。
       runs_local: unit.extra ? String(unit.extra.runs_local || "") : "",
 ```
 
@@ -1160,7 +1172,8 @@ const FRONTMATTER_ORDER = [
         else if (key === "status") value = "draft"
         else if (key === "kind") value = "card"
         else if (key === "graded") value = "script"
-        else if (key === "runs_local") value = "no"
+        // runs_local 的缺省是**空串（未标注）**，不是 "no"——"no" 是「明确断言跑不了」。
+        else if (key === "runs_local") value = ""
         else if (key === "timeout_s") value = DEFAULT_TIMEOUT_S
         else value = ""
       }
