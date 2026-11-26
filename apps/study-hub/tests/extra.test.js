@@ -16,23 +16,25 @@ test("EXTRA_KEYS 是约定的四个键，顺序固定", function () {
   assert.deepStrictEqual(extra.EXTRA_KEYS, ["runs_local", "needs", "fallback", "timeout_s"])
 })
 
-test("RUNS_LOCAL_VALUES 是 yes / partial / no", function () {
-  assert.deepStrictEqual(extra.RUNS_LOCAL_VALUES, ["yes", "partial", "no"])
+test("RUNS_LOCAL_VALUES 是 未标注 / yes / partial / no", function () {
+  assert.deepStrictEqual(extra.RUNS_LOCAL_VALUES, ["", "yes", "partial", "no"])
 })
 
 test("makeExtra：不给输入时四个键都在，值全是缺省", function () {
   const e = extra.makeExtra()
-  assert.strictEqual(e.runs_local, "no")
+  assert.strictEqual(e.runs_local, "")
   assert.deepStrictEqual(e.needs, [])
   assert.strictEqual(e.fallback, "")
   assert.strictEqual(e.timeout_s, extra.DEFAULT_TIMEOUT_S)
 })
 
-test("makeExtra：runs_local 非法值落回 no（宁可说跑不了，也不误报能跑）", function () {
+test("makeExtra：runs_local 非法值落回空串（未标注 ≠ 断言跑不了）", function () {
   assert.strictEqual(extra.makeExtra({ runs_local: "yes" }).runs_local, "yes")
-  assert.strictEqual(extra.makeExtra({ runs_local: "PARTIAL" }).runs_local, "no")
-  assert.strictEqual(extra.makeExtra({ runs_local: "也许" }).runs_local, "no")
-  assert.strictEqual(extra.makeExtra({ runs_local: "" }).runs_local, "no")
+  assert.strictEqual(extra.makeExtra({ runs_local: "partial" }).runs_local, "partial")
+  assert.strictEqual(extra.makeExtra({ runs_local: "no" }).runs_local, "no")
+  assert.strictEqual(extra.makeExtra({ runs_local: "PARTIAL" }).runs_local, "")
+  assert.strictEqual(extra.makeExtra({ runs_local: "也许" }).runs_local, "")
+  assert.strictEqual(extra.makeExtra({ runs_local: "" }).runs_local, "")
 })
 
 test("makeExtra：needs 只留枚举内的值", function () {
@@ -62,7 +64,7 @@ test("createUnit：产出的单元恒有 extra（loader A/B 走这条路）", fu
   })
   assert.ok(unit.extra, "extra 必须在场")
   assert.deepStrictEqual(Object.keys(unit.extra).sort(), extra.EXTRA_KEYS.slice().sort())
-  assert.strictEqual(unit.extra.runs_local, "no")
+  assert.strictEqual(unit.extra.runs_local, "")
 })
 
 test("createUnit：传入 extra 时原样带上", function () {
@@ -97,15 +99,40 @@ test("createUnit：extra 里的非法值被归一，不让脏值进 Unit", funct
     path: "units/ai/probe2.md",
     extra: { runs_local: "胡说", needs: ["vram", "外星"], timeout_s: 999999 },
   })
-  assert.strictEqual(unit.extra.runs_local, "no")
+  assert.strictEqual(unit.extra.runs_local, "")
   assert.deepStrictEqual(unit.extra.needs, ["vram"])
   assert.strictEqual(unit.extra.timeout_s, extra.MAX_TIMEOUT_S)
 })
 
 test("normalizeExtra：对象不是 extra 就当全缺省", function () {
   const e = extra.normalizeExtra(undefined)
-  assert.strictEqual(e.runs_local, "no")
+  assert.strictEqual(e.runs_local, "")
   assert.deepStrictEqual(e.needs, [])
   assert.strictEqual(e.fallback, "")
   assert.strictEqual(e.timeout_s, extra.DEFAULT_TIMEOUT_S)
+})
+
+test("makeExtra：needs 去重且保序", function () {
+  const e = extra.makeExtra({ needs: ["vram", "nvcc", "vram", " vram ", "ram"] })
+  assert.deepStrictEqual(e.needs, ["vram", "nvcc", "ram"])
+})
+
+test("makeExtra：输入不是对象时落全缺省", function () {
+  assert.deepStrictEqual(extra.makeExtra(null).needs, [])
+  assert.strictEqual(extra.makeExtra("abc").runs_local, "")
+  assert.strictEqual(extra.makeExtra(42).timeout_s, extra.DEFAULT_TIMEOUT_S)
+})
+
+test("makeExtra：fallback 一定落成字符串", function () {
+  assert.strictEqual(extra.makeExtra({ fallback: 123 }).fallback, "123")
+  assert.strictEqual(extra.makeExtra({ fallback: "  读文档  " }).fallback, "读文档")
+})
+
+test("NEEDS_VALUES 是约定的五个依赖项", function () {
+  assert.deepStrictEqual(extra.NEEDS_VALUES, ["gpu-count", "vram", "nvcc", "fp8-train", "ram"])
+})
+
+test("超时上下限是 30 / 600", function () {
+  assert.strictEqual(extra.DEFAULT_TIMEOUT_S, 30)
+  assert.strictEqual(extra.MAX_TIMEOUT_S, 600)
 })

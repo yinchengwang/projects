@@ -16,8 +16,18 @@
 /** extra 的四个键，顺序固定 */
 const EXTRA_KEYS = ["runs_local", "needs", "fallback", "timeout_s"]
 
-/** runs_local 的取值域：yes = 本机真跑得起来；partial = 只能玩具化；no = 跑不了 */
-const RUNS_LOCAL_VALUES = ["yes", "partial", "no"]
+/**
+ * runs_local 的取值域：
+ *   ""        = 未标注（本机可跑性对这个单元不适用，或没写）——缺省
+ *   "yes"     = 本机真跑得起来，现象可复现并测量
+ *   "partial" = 只能玩具化 / 缩小版复现
+ *   "no"      = 明确断言：本机跑不了
+ *
+ * 为什么空串与 "no" 要分开：算法轨与数据库轨的存量单元从来没有声明过本机可跑性，
+ * 那是「未标注」而不是「跑不了」。把缺省落成 "no" 会替它们做一个未经声明的断言，
+ * 按这一列筛「跑不起来的单元」时会把几百道存量题误算进去。
+ */
+const RUNS_LOCAL_VALUES = ["", "yes", "partial", "no"]
 
 /** needs 的取值域：缺什么 */
 const NEEDS_VALUES = ["gpu-count", "vram", "nvcc", "fp8-train", "ram"]
@@ -37,10 +47,13 @@ const MAX_TIMEOUT_S = 600
 function makeExtra(input) {
   const src = input && typeof input === "object" ? input : {}
 
-  // runs_local：非法值落 "no"。宁可把能跑的误标成跑不了（用户会自己发现），
-  // 也不能把跑不了的误标成能跑——后者会让人卡在一个永远跑不通的实验上。
+  // runs_local：缺省 / 空串 / 非法值一律落 ""（未标注）。
+  // 这里不是"宁可说跑不了"——"no" 是一个明确断言，把没声明过的单元一律断言成"跑不了"，
+  // 等于把「未标注」与「跑不了」抹平：算法轨与数据库轨的存量单元从未声明过本机可跑性，
+  // 缺省落 "no" 会让按这一列筛「跑不起来的单元」的结果误收几百道存量题。
+  // 脏值（如 "PARTIAL"、"胡说"）同理：它不是「断言跑不了」，只说明没写对，归回未标注。
   const rawRuns = String(src.runs_local === undefined || src.runs_local === null ? "" : src.runs_local).trim()
-  const runs_local = RUNS_LOCAL_VALUES.indexOf(rawRuns) !== -1 ? rawRuns : "no"
+  const runs_local = RUNS_LOCAL_VALUES.indexOf(rawRuns) !== -1 ? rawRuns : ""
 
   const rawNeeds = Array.isArray(src.needs) ? src.needs : []
   const needs = []
