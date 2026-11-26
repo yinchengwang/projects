@@ -22,10 +22,10 @@ const RUNS_LOCAL_VALUES = ["yes", "partial", "no"]
 /** needs 的取值域：缺什么 */
 const NEEDS_VALUES = ["gpu-count", "vram", "nvcc", "fp8-train", "ram"]
 
-/** 断言脚本默认预算（秒）——与 judge/runner.js 的 SCRIPT_TIMEOUT_MS 对齐 */
+/** 断言脚本默认预算（秒）——与 judge/runner.js 的 SCRIPT_TIMEOUT_MS（30 秒）对齐 */
 const DEFAULT_TIMEOUT_S = 30
 
-/** 断言脚本预算上限（秒）——与 judge/sandbox.js 的 MAX_SCRIPT_TIMEOUT_MS 对齐 */
+/** 断言脚本预算上限（秒）——契约自定：上限 10 分钟，超出的申请一律截到 600 */
 const MAX_TIMEOUT_S = 600
 
 /**
