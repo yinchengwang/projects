@@ -107,6 +107,7 @@ apps/
 │   │   ├── games/            games/utils/*（snake sudoku game2048 match3 achievements share vibrate）
 │   │   ├── ui.js             统一构件层（吸收 study-hub/web/ui.js）
 │   │   ├── charts.js         手绘 SVG 图表层（吸收 study-hub/web/charts.js）
+│   │   ├── platform.js       平台适配层：showToast/showModal/showActionSheet/导航等 9 个 API
 │   │   └── storage-adapter.js  浏览器端 localStorage 适配
 │   └── web/                  各模块前端
 │       ├── index.html        统一外壳（导航 + 路由）
@@ -204,7 +205,33 @@ apps/
 - Node 启动时探测 Python 服务存活；不存活时 `/wiki/*` 返回 **HTTP 503 + 中文提示**：「wiki-rag 未启动，请先运行 `python -m server.main`（需在 `apps/wiki-rag` 下）」
 - **wiki-rag 不可用只影响该模块**，其余模块完全正常
 
-### 决策 F：旧小程序目录直接删除
+### 决策 F：平台适配层 —— `shared/platform.js`
+
+小程序的交互层共 193 处 wx UI 调用，但**只用了 9 个 API**：
+
+| wx API | 用途 | Web 侧实现 |
+|---|---|---|
+| `showToast` | 轻提示（`icon: none` / `success`） | 自研 toast 组件 |
+| `showModal` | 确认框；`editable: true` 时兼作输入框 | `<dialog>` + 内嵌 input |
+| `showActionSheet` | 动作菜单 | `<dialog>` + 列表项 |
+| `navigateTo` / `navigateBack` / `switchTab` | 页面跳转 | History API（`pushState` / `back` / 替换） |
+| `showLoading` / `hideLoading` | 加载遮罩 | 自研 overlay |
+| `chooseMedia` | 选图 | `<input type="file" accept="image/*" multiple>` |
+| `previewImage` | 图片预览 | 自研 lightbox |
+| `stopPullDownRefresh` | 下拉刷新结束 | 不需要（Web 无此手势） |
+
+做法：在 `shared/platform.js` 提供**与 wx 同名同签名**的平台 API（`showToast({title, icon})` 等），页面代码的调用方式**一字不改**，只需把 `wx.` 前缀换成 `platform.`。
+
+收益：
+- 交互层只实现**一次**，而非 35 个页面各写一遍
+- `wx.showModal({editable:true})` 的"快捷输入"语义（`capture-sheet` 组件依赖它）在 `<dialog>` 上有精确对应
+- 页面层移植时，只需关心「数据 → 视图模型」这一件事
+
+页面文件实际是两层结构，天然支持拆分交付（见 §7）：
+- **数据层**：`refresh()` 中的 `stores.*` 调用、排序、`map` 成视图模型 —— 纯逻辑，零 wx 依赖
+- **交互层**：`wx.*` 调用与 `setData` —— 由平台适配层吸收
+
+### 决策 G：旧小程序目录直接删除
 
 合并完成后删除 `apps/games/` `apps/knowledge-hub/` `apps/programmer-workbench/` `apps/trip-log/`。
 
@@ -260,6 +287,8 @@ apps/
 | 层次 | 手段 | 门禁 |
 |---|---|---|
 | `shared/core/` | 迁移小程序现有 `core.test.js` / `stores.test.js` / `review.test.js` / `graph.test.js` | 全部通过 |
+| `shared/platform.js` | 新增单测，覆盖 9 个平台 API（toast / modal / actionSheet / 路由跳转 / loading / 选图 / 预览） | 全通过 |
+| 数据层（每模块） | 迁移小程序现有 `tech.test.js` / `life.test.js` / `p5.test.js` / `tools.test.js` 等 | 全通过 |
 | 页面层 | 各模块 `tests/*.test.js`（node:test），断言 `render()` 输出含关键元素 | 新增，全通过 |
 | 前端存储 | `tests/wx-stub.js` 换 `localStorage` stub 后**原样复用** | 现有用例全通过 |
 | 组合根 | `apps/web/tests/run-all.js` 一条命令跑全部模块 | CI 门禁 |
@@ -271,20 +300,48 @@ apps/
 
 ## 7. 交付顺序
 
-每一步结束都能独立运行，不存在半成品中间态。**主力模块优先**。
+每一步结束都能独立运行，不存在半成品中间态。**主力模块优先**；主力模块内部按「数据层 → 视图层」拆成两步，各自可独立验收。
+
+### 7.1 步骤总表
 
 | 步骤 | 内容 | 验证方式 |
 |---|---|---|
 | 0 | 骨架：`apps/web/` 组合根 + 路由 + 静态托管 + 统一外壳 | `node apps/web/server/main.js` 起得来；4 个路由返回 200 |
 | 1 | `shared/core/` 抽取（10 个公共文件）+ `shared/ui.js` + `shared/charts.js` | `shared/core` 单测全绿 |
-| 2 | **programmer-workbench 模块**（18 页 + 10 个离线工具） | 18 页可交互；工具箱 10 工具可用；`db:` 数据读写一致；迁入的测试全绿 |
-| 3 | **knowledge-hub 模块**（17 页 + 8 组件 + 知识图谱 + 雷达图） | 17 页渲染正确；图表复用 `charts.js`；迁入的测试全绿 |
-| 4 | **trip-log 模块**（3 页 + IndexedDB 图片 + 导出导入） | 增删改查 + 照片存取 + 导出导入往返一致 |
-| 5 | **games 模块**（5 页） | 5 个游戏可玩；存档持久化；`engine.test.js` 迁入并通过 |
-| 6 | **study-hub 挂载** + **wiki-rag 反代** | `/study` 原有测试全绿；`/wiki` 检索可用；wiki 停掉时其余模块正常 |
-| 7 | 删除 4 个旧小程序目录 + 更新 `apps/README.md` | `apps/web/tests/run-all.js` 全绿；旧目录已消失 |
+| 2 | `shared/platform.js` 平台适配层（9 个 API） | 单测覆盖 toast / modal / actionSheet / 路由跳转 |
+| 3 | **workbench 数据层**：`codetools.js` + `stores.js` 合并 + `seed.js` 归一 → `shared/workbench/` | 现有 `core.test.js` / `tech.test.js` 迁入并通过 |
+| 4 | **workbench 视图层**：18 页 → `apps/web/web/workbench/` | 18 页可交互；工具箱 10 工具可用；`db:` 数据读写一致 |
+| 5 | **knowledge-hub 数据层**：`graph-layout` `radar-layout` `review` `kh-constants` `seed-data` → `shared/knowledge/` | 现有 `review.test.js` / `graph.test.js` / `stores.test.js` 迁入并通过 |
+| 6 | **knowledge-hub 视图层**：17 页 + 8 组件 → `apps/web/web/knowledge/` | 17 页渲染正确；图表复用 `charts.js` |
+| 7 | **trip-log 模块**（3 页 + IndexedDB 图片 + 导出导入） | 增删改查 + 照片存取 + 导出导入往返一致 |
+| 8 | **games 模块**（5 页） | 5 个游戏可玩；存档持久化；`engine.test.js` 迁入并通过 |
+| 9 | **study-hub 挂载** + **wiki-rag 反代** | `/study` 原有测试全绿；`/wiki` 检索可用；wiki 停掉时其余模块正常 |
+| 10 | 删除 4 个旧小程序目录 + 更新 `apps/README.md` | `apps/web/tests/run-all.js` 全绿；旧目录已消失 |
 
-**前置约束**：步骤 7 的删除动作，必须在步骤 2–5 对应模块的测试全部迁入并通过之后执行。
+### 7.2 为什么要拆数据层 / 视图层
+
+每个页面文件天然分两层，拆分后**数据层可先被测试覆盖**，视图层的重写就有稳定的回归护栏：
+
+```
+apps/programmer-workbench/pages/tech/notes/index.js
+├── 数据层（零 wx 依赖）        → 搬进 shared/workbench/，node:test 直接断言
+│   ├── stores.techNotes.getAll()
+│   ├── 置顶优先 + 更新时间倒序的排序
+│   └── map 成视图模型 {id, title, color, categoryLabel, time, preview, tags, pinned}
+└── 交互层（需替换）            → 视图层重写时用 platform.* 承接
+    ├── wx.navigateTo / wx.navigateBack
+    ├── wx.showActionSheet / wx.showModal / wx.showToast
+    └── this.setData({items, count, pinnedCount})
+```
+
+拆分后的收益：
+1. **数据层先绿**：视图层还没写，逻辑已被 `node:test` 覆盖 —— 重写页面时改坏了数据逻辑会立刻被发现
+2. **风险前置**：`stores.js` / `seed.js` 的分叉合并（决策 C）是最易出错的部分，拆开后它是独立可验收的一步
+3. **每步都有产出**：步骤 3 结束时 `shared/workbench/` 已有可测的完整业务逻辑，步骤 4 只是把它显示出来
+
+### 7.3 前置约束
+
+步骤 10 的删除动作，必须在步骤 3–8 对应模块的测试全部迁入并通过之后执行。
 
 ---
 
@@ -297,7 +354,7 @@ apps/
 | WXSS `rpx` 单位需转换 | 中 | WXSS 头部已写明换算基准「1px = 2rpx（375 设计稿）」。`rpx → px` 按 ÷2 机械换算；`page` 布局（小程序全屏）→ 普通块级布局 + 统一外壳容器 |
 | wiki-rag 的 Python 依赖装不上 | 中 | 模块级降级（503 + 中文提示），其余模块不受影响；README 写清启动步骤 |
 | 本地数据丢失（清浏览器缓存） | 中 | 各模块提供 JSON 导出/导入 |
-| 删掉旧小程序后无法对照 | 中 | git 历史可回溯；步骤 7 严格前置 |
+| 删掉旧小程序后无法对照 | 中 | git 历史可回溯；步骤 10 严格前置 |
 | `wx.login` 身份在 Web 端彻底缺失 | 低 | 当前云端本就未激活；导出/导入作为补偿 |
 
 ---
