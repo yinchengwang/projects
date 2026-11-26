@@ -187,6 +187,24 @@ test("单元不存在 → 404 且带 id", async function () {
   })
 })
 
+test("runs_local 查询参数支持过滤空串", async function () {
+  const app = createApp({ dbPath: ":memory:", learningRoot: tempLearning(), localBank: null })
+  app.store.replaceUnits([
+    { id: "ai:blank", track: "ai", kind: "card", title: "未标注", path: "p", status: "draft", topics: "[]", difficulty: "medium", subtracks: "[]", runs_local: "", updated: "" },
+    { id: "ai:yes", track: "ai", kind: "card", title: "可运行", path: "p", status: "draft", topics: "[]", difficulty: "medium", subtracks: "[]", runs_local: "yes", updated: "" },
+  ])
+  const port = await app.listen(0)
+  try {
+    const res = await fetch("http://127.0.0.1:" + port + "/api/units?runs_local=")
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.total, 1)
+    assert.equal(body.items[0].runs_local, "")
+  } finally {
+    await app.close()
+  }
+})
+
 test("旧接口没有回归", async function () {
   await withApp(async function (base) {
     const health = await fetch(base + "/api/health")

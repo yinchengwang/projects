@@ -84,6 +84,8 @@ function buildUnitRoutes(ctx) {
       if (kind) filter.kind = kind
       const status = query.get("status")
       if (status) filter.status = status
+      const runsLocal = query.get("runs_local")
+      if (runsLocal !== null) filter.runs_local = runsLocal
 
       let rows = store.listUnits(filter)
 
