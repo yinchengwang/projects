@@ -34,6 +34,9 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
  */
 const MAX_TIMEOUT_MS = 60000
 
+/** 断言脚本的超时硬上限（毫秒），与用户代码时限隔离。 */
+const MAX_SCRIPT_TIMEOUT_MS = 600000
+
 /**
  * 杀掉进程树之后仍不退出时的宽限期（毫秒）。
  * 超时了还不收摊，就是进程树杀不动（taskkill 失败、进程卡在不可中断 IO 等），
@@ -228,15 +231,19 @@ function createSandbox() {
 }
 
 /**
- * 把传入的超时夹到 [1, MAX_TIMEOUT_MS]。
+ * 把传入的超时夹到 [1, 上限]。
  * 非法值（非数字、<= 0）退化成 DEFAULT_TIMEOUT_MS。
+ * cap 是可选上限：不给用 MAX_TIMEOUT_MS，给了用给定值。
  * @param {number|string|undefined|null} ms
+ * @param {number|string|undefined|null} [cap]
  * @returns {number}
  */
-function clampTimeoutMs(ms) {
+function clampTimeoutMs(ms, cap) {
   const n = Number(ms)
+  const c = Number(cap)
+  const ceiling = Number.isFinite(c) && c > 0 ? c : MAX_TIMEOUT_MS
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_MS
-  return Math.min(Math.floor(n), MAX_TIMEOUT_MS)
+  return Math.min(Math.floor(n), ceiling)
 }
 
 /**
@@ -420,12 +427,12 @@ function killTree(child) {
  * 跑一个子进程，带超时。超时后杀整棵进程树并把 timedOut 置 true。
  * @param {string} cmd
  * @param {string[]} args
- * @param {{cwd?: string, input?: string, timeoutMs?: number, env?: object}} [options]
+ * @param {{cwd?: string, input?: string, timeoutMs?: number, maxTimeoutMs?: number, env?: object}} [options]
  * @returns {Promise<{code: number|null, stdout: string, stderr: string, durationMs: number, timedOut: boolean, signal: string|null, truncated: boolean}>}
  */
 function runCommand(cmd, args, options) {
   const opts = options || {}
-  const timeoutMs = clampTimeoutMs(opts.timeoutMs)
+  const timeoutMs = clampTimeoutMs(opts.timeoutMs, opts.maxTimeoutMs)
   const started = Date.now()
 
   return new Promise(function (resolve) {
@@ -572,6 +579,7 @@ module.exports = {
   DETECT_TIMEOUT_MS: DETECT_TIMEOUT_MS,
   MAX_OUTPUT_BYTES: MAX_OUTPUT_BYTES,
   MAX_TIMEOUT_MS: MAX_TIMEOUT_MS,
+  MAX_SCRIPT_TIMEOUT_MS: MAX_SCRIPT_TIMEOUT_MS,
   KILL_GRACE_MS: KILL_GRACE_MS,
   PYTHON_CANDIDATES: PYTHON_CANDIDATES,
   detectCompiler: detectCompiler,

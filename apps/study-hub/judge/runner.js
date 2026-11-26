@@ -22,6 +22,7 @@ const {
   runCommand,
   resolveToolchain,
   clampTimeoutMs,
+  MAX_SCRIPT_TIMEOUT_MS,
   copyIntoSandbox,
   copyDirIntoSandbox,
   collectArtifacts,
@@ -267,7 +268,11 @@ async function judgeCardScript(ctx) {
 
   const sandbox = p.sandbox || createSandbox()
   const owned = !p.sandbox
-  const timeoutMs = p.timeoutMs ? clampTimeoutMs(p.timeoutMs) : SCRIPT_TIMEOUT_MS
+  // 卡片脚本按单元声明预算，但由沙箱的脚本专用上限统一夹住。
+  const extra = ctx.unit && ctx.unit.extra ? ctx.unit.extra : null
+  const declared = extra ? Number(extra.timeout_s) * 1000 : NaN
+  const scriptBudget = Number.isFinite(declared) && declared > 0 ? declared : SCRIPT_TIMEOUT_MS
+  const timeoutMs = clampTimeoutMs(p.timeoutMs ? p.timeoutMs : scriptBudget, MAX_SCRIPT_TIMEOUT_MS)
 
   try {
     // demo 目录整个拷进沙箱：demo 会往自己目录里写 .db，
@@ -290,6 +295,7 @@ async function judgeCardScript(ctx) {
     const run = await runCommand(python.cmd, python.args.concat([scriptTarget]), {
       cwd: sandbox.dir,
       timeoutMs: timeoutMs,
+      maxTimeoutMs: MAX_SCRIPT_TIMEOUT_MS,
       env: env,
     })
 
