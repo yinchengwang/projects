@@ -403,3 +403,58 @@ test("refreshUnitIndex 收到 preloaded 时不重新扫盘", function () {
   // 真扫了 loader C 必然报「缺少 frontmatter」「单元 id 非法」，warnings 就非空了。
   assert.deepEqual(res.warnings, [])
 })
+
+test("refreshUnitIndex 把 runs_local 写进 units 表并保留显式 no", function () {
+  const rows = []
+  const fakeStore = {
+    replaceUnits: function (items) {
+      rows.length = 0
+      items.forEach(function (item) { rows.push(item) })
+    },
+  }
+  const res = index.refreshUnitIndex(fakeStore, {}, {
+    units: [
+      {
+        id: "ai:probe",
+        track: "ai",
+        kind: "card",
+        title: "探针",
+        path: "units/ai/probe.md",
+        status: "draft",
+        topics: ["infra:显存"],
+        difficulty: "medium",
+        subtracks: [],
+        extra: { runs_local: "yes", needs: [], fallback: "", timeout_s: 30 },
+      },
+      {
+        id: "ai:probe2",
+        track: "ai",
+        kind: "card",
+        title: "探针二",
+        path: "units/ai/probe2.md",
+        status: "draft",
+        topics: [],
+        difficulty: "medium",
+        subtracks: [],
+      },
+      {
+        id: "ai:probe3",
+        track: "ai",
+        kind: "card",
+        title: "探针三",
+        path: "units/ai/probe3.md",
+        status: "draft",
+        topics: [],
+        difficulty: "medium",
+        subtracks: [],
+        extra: { runs_local: "no", needs: [], fallback: "", timeout_s: 30 },
+      },
+    ],
+    warnings: [],
+    byId: {},
+  })
+  assert.strictEqual(res.count, 3)
+  assert.strictEqual(rows[0].runs_local, "yes")
+  assert.strictEqual(rows[1].runs_local, "")
+  assert.strictEqual(rows[2].runs_local, "no")
+})

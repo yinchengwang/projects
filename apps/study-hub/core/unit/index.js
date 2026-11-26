@@ -252,6 +252,8 @@ function refreshUnitIndex(store, opts, preloaded) {
       topics: JSON.stringify(unit.topics || []),
       difficulty: unit.difficulty,
       subtracks: JSON.stringify(unit.subtracks || []),
+      // 从 extra 读取明确标注；缺失时用空串表示未标注，不将其误记为「跑不了」。
+      runs_local: unit.extra ? String(unit.extra.runs_local === undefined || unit.extra.runs_local === null ? "" : unit.extra.runs_local) : "",
       updated: now,
     }
   })
