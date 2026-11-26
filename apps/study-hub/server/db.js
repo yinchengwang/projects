@@ -32,6 +32,7 @@ function parseUnitRow(row) {
     topics: parseJsonList(row.topics),
     difficulty: String(row.difficulty || "medium"),
     subtracks: parseJsonList(row.subtracks),
+    runs_local: String(row.runs_local || ""),
   }
 }
 
@@ -109,6 +110,7 @@ const SCHEMA = [
      topics     TEXT NOT NULL DEFAULT '',
      difficulty TEXT NOT NULL DEFAULT 'medium',
      subtracks  TEXT NOT NULL DEFAULT '',
+     runs_local TEXT NOT NULL DEFAULT '',
      updated    TEXT NOT NULL DEFAULT ''
    )`,
   `CREATE INDEX IF NOT EXISTS units_track ON units(track)`,
@@ -161,6 +163,7 @@ const ADD_COLUMNS = [
   { table: "review_cards", column: "unit_id", type: "TEXT" },
   { table: "review_cards", column: "units_since", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "topics", column: "track", type: "TEXT NOT NULL DEFAULT 'algorithm'" },
+  { table: "units", column: "runs_local", type: "TEXT NOT NULL DEFAULT ''" },
 ]
 
 /**
@@ -184,6 +187,8 @@ function migrate(db) {
       warnings.push("读不到表结构：" + item.table)
       return
     }
+    // 老库可能尚未创建 units 表；此附加列无需因此产生迁移警告。
+    if (info.length === 0 && item.table === "units") return
     const exists = info.some(function (row) {
       return String(row.name) === item.column
     })
@@ -735,12 +740,12 @@ function createStore(db) {
     /**
      * 整体覆盖 units 表（物化视图语义，与 replaceTopics 一致）。
      * 派生值永远是全量，不是增量。
-     * @param {Array<{id: string, track: string, kind: string, title: string, path: string, status: string, topics: string, difficulty: string, subtracks: string, updated: string}>} rows
+     * @param {Array<{id: string, track: string, kind: string, title: string, path: string, status: string, topics: string, difficulty: string, subtracks: string, runs_local: string, updated: string}>} rows
      */
     replaceUnits: function (rows) {
       db.exec("DELETE FROM units")
       const stmt = db.prepare(
-        "INSERT INTO units(id, track, kind, title, path, status, topics, difficulty, subtracks, updated) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO units(id, track, kind, title, path, status, topics, difficulty, subtracks, runs_local, updated) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
       ;(rows || []).forEach(function (row) {
         stmt.run(
@@ -753,15 +758,16 @@ function createStore(db) {
           String(row.topics || ""),
           String(row.difficulty || "medium"),
           String(row.subtracks || ""),
+          String(row.runs_local || ""),
           String(row.updated || "")
         )
       })
     },
 
     /**
-     * 列出单元。filter 三个字段都可省。
+     * 列出单元。filter 字段都可省。
      * 返回的 topics / subtracks 已经从 JSON 字符串解析回数组。
-     * @param {{track?: string, status?: string, kind?: string}} [filter]
+     * @param {{track?: string, status?: string, kind?: string, runs_local?: string}} [filter]
      * @returns {object[]}
      */
     listUnits: function (filter) {
@@ -779,6 +785,10 @@ function createStore(db) {
       if (f.kind) {
         where.push("kind = ?")
         args.push(String(f.kind))
+      }
+      if (f.runs_local !== undefined && f.runs_local !== null) {
+        where.push("runs_local = ?")
+        args.push(String(f.runs_local))
       }
       const sql =
         "SELECT * FROM units" +
