@@ -10,6 +10,7 @@
 
 // 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41），这里引用它，不另抄一份。
 const { TRACKS, trackOf } = require("../track/tracks.js")
+const { normalizeExtra } = require("./extra.js")
 
 /** 单元种类：problem = 要写答案；card = 读讲解 + 跑 demo + 过断言。 */
 const KINDS = ["problem", "card"]
@@ -208,6 +209,9 @@ function createUnit(input) {
     subtracks: normalizeList(src.subtracks),
     related: String(src.related === undefined || src.related === null ? "" : src.related),
     path: String(src.path === undefined || src.path === null ? "" : src.path),
+    // extra 是附加元数据的嵌套袋（4 个键恒在）。契约 §1.2 的 17 个字段一个字没动，
+    // 新东西全在这个袋子里，形状对三个 loader 一致。
+    extra: normalizeExtra(src),
   }
   const errors = validateUnit(created)
   if (errors.length > 0) {
