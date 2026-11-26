@@ -65,6 +65,7 @@ test("renderUnitFile 的 frontmatter 字段顺序与契约 §3.3 一致", functi
   assert.deepStrictEqual(FRONTMATTER_ORDER, [
     "id", "track", "kind", "title", "difficulty", "topics", "source", "language",
     "demo", "reference", "graded", "script", "status", "reviewed", "reviewed_at", "subtracks",
+    "runs_local", "needs", "fallback", "timeout_s",
   ])
   assert.ok(text.indexOf("status: draft") !== -1)
   assert.ok(text.indexOf("topics: [事务, 并发]") !== -1)
@@ -183,4 +184,66 @@ test("writeFileChecked 写新文件不查脏，写已存在且被动过的文件
   assert.strictEqual(created.ok, true, created.reason)
   assert.strictEqual(created.changed, true)
   assert.ok(fs.existsSync(fresh))
+})
+
+test("renderUnitFile 将四个附加字段按顺序渲染在 subtracks 之后", function () {
+  const text = renderUnitFile(Object.assign({}, CARD_FIELDS, {
+    id: "ai:probe",
+    track: "ai",
+    title: "探针",
+    runs_local: "yes",
+    needs: ["vram"],
+    fallback: "降级读文档",
+    timeout_s: 120,
+  }))
+  const lines = text.split("\n")
+  const indexOf = function (key) {
+    return lines.findIndex(function (line) { return line.indexOf(key + ":") === 0 })
+  }
+  assert.deepStrictEqual(FRONTMATTER_ORDER.slice(-4), ["runs_local", "needs", "fallback", "timeout_s"])
+  assert.ok(indexOf("runs_local") > indexOf("subtracks"))
+  assert.ok(indexOf("needs") > indexOf("subtracks"))
+  assert.ok(indexOf("fallback") > indexOf("subtracks"))
+  assert.ok(indexOf("timeout_s") > indexOf("subtracks"))
+  assert.strictEqual(lines[indexOf("runs_local")], "runs_local: yes")
+  assert.strictEqual(lines[indexOf("needs")], "needs: [vram]")
+  assert.strictEqual(lines[indexOf("fallback")], "fallback: 降级读文档")
+  assert.strictEqual(lines[indexOf("timeout_s")], "timeout_s: 120")
+})
+
+test("renderUnitFile 缺省附加字段保持未标注语义及默认预算", function () {
+  const text = renderUnitFile(CARD_FIELDS)
+  assert.ok(text.indexOf("runs_local: ") !== -1)
+  assert.ok(text.indexOf("runs_local: no") === -1)
+  assert.ok(text.indexOf("needs: []") !== -1)
+  assert.ok(text.indexOf("fallback: ") !== -1)
+  assert.ok(text.indexOf("timeout_s: 30") !== -1)
+})
+
+test("applyFrontmatterPatch 修改状态时保留四个附加字段", function () {
+  const before = [
+    "---",
+    "id: ai:probe",
+    "track: ai",
+    "kind: card",
+    "title: 探针",
+    "status: draft",
+    "subtracks: []",
+    "runs_local: yes",
+    "needs: [vram]",
+    "fallback: 降级读文档",
+    "timeout_s: 120",
+    "---",
+    "",
+    "## 讲解",
+    "",
+    "正文",
+    "",
+  ].join("\n")
+  const after = applyFrontmatterPatch(before, { status: "verified" })
+  assert.ok(after.indexOf("runs_local: yes") !== -1)
+  assert.ok(after.indexOf("needs: [vram]") !== -1)
+  assert.ok(after.indexOf("fallback: 降级读文档") !== -1)
+  assert.ok(after.indexOf("timeout_s: 120") !== -1)
+  assert.ok(after.indexOf("status: verified") !== -1)
 })

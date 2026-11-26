@@ -20,6 +20,7 @@ const crypto = require("node:crypto")
 
 const { parseFrontmatter, splitSections } = require("../bank/parse.js")
 const { assertCleanWorktree, makeDiff, splitLines } = require("../sync/rounds.js")
+const { DEFAULT_TIMEOUT_S } = require("../unit/extra.js")
 
 /** loader C 的 frontmatter 字段顺序（契约 §3.3，逐字照抄） */
 const FRONTMATTER_ORDER = [
@@ -39,6 +40,11 @@ const FRONTMATTER_ORDER = [
   "reviewed",
   "reviewed_at",
   "subtracks",
+  // 以下四项为 AI Infra 轨附加元数据，按约定排在 subtracks 之后。
+  "runs_local",
+  "needs",
+  "fallback",
+  "timeout_s",
 ]
 
 /** 「自己写过」清单的文件名 */
@@ -95,12 +101,15 @@ function renderUnitFile(fields, opts) {
   FRONTMATTER_ORDER.forEach(function (key) {
     let value = f[key]
     if (value === undefined || value === null) {
-      if (key === "topics" || key === "subtracks") value = []
+      if (key === "topics" || key === "subtracks" || key === "needs") value = []
       else if (key === "reviewed") value = false
       else if (key === "difficulty") value = "medium"
       else if (key === "status") value = "draft"
       else if (key === "kind") value = "card"
       else if (key === "graded") value = "script"
+      // 空串表示 runs_local 未标注，不代表明确断言为 no。
+      else if (key === "runs_local" || key === "fallback") value = ""
+      else if (key === "timeout_s") value = DEFAULT_TIMEOUT_S
       else value = ""
     }
     lines.push(key + ": " + formatFieldValue(value))
