@@ -258,17 +258,33 @@ class TestMainCli(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("-- 检查 2 页，失败 1 页", out)
 
-    def test_directory_mode_rejects_duplicate_features_on_both_pages(self):
+    def test_directory_mode_rejects_duplicate_features_in_same_project(self):
+        """同一个项目内两个页面用了同一个 feature → 两页都判失败。"""
         with tempfile.TemporaryDirectory() as d:
             os.mkdir(os.path.join(d, "project-a"))
-            os.mkdir(os.path.join(d, "project-b"))
             p1 = _write(os.path.join(d, "project-a"), "buffer-pool.md", GOOD_PAGE)
-            p2 = _write(os.path.join(d, "project-b"), "buffer-pool.md", GOOD_PAGE)
+            p2 = _write(os.path.join(d, "project-a"), "buffer-pool-2.md", GOOD_PAGE)
             code, out = self._run([d, "--quiet"])
             self.assertEqual(code, 1)
             self.assertIn(p1, out)
             self.assertIn(p2, out)
-            self.assertEqual(out.count("feature 全局重复"), 2)
+            self.assertEqual(out.count("feature 项目内重复"), 2)
+
+    def test_same_feature_across_projects_passes(self):
+        """回归测试：不同项目用同一个 feature 名是合法的（契约里 feature 是项目内唯一键）。
+
+        真实语料里 name-resolution 在 mysql-server 与 sqlite 各有一篇、
+        subquery-transform 在 postgres 与 mysql-server 各有一篇——
+        这类跨库同名不应被判重复。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            for project in ("postgres", "sqlite"):
+                folder = os.path.join(d, project)
+                os.mkdir(folder)
+                _write(folder, "buffer-pool.md", GOOD_PAGE.replace("project: postgres", "project: " + project))
+            code, out = self._run([d, "--quiet"])
+            self.assertEqual(code, 0, out)
+            self.assertNotIn("重复", out)
 
     def test_different_features_across_projects_pass(self):
         with tempfile.TemporaryDirectory() as d:
@@ -283,7 +299,7 @@ class TestMainCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             page = _write(d, "buffer-pool.md", GOOD_PAGE)
             _, out = self._run([page, "--quiet"])
-            self.assertIn("feature 全局唯一性须用目录模式", out)
+            self.assertIn("feature 项目内唯一性须用目录模式", out)
 
     def test_directory_mode_skips_hidden_dirs(self):
         with tempfile.TemporaryDirectory() as d:

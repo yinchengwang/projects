@@ -145,7 +145,12 @@ def main(argv=None):
     failed = 0
     checked = 0
     if any(not os.path.isdir(target) for target in args.paths):
-        print("提示：单文件模式仅能校验文件本身，feature 全局唯一性须用目录模式。")
+        print("提示：单文件模式仅能校验文件本身，feature 项目内唯一性须用目录模式。")
+    # feature 唯一性的作用域是**项目内**，不是全局（契约 wiki-schema.md §4：
+    # 「feature｜一个机制单元一篇｜项目目录下」）。
+    # 不同库出现同名 feature 是正常的——name-resolution 在 mysql-server 与
+    # sqlite 里各有一篇，subquery-transform 在 postgres 与 mysql-server 里各有一篇。
+    # 所以键是 (project, feature)，只报同项目内的重复。
     features = {}
     results = {}
     for target in args.paths:
@@ -158,16 +163,20 @@ def main(argv=None):
                 with open(page, encoding="utf-8") as f:
                     meta, _ = parse_frontmatter(f.read())
                 feature = meta.get("feature")
+                project = meta.get("project")
                 if isinstance(feature, str):
-                    page_list = features.setdefault(feature, [])
+                    key = (project if isinstance(project, str) else "", feature)
+                    page_list = features.setdefault(key, [])
                     if page not in page_list:
                         page_list.append(page)
             except (OSError, FrontmatterError):
                 pass
-    for feature, feature_pages in features.items():
+    for (project, feature), feature_pages in features.items():
         if len(feature_pages) > 1:
             for page in feature_pages:
-                results[page].append("feature 全局重复: %s" % feature)
+                results[page].append(
+                    "feature 项目内重复: %s（project=%s）" % (feature, project or "未标注")
+                )
     for page, errs in results.items():
         if errs:
             failed += 1
