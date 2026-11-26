@@ -21,8 +21,6 @@ const {
   PROGRESSES,
   SOURCES,
 } = require("./unit")
-// extra 的归一在 core/unit/extra.js 里（唯一一份）。
-const { makeExtra } = require("./extra.js")
 // 轨道 → id 前缀的映射只有 core/track/tracks.js 一份（G41）：这里引用，不另抄。
 const { trackOf } = require("../track/tracks.js")
 
@@ -244,13 +242,14 @@ function parseUnitFile(text, opts) {
       path: "units/" + relPath,
       related: related,
       // 4 个附加元数据字段：frontmatter 有就用，没有就落缺省。
-      // 脏值由 makeExtra 归一（不抛错）——一个单元文件的脏字段不该让整个索引加载失败。
-      extra: makeExtra({
+      // 这里**裸传**原始值，归一由 createUnit 内部的 normalizeExtra 做唯一一次——
+      // loader 再调一次 makeExtra 是重复劳动，且那一层在测试上不可区分（变异体存活）。
+      extra: {
         runs_local: fm.runs_local,
         needs: fm.needs,
         fallback: fm.fallback,
         timeout_s: fm.timeout_s,
-      }),
+      },
     })
   } catch (err) {
     warnings.push(String(err && err.message ? err.message : err))

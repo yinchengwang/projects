@@ -334,6 +334,39 @@ test("loader C：附加字段装进 unit.extra", function () {
   assert.strictEqual(res.unit.extra.timeout_s, 120)
 })
 
+test("loader C：runs_local 的四档原样透传，no 不被降级成空串", function () {
+  // 这一条钉住的是「四档裁决」在 loader 接缝上的落地。
+  // 把 fm.runs_local 改成 `fm.runs_local === "no" ? "" : fm.runs_local` 这类"顺手归一"，
+  // 会让「明确断言跑不了」的单元静默变成「未标注」——两个语义混了，验收时筛不出来。
+  const cases = [
+    { raw: "yes", label: "yes" },
+    { raw: "partial", label: "partial" },
+    { raw: "no", label: "no" },
+  ]
+  cases.forEach(function (item) {
+    const front =
+      GOOD_FRONT +
+      "\nruns_local: " +
+      item.raw
+    const res = loaderC.parseUnitFile(makeUnitFile(front, GOOD_BODY), {
+      path: "database/mvcc.md",
+    })
+    assert.ok(res.unit, item.raw + "：" + JSON.stringify(res.warnings))
+    assert.strictEqual(res.unit.extra.runs_local, item.raw, item.label + " 必须原样透传")
+  })
+})
+
+test("loader C：needs 的块列表形式也能读进来", function () {
+  // mini-YAML 两种数组写法都合法：行内 [a, b] 与块列表。- item 逐行那条
+  // 由 core/bank/parse.js:63-72 处理，这里钉住它在 loader 接缝上确实能到 unit.extra。
+  const front = GOOD_FRONT + "\nruns_local: partial\nneeds:\n  - vram\n  - nvcc"
+  const res = loaderC.parseUnitFile(makeUnitFile(front, GOOD_BODY), {
+    path: "database/mvcc.md",
+  })
+  assert.ok(res.unit, JSON.stringify(res.warnings))
+  assert.deepStrictEqual(res.unit.extra.needs, ["vram", "nvcc"])
+})
+
 test("loader C：没有附加字段时 extra 落缺省（runs_local = 空串，未标注）", function () {
   const res = loaderC.parseUnitFile(makeUnitFile(GOOD_FRONT, GOOD_BODY), {
     path: "database/mvcc.md",
