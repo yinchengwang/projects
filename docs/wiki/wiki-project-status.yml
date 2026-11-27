@@ -899,8 +899,8 @@ projects:
   - slug: mcp-python-sdk
     model: ai/agent
     repo: https://github.com/modelcontextprotocol/python-sdk
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
+    state: gates-pass
+    next_action: 待阶段 0B 扩展后入 wiki-rag
   - slug: mem0
     model: ai/agent
     repo: https://github.com/mem0ai/mem0

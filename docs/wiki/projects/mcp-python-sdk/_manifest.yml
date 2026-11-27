@@ -1,0 +1,263 @@
+---
+project: mcp-python-sdk
+schema_version: 1
+pages:
+  - feature: jsonrpc-envelope
+    feature_group: A-协议类型与消息
+    title: JSON-RPC 信封与错误约定
+    page_file: a01-jsonrpc-envelope.md
+    refs:
+      - path: src/mcp-types/mcp_types/jsonrpc.py
+        symbols: [JSONRPCRequest, JSONRPCResponse, JSONRPCError]
+      - path: src/mcp/shared/message.py
+        symbols: [SessionMessage, ClientMessageMetadata, ServerMessageMetadata]
+  - feature: method-registry
+    feature_group: A-协议类型与消息
+    title: 方法名注册与能力协商
+    page_file: a02-method-registry.md
+    refs:
+      - path: src/mcp-types/mcp_types/version.py
+        symbols: [SUPPORTED_PROTOCOL_VERSIONS, LATEST_PROTOCOL_VERSION, is_version_at_least]
+      - path: src/mcp-types/mcp_types/methods.py
+        symbols: [is_input_required, parse_client_request]
+  - feature: transport-context
+    feature_group: A-协议类型与消息
+    title: 传输上下文与请求元数据
+    page_file: a03-transport-context.md
+    refs:
+      - path: src/mcp/shared/transport_context.py
+        symbols: [TransportContext]
+      - path: src/mcp/shared/metadata_utils.py
+        symbols: [get_display_name]
+  - feature: dispatcher-contract
+    feature_group: B-分发与请求生命周期
+    title: 分发器契约与调度选项
+    page_file: b01-dispatcher-contract.md
+    refs:
+      - path: src/mcp/shared/dispatcher.py
+        symbols: [Dispatcher, CallOptions, DispatchContext]
+      - path: src/mcp/shared/direct_dispatcher.py
+        symbols: [DirectDispatcher]
+  - feature: jsonrpc-dispatcher
+    feature_group: B-分发与请求生命周期
+    title: JSON-RPC 分发器与在途请求表
+    page_file: b02-jsonrpc-dispatcher.md
+    refs:
+      - path: src/mcp/shared/jsonrpc_dispatcher.py
+        symbols: [JSONRPCDispatcher, _Pending, _InFlight]
+      - path: src/mcp/shared/jsonrpc_dispatcher.py
+        symbols: [handler_exception_to_error_data, _plan_outbound]
+  - feature: progress-and-cancel
+    feature_group: B-分发与请求生命周期
+    title: 进度通知与取消
+    page_file: b03-progress-and-cancel.md
+    refs:
+      - path: src/mcp/shared/jsonrpc_dispatcher.py
+        symbols: [progress_token_from_params, cancelled_request_id_from_params, _shielded_progress]
+  - feature: lowlevel-server
+    feature_group: C-服务端骨架
+    title: 低层服务端与处理器登记
+    page_file: c01-lowlevel-server.md
+    refs:
+      - path: src/mcp/server/lowlevel/server.py
+        symbols: [Server, HandlerEntry, NotificationOptions]
+  - feature: mcpserver-facade
+    feature_group: C-服务端骨架
+    title: MCPServer 高层门面
+    page_file: c02-mcpserver-facade.md
+    refs:
+      - path: src/mcp/server/mcpserver/server.py
+        symbols: [MCPServer, Settings, lifespan_wrapper]
+  - feature: server-session
+    feature_group: C-服务端骨架
+    title: 服务端会话与出站通道
+    page_file: c03-server-session.md
+    refs:
+      - path: src/mcp/server/session.py
+        symbols: [ServerSession]
+      - path: src/mcp/server/connection.py
+        symbols: [Connection, NotifyOnlyOutbound]
+  - feature: server-runner
+    feature_group: C-服务端骨架
+    title: 服务端运行器与中间件
+    page_file: c04-server-runner.md
+    refs:
+      - path: src/mcp/server/runner.py
+        symbols: [ServerRunner, _apply_middleware]
+      - path: src/mcp/server/context.py
+        symbols: [ServerMiddleware, ServerRequestContext]
+  - feature: tool-manager
+    feature_group: D-工具、资源与提示
+    title: 工具注册与调用参数校验
+    page_file: d01-tool-manager.md
+    refs:
+      - path: src/mcp/server/mcpserver/tools/tool_manager.py
+        symbols: [ToolManager]
+      - path: src/mcp/server/mcpserver/tools/base.py
+        symbols: [Tool]
+      - path: src/mcp/server/mcpserver/utilities/func_metadata.py
+        symbols: [FuncMetadata, func_metadata]
+  - feature: resources-and-prompts
+    feature_group: D-工具、资源与提示
+    title: 资源、模板与提示
+    page_file: d02-resources-and-prompts.md
+    refs:
+      - path: src/mcp/server/mcpserver/resources/resource_manager.py
+        symbols: [ResourceManager]
+      - path: src/mcp/server/mcpserver/prompts/manager.py
+        symbols: [PromptManager]
+      - path: src/mcp/server/mcpserver/resources/templates.py
+        symbols: [ResourceTemplate]
+  - feature: context-injection
+    feature_group: D-工具、资源与提示
+    title: 上下文参数注入
+    page_file: d03-context-injection.md
+    refs:
+      - path: src/mcp/server/mcpserver/utilities/context_injection.py
+        symbols: [find_context_parameter, inject_context]
+      - path: src/mcp/server/mcpserver/context.py
+        symbols: [Context]
+  - feature: dependency-resolution
+    feature_group: D-工具、资源与提示
+    title: 请求期依赖解析
+    page_file: d04-dependency-resolution.md
+    refs:
+      - path: src/mcp/server/mcpserver/resolve.py
+        symbols: [Resolve, Elicit, Sample, ListRoots]
+      - path: src/mcp/server/mcpserver/resolve.py
+        symbols: [find_resolved_parameters, returns_input_required]
+  - feature: streamable-http-server
+    feature_group: E-服务端传输与安全
+    title: Streamable HTTP 服务端传输
+    page_file: e01-streamable-http-server.md
+    refs:
+      - path: src/mcp/server/streamable_http.py
+        symbols: [StreamableHTTPServerTransport, EventStore, EventMessage]
+      - path: src/mcp/server/streamable_http_manager.py
+        symbols: [StreamableHTTPSessionManager, StreamableHTTPASGIApp]
+  - feature: stdio-server
+    feature_group: E-服务端传输与安全
+    title: stdio 服务端与文件描述符占用
+    page_file: e02-stdio-server.md
+    refs:
+      - path: src/mcp/server/stdio.py
+        symbols: [_claim_fd, _open_stdin_diversion, _restore_fd]
+  - feature: transport-security
+    feature_group: E-服务端传输与安全
+    title: 传输安全设置与请求体限制
+    page_file: e03-transport-security.md
+    refs:
+      - path: src/mcp/server/transport_security.py
+        symbols: [TransportSecuritySettings, TransportSecurityMiddleware, RequestBodyLimitMiddleware]
+  - feature: client-session
+    feature_group: F-客户端与传输
+    title: 客户端会话与握手
+    page_file: f01-client-session.md
+    refs:
+      - path: src/mcp/client/session.py
+        symbols: [ClientSession, ClientRequestContext]
+  - feature: client-and-transports
+    feature_group: F-客户端与传输
+    title: 客户端连接与三种传输
+    page_file: f02-client-and-transports.md
+    refs:
+      - path: src/mcp/client/client.py
+        symbols: [Client, _connect_transport, _connect_inproc]
+      - path: src/mcp/client/stdio.py
+        symbols: [StdioServerParameters]
+      - path: src/mcp/client/streamable_http.py
+        symbols: [StreamableHTTPTransport, ResumptionError]
+  - feature: session-group
+    feature_group: F-客户端与传输
+    title: 多会话组与命名空间
+    page_file: f03-session-group.md
+    refs:
+      - path: src/mcp/client/session_group.py
+        symbols: [ClientSessionGroup, ClientSessionParameters, StreamableHttpParameters]
+  - feature: oauth-models
+    feature_group: G-授权与路径安全
+    title: OAuth 授权模型
+    page_file: g01-oauth-models.md
+    refs:
+      - path: src/mcp/shared/auth.py
+        symbols: [OAuthToken, OAuthClientMetadata, InvalidScopeError]
+      - path: src/mcp/shared/auth_utils.py
+        symbols: [check_resource_allowed, calculate_token_expiry]
+  - feature: path-security
+    feature_group: G-授权与路径安全
+    title: 路径穿越防护
+    page_file: g02-path-security.md
+    refs:
+      - path: src/mcp/shared/path_security.py
+        symbols: [contains_path_traversal, safe_join, PathEscapeError]
+  - feature: uri-template
+    feature_group: G-授权与路径安全
+    title: URI 模板展开与匹配
+    page_file: g03-uri-template.md
+    refs:
+      - path: src/mcp/shared/uri_template.py
+        symbols: [UriTemplate, _Expression, InvalidUriTemplate]
+  - feature: subscriptions
+    feature_group: H-订阅、诱导与请求状态
+    title: 订阅总线与监听
+    page_file: h01-subscriptions.md
+    refs:
+      - path: src/mcp/server/subscriptions.py
+        symbols: [SubscriptionBus, InMemorySubscriptionBus, ListenHandler]
+      - path: src/mcp/shared/subscriptions.py
+        symbols: [event_to_notification, event_from_wire, ResourceUpdated]
+  - feature: elicitation
+    feature_group: H-订阅、诱导与请求状态
+    title: 诱导请求与结果形态
+    page_file: h02-elicitation.md
+    refs:
+      - path: src/mcp/server/elicitation.py
+        symbols: [AcceptedElicitation, DeclinedElicitation, render_elicitation_schema]
+      - path: src/mcp/server/elicitation.py
+        symbols: [CancelledElicitation, AcceptedUrlElicitation]
+  - feature: request-state
+    feature_group: H-订阅、诱导与请求状态
+    title: 请求状态编码与边界校验
+    page_file: h03-request-state.md
+    refs:
+      - path: src/mcp/server/request_state.py
+        symbols: [RequestStateCodec, AESGCMRequestStateCodec, RequestStateSecurity]
+      - path: src/mcp/server/request_state.py
+        symbols: [RequestStateBoundary, authenticated_principal]
+  - feature: extension-framework
+    feature_group: I-扩展与技能
+    title: 扩展点与绑定
+    page_file: i01-extension-framework.md
+    refs:
+      - path: src/mcp/server/extension.py
+        symbols: [Extension, ToolBinding, MethodBinding]
+      - path: src/mcp/client/extension.py
+        symbols: [ClientExtension, ClaimContext, ResultClaim]
+  - feature: skills
+    feature_group: I-扩展与技能
+    title: 技能包与资源校验
+    page_file: i02-skills.md
+    refs:
+      - path: src/mcp/shared/skills.py
+        symbols: [Skill, SkillResource, validate_directory_result]
+      - path: src/mcp/server/skills.py
+        symbols: [Skills]
+  - feature: client-response-cache
+    feature_group: J-缓存与可观测
+    title: 客户端响应缓存
+    page_file: j01-client-response-cache.md
+    refs:
+      - path: src/mcp/client/caching.py
+        symbols: [ClientResponseCache, CacheConfig, CacheKey]
+      - path: src/mcp/client/caching.py
+        symbols: [InMemoryResponseCacheStore, ResponseCacheStore]
+  - feature: observability
+    feature_group: J-缓存与可观测
+    title: 链路追踪与日志级别
+    page_file: j02-observability.md
+    refs:
+      - path: src/mcp/server/_otel.py
+        symbols: [_otel]
+      - path: src/mcp/server/connection.py
+        symbols: [allowed_log_levels]
+---
