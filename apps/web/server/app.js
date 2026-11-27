@@ -12,6 +12,7 @@ const path = require("node:path")
 
 const { createRouter, HttpError } = require("./router.js")
 const { createStaticHandler } = require("./static.js")
+const { checkBackends } = require("./health.js")
 
 const ROOT = path.resolve(__dirname, "..")
 const WEB_DIR = path.join(ROOT, "web")
@@ -56,6 +57,15 @@ function createApp (opts) {
   const routes = options.routes || []
   routes.forEach(function (route) {
     router.add(route.method, route.pattern, route.handler)
+  })
+
+  // 后端在线状态：study-hub 与 wiki-rag 是独立进程，外壳要用它提示「还没启动」
+  router.add("GET", "/api/health", function (req, res) {
+    checkBackends().then(function (result) {
+      sendJson(res, 200, { ok: true, study: result.study, wiki: result.wiki })
+    }).catch(function (err) {
+      sendJson(res, 200, { ok: false, error: (err && err.message) || "探测失败" })
+    })
   })
 
   // workbench 模块：所有 /workbench/pages/* 都返回同一个 HTML 壳，

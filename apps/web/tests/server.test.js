@@ -136,10 +136,13 @@ test("外壳：首页含六个模块导航入口", async function (t) {
 
   const r = await request(app.server, "/")
   assert.strictEqual(r.status, 200)
-  const expected = ["/workbench/", "/knowledge/", "/trip/", "/games/", "/study/", "/wiki/"]
+  // 四个本页模块 + 两个独立服务（后者走各自端口，不再是 /study/ 与 /wiki/ 本地路径）
+  const expected = ["/workbench/", "/knowledge/", "/trip/", "/games/"]
   expected.forEach(function (href) {
     assert.ok(r.body.indexOf(href) >= 0, "外壳应含入口：" + href)
   })
+  assert.ok(r.body.indexOf("127.0.0.1:5174") >= 0, "外壳应含学习中枢的独立端口入口")
+  assert.ok(r.body.indexOf("127.0.0.1:8000") >= 0, "外壳应含 Wiki 检索的独立端口入口")
 })
 
 test("workbench 模块的页面能被访问", async function (t) {
@@ -164,4 +167,41 @@ test("workbench 模块的静态资源可访问", async function (t) {
   const page = await request(app.server, "/workbench/pages/dashboard/index.js")
   assert.strictEqual(page.status, 200)
   assert.ok(page.body.indexOf("module.exports") >= 0, "页面模块应是 CommonJS 源码")
+})
+
+test("外壳：四个本页模块入口齐全", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const r = await request(app.server, "/")
+  assert.strictEqual(r.status, 200)
+  ;["/workbench/", "/knowledge/", "/trip/", "/games/"].forEach(function (href) {
+    assert.ok(r.body.indexOf(href) >= 0, "外壳应含入口：" + href)
+  })
+})
+
+test("外壳：两个独立服务指向各自端口且开新标签页", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const r = await request(app.server, "/")
+  assert.ok(r.body.indexOf("http://127.0.0.1:5174/") >= 0, "应含 study-hub 的独立端口链接")
+  assert.ok(r.body.indexOf("http://127.0.0.1:8000/") >= 0, "应含 wiki-rag 的独立端口链接")
+  assert.ok(r.body.indexOf('target="_blank"') >= 0, "独立服务应开新标签页")
+  assert.ok(r.body.indexOf("/shell.js") >= 0, "外壳应引入在线状态脚本")
+})
+
+test("接口：/api/health 返回两个后端的状态", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const r = await request(app.server, "/api/health")
+  assert.strictEqual(r.status, 200)
+  const body = JSON.parse(r.body)
+  assert.strictEqual(body.ok, true)
+  assert.strictEqual(typeof body.study.ok, "boolean")
+  assert.strictEqual(typeof body.wiki.ok, "boolean")
 })

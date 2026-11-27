@@ -15,16 +15,48 @@
         <a class="nav-item" href="/knowledge/">知识中心</a>
         <a class="nav-item" href="/trip/">足迹</a>
         <a class="nav-item" href="/games/">游戏</a>
-        <a class="nav-item" href="/study/">学习中枢</a>
-        <a class="nav-item" href="/wiki/">Wiki 检索</a>
       </nav>
     </header>
     <main class="app-main" id="app-main">
       <section class="panel hero">
         <h2>选择模块</h2>
-        <p class="reason">各模块独立加载，互不影响。</p>
+        <p class="reason">下面四个模块在本页内切换。</p>
+        <div class="module-grid" id="module-grid">
+          <a class="module-card" href="/workbench/">
+            <span class="module-title">程序员工作台</span>
+            <span class="module-desc">待办、技术笔记、生活记录与 10 个离线工具</span>
+          </a>
+          <a class="module-card" href="/knowledge/">
+            <span class="module-title">知识中心</span>
+            <span class="module-desc">题库复习、面试追踪、知识图谱与五年计划</span>
+          </a>
+          <a class="module-card" href="/trip/">
+            <span class="module-title">足迹</span>
+            <span class="module-desc">记录走过的地方与照片</span>
+          </a>
+          <a class="module-card" href="/games/">
+            <span class="module-title">游戏</span>
+            <span class="module-desc">贪吃蛇、2048、数独、消消乐</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>独立服务</h2>
+        <p class="reason">下面两个是独立进程，有各自的端口与界面，点开会开新标签页。</p>
+        <div class="module-grid" id="service-grid">
+          <a class="module-card external" id="study-link" href="http://127.0.0.1:5174/" target="_blank" rel="noopener">
+            <span class="module-title">学习中枢 <span class="module-state" id="study-state">检测中…</span></span>
+            <span class="module-desc">算法 / 数据库 / AI 三轨，判题与间隔复习</span>
+          </a>
+          <a class="module-card external" id="wiki-link" href="http://127.0.0.1:8000/" target="_blank" rel="noopener">
+            <span class="module-title">Wiki 检索 <span class="module-state" id="wiki-state">检测中…</span></span>
+            <span class="module-desc">本地 wiki 语料的混合检索与抽取式问答</span>
+          </a>
+        </div>
       </section>
     </main>
   </div>
+  <script src="/shell.js"></script>
 </body>
 </html>

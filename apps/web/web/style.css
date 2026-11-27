@@ -156,6 +156,66 @@ body {
   font-size: 13px;
 }
 
+/* 模块入口卡片 */
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.module-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  text-decoration: none;
+}
+
+.module-card:hover {
+  border-color: var(--brand);
+}
+
+.module-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.module-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.module-state {
+  font-size: 11px;
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.module-state.ok {
+  background: rgba(48, 164, 108, 0.14);
+  color: var(--ok);
+}
+
+.module-state.off {
+  background: rgba(245, 165, 36, 0.16);
+  color: var(--warn);
+}
+
+.module-card.external {
+  border-style: dashed;
+}
+
 /* 卡内嵌套块 */
 .block {
   background: var(--bg-subtle);
