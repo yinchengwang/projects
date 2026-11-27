@@ -218,7 +218,7 @@ const PAGE = {
 
   /** 执行移动 */
   doMove: function (direction) {
-    if (this.data.status !== "playing") return
+    if (this.state.status !== "playing") return
     if (this.__game.hasWon && !this.__game.keepGoing) return
 
     const result = g2048.move(this.__game, direction)
@@ -231,7 +231,7 @@ const PAGE = {
 
     this.setData({
       score: this.__game.score,
-      best: Math.max(this.data.best, this.__game.bestScore),
+      best: Math.max(this.state.best || 0, this.__game.bestScore),
       hasWon: this.__game.hasWon,
       keepGoing: this.__game.keepGoing
     })

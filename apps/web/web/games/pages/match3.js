@@ -254,7 +254,7 @@ const PAGE = {
 
   /** 两段式选择 → 交换 */
   onCellTap: function (pos) {
-    if (this.data.status !== "playing" || !this.__game) return
+    if (this.state.status !== "playing" || !this.__game) return
 
     if (!this.state.selected) {
       this.setData({ selected: pos })

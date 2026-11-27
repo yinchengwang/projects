@@ -205,21 +205,21 @@ const PAGE = {
 
   /** 暂停 */
   onPause: function () {
-    if (this.data.status !== "playing") return
+    if (this.state.status !== "playing") return
     this.stopLoop()
     this.setData({ status: "paused" })
   },
 
   /** 继续 */
   onResume: function () {
-    if (this.data.status !== "paused") return
+    if (this.state.status !== "paused") return
     this.setData({ status: "playing" })
     this.startLoop()
   },
 
   /** 方向按钮 / 键盘 */
   onDirection: function (dir) {
-    if (this.data.status !== "playing") return
+    if (this.state.status !== "playing") return
     const D = snake.Direction
     const map = { up: D.UP, down: D.DOWN, left: D.LEFT, right: D.RIGHT }
     const d = map[dir]

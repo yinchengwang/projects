@@ -109,6 +109,71 @@ function createApp (opts) {
   router.add("GET", "/workbench", workbenchEntry)
   router.add("GET", "/workbench/", workbenchEntry)
 
+  /* ------------------------------------------------------------
+   * trip 与 games 模块：模式与 workbench 一致 —— /模块/pages/* 一律返回
+   * 该模块的 HTML 壳，实际页面由前端 cjs-loader 按路径加载。
+   * 带扩展名的请求（页面模块 .js、样式 .css）落到静态托管。
+   * ---------------------------------------------------------- */
+
+  /**
+   * 造一个「返回模块 HTML 壳」的 handler。
+   * @param {string} file 壳文件绝对路径
+   * @param {string} errMsg 读不到壳时的中文错误
+   * @returns {Function} (req, res) => void
+   */
+  const makeModuleShell = function (file, errMsg) {
+    return function (req, res) {
+      const reqPath = (req.url || "/").split("?")[0]
+      if (/\.[a-z0-9]+$/i.test(reqPath)) {
+        if (serveStatic(req, res)) return
+        sendJson(res, 404, { error: "未找到该路径：" + reqPath })
+        return
+      }
+      let html
+      try {
+        html = fs.readFileSync(file, "utf8")
+      } catch (e) {
+        sendJson(res, 500, { error: errMsg })
+        return
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": Buffer.byteLength(html)
+      })
+      res.end(html)
+    }
+  }
+
+  const tripShell = makeModuleShell(
+    path.join(WEB_DIR, "trip", "shell.html"),
+    "trip 模块页面壳读取失败"
+  )
+  const gamesShell = makeModuleShell(
+    path.join(WEB_DIR, "games", "shell.html"),
+    "games 模块页面壳读取失败"
+  )
+
+  router.add("GET", "/trip/pages/:a", tripShell)
+  // 兼容「页面路径本身以 index 结尾」的写法（如 /trip/pages/index/index）：
+  // 与 workbench 一样，多一段的路径也返回同一个壳，前端再做归一。
+  router.add("GET", "/trip/pages/:a/:b", tripShell)
+  router.add("GET", "/games/pages/:a", gamesShell)
+  router.add("GET", "/games/pages/:a/:b", gamesShell)
+
+  /** 造一个「模块入口跳到首页」的 handler */
+  const makeModuleEntry = function (target) {
+    return function (req, res) {
+      res.writeHead(302, { Location: target })
+      res.end()
+    }
+  }
+  const tripEntry = makeModuleEntry("/trip/pages/index")
+  const gamesEntry = makeModuleEntry("/games/pages/index")
+  router.add("GET", "/trip", tripEntry)
+  router.add("GET", "/trip/", tripEntry)
+  router.add("GET", "/games", gamesEntry)
+  router.add("GET", "/games/", gamesEntry)
+
   const server = http.createServer(function (req, res) {
     const rawUrl = req.url || "/"
     const rawPath = rawUrl.split("?")[0]

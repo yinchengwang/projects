@@ -246,7 +246,7 @@ const PAGE = {
 
   /** 选择格子 */
   onCellTap: function (row, col) {
-    if (this.data.status !== "playing" || !this.__game) return
+    if (this.state.status !== "playing" || !this.__game) return
     this.__game.cursorRow = row
     this.__game.cursorCol = col
     this.setData({ cursorRow: row, cursorCol: col })
@@ -254,7 +254,7 @@ const PAGE = {
 
   /** 选择数字并填入 */
   onNumberTap: function (num) {
-    if (this.data.status !== "playing" || !this.__game) return
+    if (this.state.status !== "playing" || !this.__game) return
     sudoku.selectNumber(this.__game, num)
     sudoku.placeNumber(this.__game, num)
     vibrate.trigger()
@@ -263,14 +263,14 @@ const PAGE = {
 
   /** 擦除 */
   onErase: function () {
-    if (this.data.status !== "playing" || !this.__game) return
+    if (this.state.status !== "playing" || !this.__game) return
     sudoku.eraseCell(this.__game)
     this.syncState()
   },
 
   /** 提示 */
   onHint: function () {
-    if (this.data.status !== "playing" || !this.__game) return
+    if (this.state.status !== "playing" || !this.__game) return
     const ok = sudoku.hint(this.__game)
     if (!ok) {
       platform.showToast({ title: "提示次数已用完", icon: "none" })
