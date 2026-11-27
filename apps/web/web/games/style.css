@@ -62,6 +62,11 @@
   touch-action: none;
 }
 
+/* 2048 是正方形棋盘 */
+.game-canvas-wrap.square {
+  aspect-ratio: 1;
+}
+
 .game-dirs {
   display: flex;
   flex-wrap: wrap;

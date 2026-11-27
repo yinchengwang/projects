@@ -73,7 +73,7 @@ const PAGE = {
     startButton.addEventListener("click", function () { self.onStart() })
 
     const children = [
-      ui.el("div", { class: "game-canvas-wrap" }, [canvas]),
+      ui.el("div", { class: "game-canvas-wrap square" }, [canvas]),
       ui.el("div", { class: "game-dirs" }, dirButtons),
       ui.el("div", { class: "game-actions" }, [startButton])
     ]
