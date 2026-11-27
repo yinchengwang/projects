@@ -22,18 +22,44 @@ CATALOG_PATH = PROJECTS_ROOT / "docs" / "wiki" / "catalog-projects.yml"
 REVIEW_PATH = PROJECTS_ROOT / "docs" / "wiki" / "project-catalog-review.md"
 STATUS_PATH = PROJECTS_ROOT / "docs" / "wiki" / "wiki-project-status.yml"
 
-# 已完成机制 wiki 的项目：catalog 名 → (wiki 目录 slug, 下一动作)。
-# catalog 名与 wiki 目录名不一定相同（sqlite3 → sqlite，mysql → mysql-server）。
-DONE_PROJECTS = {
-    "postgres": ("postgres", "保持 CI 与 RAG 增量复核"),
-    "redis": ("redis", "阶段 0B 入 wiki-rag 后复核引用回源"),
-    "sqlite3": ("sqlite", "阶段 0B 入 wiki-rag 后复核引用回源"),
-    "mysql": ("mysql-server", "阶段 0B 入 wiki-rag 后复核引用回源"),
+# 已完成 RAG 入库的项目：wiki 目录 slug → 下一动作。
+INDEXED_PROJECTS = {
+    "postgres": "保持 CI 与 RAG 增量复核",
+    "redis": "阶段 0B 入 wiki-rag 后复核引用回源",
+    "sqlite": "阶段 0B 入 wiki-rag 后复核引用回源",
+    "mysql-server": "阶段 0B 入 wiki-rag 后复核引用回源",
 }
+
+# 已完成机制 wiki 但尚未入 RAG 的项目：wiki 目录 slug → 下一动作。
+GATES_PASS_PROJECTS = {
+    "langgraph": "待阶段 0B 扩展后入 wiki-rag",
+}
+
+WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"
 
 # catalog 名与 wiki 目录名不同时，把 catalog 名登记为别名，供 ingest 与 CI 反查。
 def _aliases_for(name, slug):
     return [name] if name != slug else []
+
+
+# catalog 名与 wiki 目录名不一致且无法靠后缀规则推出的显式映射。
+WIKI_DIR_ALIASES = {
+    "sqlite3": "sqlite",
+    "mysql": "mysql-server",
+}
+
+
+def _wiki_dir_for(name):
+    """catalog 名 → 实际 wiki 目录 slug；没有可用 wiki 目录时返回 None。"""
+    candidates = [WIKI_DIR_ALIASES.get(name), name, name + "-server"]
+    for slug in candidates:
+        if slug and (WIKI_ROOT / slug / "_manifest.yml").is_file():
+            return slug
+    # catalog 用了带 -server 的名字、wiki 目录用了裸名（或反之）时兜一层。
+    stripped = name[:-7] if name.endswith("-server") else None
+    if stripped and (WIKI_ROOT / stripped / "_manifest.yml").is_file():
+        return stripped
+    return None
 
 
 def build_entries():
@@ -43,11 +69,14 @@ def build_entries():
     entries = []
     for item in catalog:
         name = item["name"]
-        if name in DONE_PROJECTS:
-            slug, next_action = DONE_PROJECTS[name]
-            state = "indexed"
+        # 状态由磁盘上的 wiki 目录事实推出，不靠手写清单断言「完成」。
+        slug = _wiki_dir_for(name) or name
+        if slug in INDEXED_PROJECTS:
+            state, next_action = "indexed", INDEXED_PROJECTS[slug]
+        elif slug in GATES_PASS_PROJECTS:
+            state, next_action = "gates-pass", GATES_PASS_PROJECTS[slug]
         else:
-            slug, next_action, state = name, "待源码盘点与机制 wiki 生产", "planned"
+            next_action, state = "待源码盘点与机制 wiki 生产", "planned"
         entries.append({
             "slug": slug,
             "repo": item["repo"],

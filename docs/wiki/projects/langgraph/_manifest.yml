@@ -1,0 +1,295 @@
+---
+project: langgraph
+schema_version: 1
+pages:
+  - feature: stategraph-builder
+    feature_group: A-图构建与状态模式
+    title: StateGraph 构建器与状态模式注册
+    page_file: a01-stategraph-builder.md
+    refs:
+      - path: libs/langgraph/langgraph/graph/state.py
+        symbols: [StateGraph, _add_schema, _all_edges]
+  - feature: add-node-overloads
+    feature_group: A-图构建与状态模式
+    title: add_node 的重载与节点包装
+    page_file: a02-add-node-overloads.md
+    refs:
+      - path: libs/langgraph/langgraph/graph/state.py
+        symbols: [add_node]
+      - path: libs/langgraph/langgraph/graph/_node.py
+        symbols: [_Node, _NodeWithConfig, _NodeWithWriterStore]
+  - feature: edge-and-conditional
+    feature_group: A-图构建与状态模式
+    title: 静态边与条件边登记
+    page_file: a03-edge-and-conditional.md
+    refs:
+      - path: libs/langgraph/langgraph/graph/state.py
+        symbols: [add_edge, add_conditional_edges]
+  - feature: branch-spec-route
+    feature_group: A-图构建与状态模式
+    title: 分支规格与路由求值
+    page_file: a04-branch-spec-route.md
+    refs:
+      - path: libs/langgraph/langgraph/graph/_branch.py
+        symbols: [BranchSpec, _route, _aroute]
+  - feature: channel-base
+    feature_group: B-通道与状态合并
+    title: BaseChannel 契约与检查点协议
+    page_file: b01-channel-base.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/base.py
+        symbols: [BaseChannel, ValueType, UpdateType]
+  - feature: last-value-channel
+    feature_group: B-通道与状态合并
+    title: LastValue 与结束可见语义
+    page_file: b02-last-value-channel.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/last_value.py
+        symbols: [LastValue, LastValueAfterFinish, update]
+  - feature: binop-aggregate
+    feature_group: B-通道与状态合并
+    title: 二元聚合通道与覆盖判定
+    page_file: b03-binop-aggregate.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/binop.py
+        symbols: [BinaryOperatorAggregate, _get_overwrite, _operators_equal]
+  - feature: topic-channel
+    feature_group: B-通道与状态合并
+    title: Topic 累积通道与元组展平
+    page_file: b04-topic-channel.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/topic.py
+        symbols: [Topic, _flatten]
+  - feature: ephemeral-any-untracked
+    feature_group: B-通道与状态合并
+    title: 临时值、任意值与不追踪通道
+    page_file: b05-ephemeral-any-untracked.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/ephemeral_value.py
+        symbols: [EphemeralValue]
+      - path: libs/langgraph/langgraph/channels/any_value.py
+        symbols: [AnyValue]
+      - path: libs/langgraph/langgraph/channels/untracked_value.py
+        symbols: [UntrackedValue]
+  - feature: barrier-and-delta-channels
+    feature_group: B-通道与状态合并
+    title: 命名屏障与增量通道
+    page_file: b06-barrier-and-delta-channels.md
+    refs:
+      - path: libs/langgraph/langgraph/channels/named_barrier_value.py
+        symbols: [NamedBarrierValue, NamedBarrierValueAfterFinish]
+      - path: libs/langgraph/langgraph/channels/delta.py
+        symbols: [DeltaChannel, replay_writes]
+  - feature: pregel-object
+    feature_group: C-Pregel 执行循环
+    title: Pregel 图对象与检查点解析
+    page_file: c01-pregel-object.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/main.py
+        symbols: [Pregel, _resolve_checkpointer]
+  - feature: node-builder
+    feature_group: C-Pregel 执行循环
+    title: NodeBuilder 的订阅与写入声明
+    page_file: c02-node-builder.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/main.py
+        symbols: [NodeBuilder, subscribe_to, write_to, build]
+  - feature: pregel-loop-tick
+    feature_group: C-Pregel 执行循环
+    title: PregelLoop 单轮步进
+    page_file: c03-pregel-loop-tick.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_loop.py
+        symbols: [PregelLoop, tick, after_tick]
+  - feature: pending-writes
+    feature_group: C-Pregel 执行循环
+    title: 挂起写入与恢复接入
+    page_file: c04-pending-writes.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_loop.py
+        symbols: [put_writes, _put_pending_writes, accept_push]
+  - feature: apply-writes-algo
+    feature_group: C-Pregel 执行循环
+    title: 写入合并算法
+    page_file: c05-apply-writes-algo.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_algo.py
+        symbols: [apply_writes, increment, local_read]
+  - feature: prepare-next-tasks
+    feature_group: C-Pregel 执行循环
+    title: 下一批任务的推导
+    page_file: c06-prepare-next-tasks.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_algo.py
+        symbols: [prepare_next_tasks, _TaskIDFn]
+  - feature: task-writes-protocol
+    feature_group: C-Pregel 执行循环
+    title: 任务写入协议对象
+    page_file: c07-task-writes-protocol.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_algo.py
+        symbols: [WritesProtocol, PregelTaskWrites, Call]
+  - feature: pregel-runner
+    feature_group: D-任务调度与并发
+    title: PregelRunner 并发执行与提交
+    page_file: d01-pregel-runner.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_runner.py
+        symbols: [PregelRunner, commit, _panic_or_proceed]
+  - feature: futures-dict
+    feature_group: D-任务调度与并发
+    title: 完成回调与结果表
+    page_file: d02-futures-dict.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_runner.py
+        symbols: [FuturesDict, on_done]
+  - feature: background-executor
+    feature_group: D-任务调度与并发
+    title: 后台执行器与异步门控
+    page_file: d03-background-executor.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_executor.py
+        symbols: [BackgroundExecutor, AsyncBackgroundExecutor, gated]
+  - feature: checkpoint-shape
+    feature_group: E-检查点与恢复
+    title: 检查点结构与快照创建
+    page_file: e01-checkpoint-shape.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_checkpoint.py
+        symbols: [empty_checkpoint, create_checkpoint]
+  - feature: checkpoint-versions
+    feature_group: E-检查点与恢复
+    title: 版本推进与已见标记
+    page_file: e02-checkpoint-versions.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_checkpoint.py
+        symbols: [_mark_bumps_seen, _bump_keys, versions_seen_without_bumps]
+  - feature: delta-snapshot
+    feature_group: E-检查点与恢复
+    title: 增量通道快照与溢出判定
+    page_file: e03-delta-snapshot.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_checkpoint.py
+        symbols: [delta_channels_to_snapshot, delta_channels_overwritten, delta_channels_with_pending_writes]
+  - feature: checkpoint-replay
+    feature_group: E-检查点与恢复
+    title: 写入重放与超时判定
+    page_file: e04-checkpoint-replay.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_checkpoint.py
+        symbols: [_replay, _delta_channels_to_replay, checkpoint_superseded]
+  - feature: channel-read
+    feature_group: F-通道读写
+    title: ChannelRead 读通道节点
+    page_file: f01-channel-read.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_read.py
+        symbols: [ChannelRead, do_read]
+  - feature: pregel-node
+    feature_group: F-通道读写
+    title: PregelNode 的读写编排
+    page_file: f02-pregel-node.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_read.py
+        symbols: [PregelNode, flat_writers, invoke]
+  - feature: channel-write
+    feature_group: F-通道读写
+    title: ChannelWrite 写通道节点
+    page_file: f03-channel-write.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_write.py
+        symbols: [ChannelWrite, do_write, _assemble_writes]
+  - feature: io-mapping
+    feature_group: F-通道读写
+    title: 输入输出与命令映射
+    page_file: f04-io-mapping.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_io.py
+        symbols: [map_input, map_output_values, map_command]
+  - feature: stream-mux
+    feature_group: G-流式输出
+    title: StreamMux 多路复用与推流
+    page_file: g01-stream-mux.md
+    refs:
+      - path: libs/langgraph/langgraph/stream/_mux.py
+        symbols: [StreamMux, push, close]
+  - feature: stream-transformers
+    feature_group: G-流式输出
+    title: 内置流式转换器
+    page_file: g02-stream-transformers.md
+    refs:
+      - path: libs/langgraph/langgraph/stream/transformers.py
+        symbols: [ValuesTransformer, UpdatesTransformer, MessagesTransformer]
+  - feature: run-stream-driver
+    feature_group: G-流式输出
+    title: 流式驱动与投影
+    page_file: g03-run-stream-driver.md
+    refs:
+      - path: libs/langgraph/langgraph/stream/run_stream.py
+        symbols: [GraphRunStream, _pump_next, _drive_until_done]
+  - feature: stream-part-types
+    feature_group: G-流式输出
+    title: 流事件类型与负载
+    page_file: g04-stream-part-types.md
+    refs:
+      - path: libs/langgraph/langgraph/types.py
+        symbols: [ValuesStreamPart, MessagesStreamPart, DebugStreamPart]
+  - feature: interrupts-and-errors
+    feature_group: H-中断超时与校验
+    title: 中断、父命令与图错误
+    page_file: h01-interrupts-and-errors.md
+    refs:
+      - path: libs/langgraph/langgraph/errors.py
+        symbols: [GraphInterrupt, ParentCommand, NodeInterrupt]
+  - feature: timeout-scope
+    feature_group: H-中断超时与校验
+    title: 超时解析与尝试范围
+    page_file: h02-timeout-scope.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_retry.py
+        symbols: [_resolve_timeout, _TimedAttemptScope, wait_for_idle_timeout]
+  - feature: tool-call-streaming
+    feature_group: H-中断超时与校验
+    title: 工具调用流处理
+    page_file: h03-tool-call-streaming.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_tools.py
+        symbols: [StreamToolCallHandler, on_tool_start, tap_output_iter]
+  - feature: graph-validation
+    feature_group: H-中断超时与校验
+    title: 图结构与键校验
+    page_file: h04-graph-validation.md
+    refs:
+      - path: libs/langgraph/langgraph/pregel/_validate.py
+        symbols: [validate_graph, validate_keys]
+  - feature: runtime-object
+    feature_group: I-运行时上下文
+    title: Runtime 与执行信息
+    page_file: i01-runtime-object.md
+    refs:
+      - path: libs/langgraph/langgraph/runtime.py
+        symbols: [Runtime, ExecutionInfo, RunControl]
+  - feature: config-accessors
+    feature_group: I-运行时上下文
+    title: 配置、存储与流写入器取用
+    page_file: i02-config-accessors.md
+    refs:
+      - path: libs/langgraph/langgraph/config.py
+        symbols: [get_config, get_store, get_stream_writer]
+  - feature: serde-allowlist
+    feature_group: I-运行时上下文
+    title: 序列化允许清单构建
+    page_file: i03-serde-allowlist.md
+    refs:
+      - path: libs/langgraph/langgraph/_internal/_serde.py
+        symbols: [build_serde_allowlist, collect_allowlist_from_schemas, apply_checkpointer_allowlist]
+  - feature: managed-values
+    feature_group: I-运行时上下文
+    title: 托管值与剩余步数
+    page_file: i04-managed-values.md
+    refs:
+      - path: libs/langgraph/langgraph/managed/base.py
+        symbols: [ManagedValue, is_managed_value]
+      - path: libs/langgraph/langgraph/managed/is_last_step.py
+        symbols: [IsLastStepManager, RemainingStepsManager]
+---

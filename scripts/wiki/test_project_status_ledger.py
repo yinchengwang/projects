@@ -38,6 +38,11 @@ class TestLedger(unittest.TestCase):
         indexed = sorted(e["slug"] for e in self.entries if e["state"] == "indexed")
         self.assertEqual(indexed, ["mysql-server", "postgres", "redis", "sqlite"])
 
+    def test_langgraph_is_gates_pass(self):
+        entry = self.by_slug["langgraph"]
+        self.assertEqual(entry["state"], "gates-pass")
+        self.assertTrue(entry["next_action"])
+
     def test_completed_projects_keep_catalog_alias(self):
         self.assertEqual(self.by_slug["sqlite"]["aliases"], ["sqlite3"])
         self.assertEqual(self.by_slug["mysql-server"]["aliases"], ["mysql"])

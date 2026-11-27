@@ -2,9 +2,9 @@
 
 > **本文件是 wiki 收集任务的唯一持续进度入口。** 每次结束一个批次，先更新本文件的「当前状态」「批次台账」与「下一步」，再开始下一批；不要另开一份互不关联的进度记录。
 >
-> **本轮状态（2026-11-27）：** 四个数据库项目机制 wiki 已完成（367 篇），但仅 4/270。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 20 条已做 GitHub API 抽查并记录事实，其余尚未核验。AI 机制页仍为 0；wiki-rag 仍只入库 postgres。
+> **本轮状态（2026-11-27）：** 5/270 项目的机制 wiki 已完成（postgres、redis、sqlite、mysql-server、langgraph），共 407 篇机制页。langgraph 是首个 AI / Agent 样板：9 组 40 篇，逐篇 lint + refs 全 PASS，但 RAG 未入库，账本为 `gates-pass`。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 20 条已做 GitHub API 抽查并记录事实，其余尚未核验。项目状态账本 `wiki-project-status.yml` 已建立：270 条在册，4 项 `indexed`、1 项 `gates-pass`、265 项 `planned`。
 >
-> **下次从这里开始：** 按并行方案推进——一边逐条取真实 metadata 并把 catalog 补到 270，一边对已冻结项目立刻开始源码盘点和机制 wiki 生产。项目收集的终点是 270 项全部通过 wiki 验收，不是 catalog 完成或单个试点完成。
+> **下次从这里开始：** 按并行方案推进——一边逐条取真实 metadata 并把 catalog 补到 270，一边按阶段 2 的范式波次继续做 AI 项目机制 wiki（2A 剩余 Agent 图执行类：autogen、crewai、metagpt、openai-agents、pydantic-ai）。项目收集的终点是 270 项全部通过 wiki 验收，不是 catalog 完成或样板完成。
 
 ---
 
@@ -27,11 +27,11 @@
 | 项目 catalog | 152 项 | 270 项；还需评审、核实并补入 118 项 |
 | 数据库与数据基础设施分类 | 96 项 | 150 项；缺 54 项 |
 | AI / Agent / RAG / LLM 分类 | 56 项 | 120 项；缺 64 项 |
-| 已完成机制 wiki 的项目 | 4 个：postgres、redis、sqlite、mysql-server | 仅 4/270 项目收集完成 |
-| 已完成机制页 | 367 篇 | 逐项目盘点后汇总，不设外推总量 |
-| 已完成概览页 | 4 篇 | 每个完成项目 1 篇 |
-| wiki-rag 已入库 | 仅 postgres | 现有四库全部入库，然后每批新项目增量入库 |
-| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 0 页 | 全类别纳入，按阶段门槛推进 |
+| 已完成机制 wiki 的项目 | 5 个：postgres、redis、sqlite、mysql-server、langgraph | 5/270 项目收集完成 |
+| 已完成机制页 | 407 篇（367 + langgraph 40） | 逐项目盘点后汇总，不设外推总量 |
+| 已完成概览页 | 5 篇 | 每个完成项目 1 篇 |
+| wiki-rag 已入库 | 仅 postgres | 现有五库全部入库，然后每批新项目增量入库 |
+| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 40 页（langgraph） | 全类别纳入，按阶段门槛推进 |
 
 当前 152 项按 `model` 分类的分布：
 
@@ -176,6 +176,8 @@
 - 1.8 `wiki-rag` ingest langgraph；用涉及 durable execution、checkpoint、interrupt 等的问题验证检索与引用回源；只在整条链路通过后才关闭样板。
 
 **出口**：langgraph 在项目注册表从 `planned` 到 `indexed`；manifest 与页面一一对应；项目目录 lint / refs / manifest 0 失败；抽检报告 PASS；CI 对 langgraph 可独立运行；RAG 数据可追溯回该版本原文。
+
+**进度（2026-11-27）**：1.1–1.7 已完成。源码锚点 `3e3db42c5329dd404669ccd923c005c814bee3a3`（`langgraph` 主包，`libs/langgraph`）；新增 `scripts/wiki/dump_python_defs.py`（`ast` 解析，覆盖 `async def`、类方法、嵌套定义）与 8 项测试；`gen_manifest.py` 用 `--src-prefix libs` 支持 monorepo 路径；机制清单 `scripts/wiki/langgraph_mechanism_specs.py` 盘点出 **9 组 40 篇**（A 图构建 4 / B 通道 6 / C Pregel 循环 7 / D 调度并发 3 / E 检查点 4 / F 通道读写 4 / G 流式 4 / H 中断超时校验 4 / I 运行时上下文 4）；40 篇正文 + `_index.md` 已写完，逐篇 `wiki_lint` 与 `wiki_refs` 全 PASS，全目录 41 页 0 失败，manifest 门禁 0 失败。**1.8（RAG ingest）尚未开始**，因此账本状态为 `gates-pass` 而非 `indexed`。
 
 ### 阶段 2｜AI / Agent / RAG / LLM 120 项全覆盖
 
