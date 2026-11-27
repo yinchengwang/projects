@@ -33,6 +33,7 @@ INDEXED_PROJECTS = {
 # 已完成机制 wiki 但尚未入 RAG 的项目：wiki 目录 slug → 下一动作。
 GATES_PASS_PROJECTS = {
     "langgraph": "待阶段 0B 扩展后入 wiki-rag",
+    "autogen": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

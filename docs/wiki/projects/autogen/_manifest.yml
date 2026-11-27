@@ -1,0 +1,316 @@
+---
+project: autogen
+schema_version: 1
+pages:
+  - feature: single-threaded-runtime
+    feature_group: A-actor 运行时
+    title: 单线程 actor 运行时与消息队列
+    page_file: a01-single-threaded-runtime.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_single_threaded_agent_runtime.py
+        symbols: [SingleThreadedAgentRuntime, _process_send, _process_publish]
+      - path: python/packages/autogen-core/src/autogen_core/_queue.py
+        symbols: [Queue, QueueShutDown]
+  - feature: runtime-interface
+    feature_group: A-actor 运行时
+    title: 运行时抽象与智能体注册
+    page_file: a02-runtime-interface.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_agent_runtime.py
+        symbols: [AgentRuntime, register_factory, register_agent_instance]
+  - feature: run-context
+    feature_group: A-actor 运行时
+    title: 运行上下文与停止条件
+    page_file: a03-run-context.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_single_threaded_agent_runtime.py
+        symbols: [RunContext, stop_when, stop_when_idle]
+  - feature: agent-id-and-type
+    feature_group: A-actor 运行时
+    title: 智能体标识与类型约束
+    page_file: a04-agent-id-and-type.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_agent_id.py
+        symbols: [AgentId, is_valid_agent_type]
+      - path: python/packages/autogen-core/src/autogen_core/_topic.py
+        symbols: [TopicId, is_valid_topic_type]
+  - feature: routed-agent
+    feature_group: B-消息路由与订阅
+    title: 按消息类型分发的 RoutedAgent
+    page_file: b01-routed-agent.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_routed_agent.py
+        symbols: [RoutedAgent, message_handler, event]
+  - feature: subscription-matching
+    feature_group: B-消息路由与订阅
+    title: 订阅模型与主题匹配
+    page_file: b02-subscription-matching.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_subscription.py
+        symbols: [Subscription, is_match, map_to_agent]
+      - path: python/packages/autogen-core/src/autogen_core/_default_subscription.py
+        symbols: [DefaultSubscription, type_subscription]
+  - feature: subscription-manager
+    feature_group: B-消息路由与订阅
+    title: 订阅登记与接收者解析
+    page_file: b03-subscription-manager.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_runtime_impl_helpers.py
+        symbols: [SubscriptionManager, add_subscription, get_subscribed_recipients]
+  - feature: closure-agent
+    feature_group: B-消息路由与订阅
+    title: 闭包智能体与轻量注册
+    page_file: b04-closure-agent.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_closure_agent.py
+        symbols: [ClosureAgent, register_closure, ClosureContext]
+  - feature: base-agent-contract
+    feature_group: C-智能体基类与消息处理
+    title: BaseAgent 契约与消息入口
+    page_file: c01-base-agent-contract.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_base_agent.py
+        symbols: [BaseAgent, bind_id_and_runtime, on_message]
+      - path: python/packages/autogen-core/src/autogen_core/_agent.py
+        symbols: [Agent, on_message, save_state]
+  - feature: agent-instantiation-context
+    feature_group: C-智能体基类与消息处理
+    title: 实例化上下文与订阅延迟绑定
+    page_file: c02-agent-instantiation-context.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_agent_instantiation.py
+        symbols: [AgentInstantiationContext]
+      - path: python/packages/autogen-core/src/autogen_core/_subscription_context.py
+        symbols: [SubscriptionInstantiationContext]
+  - feature: agent-proxy
+    feature_group: C-智能体基类与消息处理
+    title: 代理与跨智能体调用
+    page_file: c03-agent-proxy.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_agent_proxy.py
+        symbols: [AgentProxy, send_message, save_state]
+  - feature: intervention-handler
+    feature_group: C-智能体基类与消息处理
+    title: 消息拦截与改写
+    page_file: c04-intervention-handler.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_intervention.py
+        symbols: [InterventionHandler, DropMessage, on_publish]
+  - feature: message-serialization
+    feature_group: D-组件与序列化
+    title: 消息序列化注册表
+    page_file: d01-message-serialization.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_serialization.py
+        symbols: [SerializationRegistry, MessageSerializer, UnknownPayload]
+  - feature: component-config
+    feature_group: D-组件与序列化
+    title: 组件声明与配置往返
+    page_file: d02-component-config.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_component_config.py
+        symbols: [Component, ComponentModel, ComponentLoader]
+  - feature: function-introspection
+    feature_group: D-组件与序列化
+    title: 函数签名到工具 schema
+    page_file: d03-function-introspection.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_function_utils.py
+        symbols: [get_function_schema, get_typed_signature, normalize_annotated_type]
+  - feature: cache-store
+    feature_group: D-组件与序列化
+    title: 缓存存储抽象与内存实现
+    page_file: d04-cache-store.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/_cache_store.py
+        symbols: [CacheStore, InMemoryStore, InMemoryStoreConfig]
+  - feature: chat-completion-context
+    feature_group: E-模型上下文与记忆
+    title: 模型上下文基类与状态存取
+    page_file: e01-chat-completion-context.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/model_context/_chat_completion_context.py
+        symbols: [ChatCompletionContext, add_message, get_messages]
+  - feature: context-window-strategies
+    feature_group: E-模型上下文与记忆
+    title: 上下文窗口的四种裁剪策略
+    page_file: e02-context-window-strategies.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/model_context/_buffered_chat_completion_context.py
+        symbols: [BufferedChatCompletionContext, get_messages]
+      - path: python/packages/autogen-core/src/autogen_core/model_context/_head_and_tail_chat_completion_context.py
+        symbols: [HeadAndTailChatCompletionContext]
+      - path: python/packages/autogen-core/src/autogen_core/model_context/_token_limited_chat_completion_context.py
+        symbols: [TokenLimitedChatCompletionContext]
+  - feature: model-client-contract
+    feature_group: E-模型上下文与记忆
+    title: 模型客户端与能力声明
+    page_file: e03-model-client-contract.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/models/_model_client.py
+        symbols: [ChatCompletionClient, ModelFamily, ModelInfo]
+  - feature: memory-abstraction
+    feature_group: E-模型上下文与记忆
+    title: 记忆抽象与列表实现
+    page_file: e04-memory-abstraction.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/memory/_base_memory.py
+        symbols: [Memory, MemoryContent, update_context]
+      - path: python/packages/autogen-core/src/autogen_core/memory/_list_memory.py
+        symbols: [ListMemory, query, add]
+  - feature: tool-schema
+    feature_group: F-工具与代码执行
+    title: 工具 schema 与状态化调用
+    page_file: f01-tool-schema.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/tools/_base.py
+        symbols: [Tool, ToolSchema, BaseTool]
+  - feature: function-tool
+    feature_group: F-工具与代码执行
+    title: 函数工具与参数校验
+    page_file: f02-function-tool.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/tools/_function_tool.py
+        symbols: [FunctionTool, run]
+  - feature: workbench
+    feature_group: F-工具与代码执行
+    title: 工作台与工具集合调度
+    page_file: f03-workbench.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/tools/_workbench.py
+        symbols: [Workbench, ToolResult, call_tool]
+      - path: python/packages/autogen-core/src/autogen_core/tools/_static_workbench.py
+        symbols: [StaticWorkbench, call_tool]
+  - feature: tool-agent
+    feature_group: F-工具与代码执行
+    title: 工具智能体与调用循环
+    page_file: f04-tool-agent.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/tool_agent/_tool_agent.py
+        symbols: [ToolAgent, ToolNotFoundException, handle_function_call]
+      - path: python/packages/autogen-core/src/autogen_core/tool_agent/_caller_loop.py
+        symbols: [tool_agent_caller_loop]
+  - feature: code-executor
+    feature_group: F-工具与代码执行
+    title: 代码执行器与依赖声明
+    page_file: f05-code-executor.md
+    refs:
+      - path: python/packages/autogen-core/src/autogen_core/code_executor/_base.py
+        symbols: [CodeExecutor, CodeBlock, CodeResult]
+      - path: python/packages/autogen-core/src/autogen_core/code_executor/_func_with_reqs.py
+        symbols: [FunctionWithRequirements, with_requirements, build_python_functions_file]
+  - feature: chat-agent-contract
+    feature_group: G-单智能体实现
+    title: ChatAgent 契约与响应对象
+    page_file: g01-chat-agent-contract.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/base/_chat_agent.py
+        symbols: [ChatAgent, Response, on_messages_stream]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/base/_task.py
+        symbols: [TaskRunner, TaskResult]
+  - feature: assistant-agent
+    feature_group: G-单智能体实现
+    title: AssistantAgent 的模型调用与工具循环
+    page_file: g02-assistant-agent.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_assistant_agent.py
+        symbols: [AssistantAgent, _call_llm, _reflect_on_tool_use_flow]
+  - feature: code-executor-agent
+    feature_group: G-单智能体实现
+    title: 代码执行智能体与审批
+    page_file: g03-code-executor-agent.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_code_executor_agent.py
+        symbols: [CodeExecutorAgent, extract_code_blocks_from_messages, execute_code_block]
+  - feature: user-proxy-and-filters
+    feature_group: G-单智能体实现
+    title: 用户代理与消息过滤智能体
+    page_file: g04-user-proxy-and-filters.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_user_proxy_agent.py
+        symbols: [UserProxyAgent, on_messages]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_message_filter_agent.py
+        symbols: [MessageFilterAgent, _apply_filter]
+  - feature: society-of-mind
+    feature_group: G-单智能体实现
+    title: 心智社会智能体（团队作为单体）
+    page_file: g05-society-of-mind.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_society_of_mind_agent.py
+        symbols: [SocietyOfMindAgent, on_messages_stream]
+  - feature: group-chat-base
+    feature_group: H-团队编排
+    title: 群聊团队基类与参与者装配
+    page_file: h01-group-chat-base.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_base_group_chat.py
+        symbols: [BaseGroupChat, _create_group_chat_manager_factory, run_stream]
+  - feature: chat-agent-container
+    feature_group: H-团队编排
+    title: 参与者容器与事件桥接
+    page_file: h02-chat-agent-container.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_chat_agent_container.py
+        symbols: [ChatAgentContainer, handle_team_response, _buffer_message]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_events.py
+        symbols: [GroupChatStart, GroupChatRequestPublish, GroupChatTermination]
+  - feature: group-chat-manager
+    feature_group: H-团队编排
+    title: 群聊管理器与轮次推进
+    page_file: h03-group-chat-manager.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_base_group_chat_manager.py
+        symbols: [BaseGroupChatManager, _transition_to_next_speakers, select_speaker]
+  - feature: round-robin-and-selector
+    feature_group: H-团队编排
+    title: 轮询与模型选人两种策略
+    page_file: h04-round-robin-and-selector.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_round_robin_group_chat.py
+        symbols: [RoundRobinGroupChat, RoundRobinGroupChatManager, select_speaker]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_selector_group_chat.py
+        symbols: [SelectorGroupChat, _select_speaker, construct_message_history]
+  - feature: swarm-handoff
+    feature_group: H-团队编排
+    title: Swarm 交接式选人
+    page_file: h05-swarm-handoff.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_swarm_group_chat.py
+        symbols: [Swarm, SwarmGroupChatManager, select_speaker]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/base/_handoff.py
+        symbols: [Handoff, handoff_tool]
+  - feature: graph-flow
+    feature_group: H-团队编排
+    title: 图式编排与激活条件
+    page_file: h06-graph-flow.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_graph/_digraph_group_chat.py
+        symbols: [DiGraph, GraphFlowManager, has_cycles_with_exit]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/teams/_group_chat/_graph/_graph_builder.py
+        symbols: [DiGraphBuilder]
+  - feature: termination-conditions
+    feature_group: I-终止条件和状态恢复
+    title: 终止条件与布尔组合
+    page_file: i01-termination-conditions.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/base/_termination.py
+        symbols: [TerminationCondition, AndTerminationCondition, OrTerminationCondition]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/conditions/_terminations.py
+        symbols: [StopMessageTermination, MaxMessageTermination, TextMentionTermination]
+  - feature: message-model
+    feature_group: I-终止条件和状态恢复
+    title: 消息类型与事件模型
+    page_file: i02-message-model.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/messages.py
+        symbols: [BaseChatMessage, TextMessage, to_model_message]
+  - feature: team-and-agent-state
+    feature_group: I-终止条件和状态恢复
+    title: 状态对象与保存恢复
+    page_file: i03-team-and-agent-state.md
+    refs:
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/state/_states.py
+        symbols: [BaseState, TeamState, AssistantAgentState]
+      - path: python/packages/autogen-agentchat/src/autogen_agentchat/agents/_assistant_agent.py
+        symbols: [AssistantAgent, save_state, load_state]
+---
