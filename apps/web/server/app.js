@@ -174,6 +174,22 @@ function createApp (opts) {
   router.add("GET", "/games", gamesEntry)
   router.add("GET", "/games/", gamesEntry)
 
+  /* ------------------------------------------------------------
+   * knowledge-hub 模块：同样模式。页面路径有两级（/pages/learn/index）
+   * 与三级（/pages/knowledge/graph/index）两种，两个段数都要登记。
+   * ---------------------------------------------------------- */
+  const knowledgeShell = makeModuleShell(
+    path.join(WEB_DIR, "knowledge", "shell.html"),
+    "knowledge 模块页面壳读取失败"
+  )
+  router.add("GET", "/knowledge/pages/:a/:b", knowledgeShell)
+  router.add("GET", "/knowledge/pages/:a/:b/:c", knowledgeShell)
+  const knowledgeEntry = makeModuleEntry("/knowledge/pages/dashboard/index")
+  router.add("GET", "/knowledge", knowledgeEntry)
+  router.add("GET", "/knowledge/", knowledgeEntry)
+  // 段数不对的 /knowledge/pages/xxx 也返回壳，由前端提示「页面不存在」。
+  router.add("GET", "/knowledge/pages/:a", knowledgeShell)
+
   const server = http.createServer(function (req, res) {
     const rawUrl = req.url || "/"
     const rawPath = rawUrl.split("?")[0]
