@@ -1,0 +1,341 @@
+---
+project: pydantic-ai
+schema_version: 1
+pages:
+  - feature: agent-definition
+    feature_group: A-Agent 定义与运行入口
+    title: Agent 定义与抽象基类
+    page_file: a01-agent-definition.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/agent/__init__.py
+        symbols: [Agent]
+      - path: pydantic_ai_slim/pydantic_ai/agent/abstract.py
+        symbols: [AbstractAgent, AgentRetries]
+  - feature: agent-spec
+    feature_group: A-Agent 定义与运行入口
+    title: Agent 规格与可序列化定义
+    page_file: a02-agent-spec.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/agent/spec.py
+        symbols: [AgentSpec, CapabilitySpecContext]
+      - path: pydantic_ai_slim/pydantic_ai/_spec.py
+        symbols: [NamedSpec, CapabilitySpec, build_registry]
+  - feature: run-and-result
+    feature_group: A-Agent 定义与运行入口
+    title: 运行对象与结果契约
+    page_file: a03-run-and-result.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/run.py
+        symbols: [AgentRun, AgentRunResult, AgentRunResultEvent]
+      - path: pydantic_ai_slim/pydantic_ai/result.py
+        symbols: [StreamedRunResult, AgentStream, FinalResult]
+  - feature: run-context
+    feature_group: A-Agent 定义与运行入口
+    title: 运行上下文与依赖注入
+    page_file: a04-run-context.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_run_context.py
+        symbols: [RunContext, OutputSubmitter, EventStreamBuffer]
+      - path: pydantic_ai_slim/pydantic_ai/_cancel.py
+        symbols: [CancellationToken, RunCancellation]
+  - feature: graph-builder
+    feature_group: B-图执行引擎
+    title: 图构建与运行入口
+    page_file: b01-graph-builder.md
+    refs:
+      - path: pydantic_graph/pydantic_graph/graph_builder.py
+        symbols: [Graph, GraphRun, GraphTask]
+  - feature: node-contract
+    feature_group: B-图执行引擎
+    title: 节点契约与运行上下文
+    page_file: b02-node-contract.md
+    refs:
+      - path: pydantic_graph/pydantic_graph/basenode.py
+        symbols: [BaseNode, GraphRunContext, End, Edge]
+      - path: pydantic_graph/pydantic_graph/node.py
+        symbols: [StartNode, EndNode, Fork]
+  - feature: decision-routing
+    feature_group: B-图执行引擎
+    title: 决策节点与分支路由
+    page_file: b03-decision-routing.md
+    refs:
+      - path: pydantic_graph/pydantic_graph/decision.py
+        symbols: [Decision, DecisionBranch, DecisionBranchBuilder]
+  - feature: fork-join
+    feature_group: B-图执行引擎
+    title: 并行分叉与汇合
+    page_file: b04-fork-join.md
+    refs:
+      - path: pydantic_graph/pydantic_graph/paths.py
+        symbols: [Path, PathBuilder, BroadcastMarker]
+      - path: pydantic_graph/pydantic_graph/join.py
+        symbols: [Join, JoinState, ReducerContext]
+  - feature: step-and-stream
+    feature_group: B-图执行引擎
+    title: 步节点与流式节点
+    page_file: b05-step-and-stream.md
+    refs:
+      - path: pydantic_graph/pydantic_graph/step.py
+        symbols: [Step, StepNode, StepContext, NodeStep]
+  - feature: capability-contract
+    feature_group: C-能力系统
+    title: 能力契约与生命周期挂载点
+    page_file: c01-capability-contract.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/capability.py
+        symbols: [Capability]
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/abstract.py
+        symbols: [AbstractCapability, CapabilityOrdering]
+  - feature: capability-composition
+    feature_group: C-能力系统
+    title: 能力组合与排序
+    page_file: c02-capability-composition.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/combined.py
+        symbols: [CombinedCapability]
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/abstract.py
+        symbols: [leaf_capabilities, _combine_duplicate_capabilities]
+  - feature: builtin-capabilities
+    feature_group: C-能力系统
+    title: 内置能力清单
+    page_file: c03-builtin-capabilities.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/caching.py
+        symbols: [Caching]
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/thinking.py
+        symbols: [Thinking]
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/model_fallback.py
+        symbols: [ModelFallback]
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/prepare_tools.py
+        symbols: [PrepareTools, PrepareOutputTools]
+  - feature: capability-hooks
+    feature_group: C-能力系统
+    title: 能力钩子与超时
+    page_file: c04-capability-hooks.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/capabilities/hooks.py
+        symbols: [HookTimeoutError, _HookEntry, _filter_tool_entries]
+  - feature: tool-definition
+    feature_group: D-工具与工具集
+    title: 工具定义与 schema
+    page_file: d01-tool-definition.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/tools.py
+        symbols: [Tool, ToolDefinition, GenerateToolJsonSchema]
+      - path: pydantic_ai_slim/pydantic_ai/_function_schema.py
+        symbols: [function_schema, FunctionSchema, takes_ctx]
+  - feature: toolsets
+    feature_group: D-工具与工具集
+    title: 工具集抽象与装饰型工具集
+    page_file: d02-toolsets.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/toolsets/abstract.py
+        symbols: [AbstractToolset, ToolsetTool]
+      - path: pydantic_ai_slim/pydantic_ai/toolsets/function.py
+        symbols: [FunctionToolset]
+      - path: pydantic_ai_slim/pydantic_ai/toolsets/filtered.py
+        symbols: [FilteredToolset]
+      - path: pydantic_ai_slim/pydantic_ai/toolsets/prefixed.py
+        symbols: [PrefixedToolset]
+  - feature: tool-manager
+    feature_group: D-工具与工具集
+    title: 工具管理器与工具裁决
+    page_file: d03-tool-manager.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/tool_manager.py
+        symbols: [ToolManager, ValidatedToolCall]
+      - path: pydantic_ai_slim/pydantic_ai/tool_manager.py
+        symbols: [_decide_which_tools_stay, _first_on_a_cycle]
+  - feature: tool-validation
+    feature_group: D-工具与工具集
+    title: 工具参数校验与重试
+    page_file: d04-tool-validation.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/exceptions.py
+        symbols: [ModelRetry, ToolFailed, SkipToolValidation]
+      - path: pydantic_ai_slim/pydantic_ai/_tool_execution.py
+        symbols: [_ToolCallProcessor, tool_bound_retry_part, build_tool_return_part]
+  - feature: tool-execution
+    feature_group: E-工具执行与延迟审批
+    title: 工具执行与并发控制
+    page_file: e01-tool-execution.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/concurrency.py
+        symbols: [ConcurrencyLimiter, ConcurrencyLimit, get_concurrency_context]
+      - path: pydantic_ai_slim/pydantic_ai/_tool_execution.py
+        symbols: [_segment_by_barriers, _duplicate_tool_call_ids]
+  - feature: deferred-tools
+    feature_group: E-工具执行与延迟审批
+    title: 延迟工具调用与审批
+    page_file: e02-deferred-tools.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_deferred.py
+        symbols: [DeferredToolRequests, DeferredToolResults, ToolApproved, ToolDenied]
+      - path: pydantic_ai_slim/pydantic_ai/exceptions.py
+        symbols: [ApprovalRequired, CallDeferred]
+  - feature: tool-search
+    feature_group: E-工具执行与延迟审批
+    title: 工具搜索与延迟发现
+    page_file: e03-tool-search.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_tool_search.py
+        symbols: [ToolSearchCallPart, ToolSearchReturnPart, ToolSearchArgs]
+      - path: pydantic_ai_slim/pydantic_ai/toolsets/deferred_loading.py
+        symbols: [DeferredLoadingToolset]
+  - feature: output-modes
+    feature_group: F-输出与结构化
+    title: 四种输出模式
+    page_file: f01-output-modes.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/output.py
+        symbols: [TextOutput, ToolOutput, NativeOutput, PromptedOutput]
+  - feature: output-schema
+    feature_group: F-输出与结构化
+    title: 输出 schema 与自动推断
+    page_file: f02-output-schema.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_output.py
+        symbols: [OutputSchema, AutoOutputSchema, TextOutputSchema]
+      - path: pydantic_ai_slim/pydantic_ai/output.py
+        symbols: [OutputObjectDefinition, OutputContext]
+  - feature: output-validation
+    feature_group: F-输出与结构化
+    title: 输出校验与不完整输出处理
+    page_file: f03-output-validation.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_output.py
+        symbols: [OutputValidator, is_incomplete_json, truncated_output_message]
+  - feature: model-abstract
+    feature_group: G-模型层
+    title: 模型抽象与请求参数
+    page_file: g01-model-abstract.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/models/_abstract.py
+        symbols: [AbstractModel]
+      - path: pydantic_ai_slim/pydantic_ai/models/__init__.py
+        symbols: [ModelRequestParameters, ModelRequestContext]
+  - feature: model-fallback
+    feature_group: G-模型层
+    title: 模型回退链
+    page_file: g02-model-fallback.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/models/fallback.py
+        symbols: [FallbackModel]
+      - path: pydantic_ai_slim/pydantic_ai/_fallback.py
+        symbols: [FallbackChain, ResponseRejected, FallbackPredicates]
+  - feature: model-providers
+    feature_group: G-模型层
+    title: 提供方与模型档案
+    page_file: g03-model-providers.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/providers/__init__.py
+        symbols: [Provider, infer_provider_class, infer_provider]
+      - path: pydantic_ai_slim/pydantic_ai/profiles/__init__.py
+        symbols: [ModelProfile, merge_profile]
+  - feature: model-wrappers
+    feature_group: G-模型层
+    title: 模型包装：插桩与并发限流
+    page_file: g04-model-wrappers.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/models/instrumented.py
+        symbols: [InstrumentedModel, InstrumentationSettings, instrument_model]
+      - path: pydantic_ai_slim/pydantic_ai/models/concurrency.py
+        symbols: [ConcurrencyLimitedModel, limit_model_concurrency]
+      - path: pydantic_ai_slim/pydantic_ai/models/wrapper.py
+        symbols: [WrapperModel]
+  - feature: message-model
+    feature_group: H-消息与历史
+    title: 消息部件与多模态内容
+    page_file: h01-message-model.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/messages.py
+        symbols: [SystemPromptPart, TextContent, ImageUrl]
+  - feature: history-processing
+    feature_group: H-消息与历史
+    title: 历史处理与重写
+    page_file: h02-history-processing.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_run_conversation.py
+        symbols: [_HistoryMerge, conversation_from_state, full_history]
+      - path: pydantic_ai_slim/pydantic_ai/_enqueue.py
+        symbols: [PendingMessageQueue, PendingMessage]
+  - feature: framing
+    feature_group: H-消息与历史
+    title: 内容帧包裹与提示注入防护
+    page_file: h03-framing.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/framing.py
+        symbols: [wrap, open_tag, close_tag]
+  - feature: conversation-store
+    feature_group: H-消息与历史
+    title: 会话存储与冲突检测
+    page_file: h04-conversation-store.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/conversation_store.py
+        symbols: [ConversationStore, InMemoryConversationStore, ConversationConflict]
+      - path: pydantic_ai_slim/pydantic_ai/conversation.py
+        symbols: [Conversation]
+  - feature: mcp-integration
+    feature_group: I-MCP 与工作区
+    title: MCP 接入与能力映射
+    page_file: i01-mcp-integration.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/mcp.py
+        symbols: [MCPError, Resource, ResourceTemplate]
+      - path: pydantic_ai_slim/pydantic_ai/_mcp.py
+        symbols: [map_from_mcp_params, map_from_pai_messages]
+  - feature: workspaces
+    feature_group: I-MCP 与工作区
+    title: 工作区后端与权限分层
+    page_file: i02-workspaces.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/workspaces/workspace.py
+        symbols: [Workspace, WorkspacePaths]
+      - path: pydantic_ai_slim/pydantic_ai/workspaces/local.py
+        symbols: [LocalWorkspaceBackend]
+      - path: pydantic_ai_slim/pydantic_ai/workspaces/authority.py
+        symbols: [AuthorityWorkspace]
+  - feature: ssrf-guard
+    feature_group: I-MCP 与工作区
+    title: 网络抓取的地址校验
+    page_file: i03-ssrf-guard.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_ssrf.py
+        symbols: [ResolvedUrl, DownloadTooLargeError]
+      - path: pydantic_ai_slim/pydantic_ai/common_tools/web_fetch.py
+        symbols: [WebFetchLocalTool, WebFetchResult]
+  - feature: durable-execution
+    feature_group: J-持久执行与可观测
+    title: 持久执行与可重放单元
+    page_file: j01-durable-execution.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/durable_exec/_base.py
+        symbols: [_RestrictedRunContext, _ModelRequestCacheIdentity, conversation_id_from_run_id]
+      - path: pydantic_ai_slim/pydantic_ai/durable_exec/_spec.py
+        symbols: [DurabilityEngineSpec]
+  - feature: instrumentation
+    feature_group: J-持久执行与可观测
+    title: 插桩与敏感内容策略
+    page_file: j02-instrumentation.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_instrumentation.py
+        symbols: [ContentPolicy, InstrumentationNames, span_include_content]
+  - feature: usage-accounting
+    feature_group: J-持久执行与可观测
+    title: 用量归属与成本
+    page_file: j03-usage-accounting.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/usage.py
+        symbols: [RunUsage, RequestUsage, UsageLimits]
+      - path: pydantic_ai_slim/pydantic_ai/_usage_attribution.py
+        symbols: [accumulate, record_request, record_tool_call]
+  - feature: cancellation
+    feature_group: J-持久执行与可观测
+    title: 取消传播与截止时间
+    page_file: j04-cancellation.md
+    refs:
+      - path: pydantic_ai_slim/pydantic_ai/_cancel.py
+        symbols: [RunBinding, provide_run_binding, inherited_run_deadline]
+      - path: pydantic_ai_slim/pydantic_ai/retries.py
+        symbols: [RetryConfig, wait_retry_after]
+---
