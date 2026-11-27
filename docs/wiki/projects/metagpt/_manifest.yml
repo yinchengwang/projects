@@ -1,0 +1,265 @@
+---
+project: metagpt
+schema_version: 1
+pages:
+  - feature: base-role-contract
+    feature_group: A-角色与团队
+    title: BaseRole 抽象与三类生命周期钩子
+    page_file: a01-base-role-contract.md
+    refs:
+      - path: metagpt/base/base_role.py
+        symbols: [BaseRole, is_idle, react]
+  - feature: role-react-modes
+    feature_group: A-角色与团队
+    title: Role 的三种反应模式
+    page_file: a02-role-react-modes.md
+    refs:
+      - path: metagpt/roles/role.py
+        symbols: [Role, RoleReactMode, _react, _plan_and_act]
+      - path: metagpt/roles/role.py
+        symbols: [think, act, _observe]
+  - feature: role-context
+    feature_group: A-角色与团队
+    title: 角色上下文与状态注入
+    page_file: a03-role-context.md
+    refs:
+      - path: metagpt/roles/role.py
+        symbols: [RoleContext, important_memory, history]
+      - path: metagpt/roles/role.py
+        symbols: [set_env, _set_state, publish_message]
+  - feature: team-investment
+    feature_group: A-角色与团队
+    title: 团队投资与成本控制
+    page_file: a04-team-investment.md
+    refs:
+      - path: metagpt/team.py
+        symbols: [Team, hire, invest, _check_balance]
+      - path: metagpt/team.py
+        symbols: [run_project, start_project]
+  - feature: base-environment
+    feature_group: B-环境与消息
+    title: BaseEnvironment 抽象与角色注册
+    page_file: b01-base-environment.md
+    refs:
+      - path: metagpt/base/base_env.py
+        symbols: [BaseEnvironment, publish_message, step]
+  - feature: environment-and-addresses
+    feature_group: B-环境与消息
+    title: Environment 的角色管理与地址分配
+    page_file: b02-environment-and-addresses.md
+    refs:
+      - path: metagpt/environment/base_env.py
+        symbols: [Environment, add_role, get_addresses]
+      - path: metagpt/environment/base_env.py
+        symbols: [is_idle, run, archive]
+  - feature: message-exchange
+    feature_group: B-环境与消息
+    title: 消息对象与收发路径
+    page_file: b03-message-exchange.md
+    refs:
+      - path: metagpt/schema.py
+        symbols: [Message, UserMessage, SystemMessage]
+      - path: metagpt/environment/base_env.py
+        symbols: [publish_message, get_role]
+  - feature: ext-environment
+    feature_group: B-环境与消息
+    title: 外部 API 环境与可读可写标注
+    page_file: b04-ext-environment.md
+    refs:
+      - path: metagpt/environment/base_env.py
+        symbols: [ExtEnv, get_all_available_apis, read_from_api]
+      - path: metagpt/environment/base_env.py
+        symbols: [EnvType, mark_as_readable, mark_as_writeable]
+  - feature: action-contract
+    feature_group: C-动作与动作图
+    title: Action 基类与提示装配
+    page_file: c01-action-contract.md
+    refs:
+      - path: metagpt/actions/action.py
+        symbols: [Action, set_prefix, _aask, run]
+  - feature: action-node
+    feature_group: C-动作与动作图
+    title: ActionNode 与结构化输出
+    page_file: c02-action-node.md
+    refs:
+      - path: metagpt/actions/action_node.py
+        symbols: [ActionNode, ReviewMode, FillMode]
+      - path: metagpt/actions/action_outcls_registry.py
+        symbols: [register_action_outcls]
+  - feature: action-graph
+    feature_group: C-动作与动作图
+    title: 动作图与依赖执行
+    page_file: c03-action-graph.md
+    refs:
+      - path: metagpt/actions/action_graph.py
+        symbols: [ActionGraph]
+      - path: metagpt/actions/action.py
+        symbols: [_run_action_node]
+  - feature: sop-actions
+    feature_group: C-动作与动作图
+    title: SOP 动作序列：需求到代码
+    page_file: c04-sop-actions.md
+    refs:
+      - path: metagpt/actions/analyze_requirements.py
+        symbols: [AnalyzeRequirementsRestrictions]
+      - path: metagpt/actions/design_api.py
+        symbols: [WriteDesign]
+      - path: metagpt/actions/project_management.py
+        symbols: [WriteTasks]
+      - path: metagpt/actions/write_code.py
+        symbols: [WriteCode]
+      - path: metagpt/actions/run_code.py
+        symbols: [RunCode]
+  - feature: solver-family
+    feature_group: D-策略与规划
+    title: 求解器家族与策略抽象
+    page_file: d01-solver-family.md
+    refs:
+      - path: metagpt/strategy/solver.py
+        symbols: [BaseSolver, ReActSolver, COTSolver]
+      - path: metagpt/strategy/solver.py
+        symbols: [NaiveSolver, TOTSolver]
+  - feature: planner
+    feature_group: D-策略与规划
+    title: 任务规划器与人工确认
+    page_file: d02-planner.md
+    refs:
+      - path: metagpt/strategy/planner.py
+        symbols: [Planner, update_plan, process_task_result]
+      - path: metagpt/strategy/planner.py
+        symbols: [ask_review, confirm_task]
+  - feature: experience-retriever
+    feature_group: D-策略与规划
+    title: 经验检索器与策略注入
+    page_file: d03-experience-retriever.md
+    refs:
+      - path: metagpt/strategy/experience_retriever.py
+        symbols: [ExpRetriever, TRDExpRetriever, SimpleExpRetriever]
+  - feature: tree-of-thought
+    feature_group: D-策略与规划
+    title: 思维树与搜索空间
+    page_file: d04-tree-of-thought.md
+    refs:
+      - path: metagpt/strategy/base.py
+        symbols: [ThoughtNode, ThoughtTree, BaseEvaluator]
+      - path: metagpt/strategy/tot.py
+        symbols: [BFSSolver, DFSSolver, MCTSSolver]
+      - path: metagpt/strategy/search_space.py
+        symbols: [SearchSpace]
+  - feature: role-memory
+    feature_group: E-记忆与经验池
+    title: 角色记忆与消息归档
+    page_file: e01-role-memory.md
+    refs:
+      - path: metagpt/memory/memory.py
+        symbols: [Memory, add, try_remember]
+      - path: metagpt/memory/memory.py
+        symbols: [get_by_role, get_by_actions, delete_newest]
+  - feature: brain-memory
+    feature_group: E-记忆与经验池
+    title: 脑记忆与短期上下文压缩
+    page_file: e02-brain-memory.md
+    refs:
+      - path: metagpt/memory/brain_memory.py
+        symbols: [BrainMemory, Config]
+  - feature: longterm-memory
+    feature_group: E-记忆与经验池
+    title: 长期记忆与向量检索
+    page_file: e03-longterm-memory.md
+    refs:
+      - path: metagpt/memory/longterm_memory.py
+        symbols: [LongTermMemory]
+      - path: metagpt/memory/role_zero_memory.py
+        symbols: [RoleZeroLongTermMemory]
+  - feature: document-store
+    feature_group: E-记忆与经验池
+    title: 文档存储后端抽象
+    page_file: e04-document-store.md
+    refs:
+      - path: metagpt/document_store/base_store.py
+        symbols: [BaseStore, LocalStore, search]
+  - feature: experience-pool
+    feature_group: E-记忆与经验池
+    title: 经验池与经验生命周期
+    page_file: e05-experience-pool.md
+    refs:
+      - path: metagpt/exp_pool/manager.py
+        symbols: [ExperienceManager, create_exps, query_exps]
+      - path: metagpt/exp_pool/schema.py
+        symbols: [Experience, ExperienceType, Trajectory]
+  - feature: simple-engine
+    feature_group: F-RAG 检索链路
+    title: SimpleEngine 与检索器能力校验
+    page_file: f01-simple-engine.md
+    refs:
+      - path: metagpt/rag/engines/simple.py
+        symbols: [SimpleEngine, from_docs, retrieve]
+      - path: metagpt/rag/engines/simple.py
+        symbols: [_ensure_retriever_queryable, add_docs, persist]
+  - feature: retriever-factory
+    feature_group: F-RAG 检索链路
+    title: 检索器工厂与混合检索
+    page_file: f02-retriever-factory.md
+    refs:
+      - path: metagpt/rag/factories/retriever.py
+        symbols: [RetrieverFactory]
+      - path: metagpt/rag/retrievers/hybrid_retriever.py
+        symbols: [SimpleHybridRetriever]
+  - feature: rerank-postprocessor
+    feature_group: F-RAG 检索链路
+    title: 重排后处理与对象还原
+    page_file: f03-rerank-postprocessor.md
+    refs:
+      - path: metagpt/rag/rankers/object_ranker.py
+        symbols: [ObjectSortPostprocessor]
+      - path: metagpt/rag/engines/simple.py
+        symbols: [_try_reconstruct_obj, get_obj_nodes]
+  - feature: base-llm-provider
+    feature_group: G-模型提供方
+    title: 模型基类与成本计费
+    page_file: g01-base-llm-provider.md
+    refs:
+      - path: metagpt/provider/base_llm.py
+        symbols: [BaseLLM]
+  - feature: llm-provider-registry
+    feature_group: G-模型提供方
+    title: 提供方注册与选择
+    page_file: g02-llm-provider-registry.md
+    refs:
+      - path: metagpt/provider/llm_provider_registry.py
+        symbols: [LLMProviderRegistry]
+  - feature: tool-registry
+    feature_group: H-工具与技能
+    title: 工具注册表与 schema 生成
+    page_file: h01-tool-registry.md
+    refs:
+      - path: metagpt/tools/tool_registry.py
+        symbols: [ToolRegistry, register_tool, make_schema]
+      - path: metagpt/tools/tool_registry.py
+        symbols: [register_tools_from_path, get_tools_by_tag]
+  - feature: tool-recommend
+    feature_group: H-工具与技能
+    title: 工具推荐与检索策略
+    page_file: h02-tool-recommend.md
+    refs:
+      - path: metagpt/tools/tool_recommend.py
+        symbols: [ToolRecommender, BM25ToolRecommender, EmbeddingToolRecommender]
+  - feature: code-to-tool-schema
+    feature_group: H-工具与技能
+    title: 代码转工具 schema 的 AST 分析
+    page_file: h03-code-to-tool-schema.md
+    refs:
+      - path: metagpt/tools/tool_convert.py
+        symbols: [convert_code_to_tool_schema, convert_code_to_tool_schema_ast, CodeVisitor]
+  - feature: skill-system
+    feature_group: H-工具与技能
+    title: 技能声明与技能动作
+    page_file: h04-skill-system.md
+    refs:
+      - path: metagpt/learn/skill_loader.py
+        symbols: [Skill, SkillsDeclaration, Components]
+      - path: metagpt/actions/skill_action.py
+        symbols: [SkillAction, ArgumentsParingAction]
+      - path: metagpt/management/skill_manager.py
+        symbols: [SkillManager]
+---
