@@ -255,15 +255,18 @@ L4 modalities/                  模态之间禁互相 include
 
 ### 前端子项目（`apps/`）
 
-前端已**原生化重写**（2026-10-22 完成）：原 Taro 3.6 + React 18 + Vite 5 的 `frontend/` monorepo
-已删除，对应的**零依赖、零构建**原生微信小程序（纯 JS + WXML + WXSS）迁至仓库根 `apps/`：
+前端已从微信小程序重写为**本机 Web 应用**（2026-11-26 完成合并）。
 
-| 应用 | 位置 |
-|---|---|
-| knowledge-hub（Reading Radar） | `apps/knowledge-hub/` |
-| games（游戏中心） | `apps/games/` |
-| programmer-workbench（DevBench） | `apps/programmer-workbench/` |
-| trip-log | `apps/trip-log/` |
+`apps/web/` 是合并应用：组合根（`server/`）+ 共用层（`shared/`）+ 4 个模块前端（`web/`），
+共 43 个页面（workbench 18 / knowledge 17 / trip 3 / games 5）。
+零 npm 依赖、零构建（原生 ES2020 + DOM + Canvas），浏览器侧用 `web/cjs-loader.js` 加载
+CommonJS 模块 —— 测试与浏览器跑的是同一份源码。
 
-三者均无 pnpm / Taro / Vite 构建步骤，因此**没有独立的子项目规则文件**；
-C/C++ 主项目的构建纪律、产物目录规范、提交纪律同样适用于这些目录。
+`apps/study-hub/`（5174）与 `apps/wiki-rag/`（8000）是**独立进程**，原地保留。
+
+```bash
+node apps/web/server/main.js
+cd apps/web && node tests/run-all.js
+```
+
+详见 [`apps/README.md`](apps/README.md)。

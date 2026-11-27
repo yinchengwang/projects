@@ -4,7 +4,7 @@
  * 在 Node 下运行，装一个 localStorage 内存替身，验证四个游戏引擎的关键规则。
  * 用法：node tests/games-engine.test.js
  *
- * 从 apps/games/tests/engine.test.js 迁入：51 个用例原样保留，
+ * 原先在微信小程序 games 的 tests/engine.test.js，51 个用例原样保留，
  * 只把 wx storage mock 换成 localStorage 替身、require 路径改到 shared/games/。
  */
 

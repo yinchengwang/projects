@@ -68,20 +68,32 @@ clang-format -i $(git ls-files '*.c' '*.cpp' '*.h' '*.hpp')
 - GCC/Clang：`-Wall -Wextra -Wpedantic -Werror -Wno-sign-compare`
 - Debug：`-O0 -g3`；Release：`-O2 -DNDEBUG`
 
-## 前端说明（已迁移）
+## 前端说明（已合并）
 
-knowledge_hub 原为 Taro 3.6 + React 18 + TS 工程，**已于 2026-10-22 完成原生化重写**：
-Taro 源码（原 `engine/apps/web/{knowledge_hub,games-mini-program,reading-radar}`）已删除，
-对应的原生微信小程序现位于 `apps/`：
+前端已从微信小程序重写为**本机 Web 应用**（2026-11-26 完成合并）。
 
-| 应用 | 位置 |
-|---|---|
-| knowledge-hub（Reading Radar） | `apps/knowledge-hub/` |
-| games（游戏中心） | `apps/games/` |
-| programmer-workbench（DevBench） | `apps/programmer-workbench/` |
+原先的 4 个微信小程序（programmer-workbench / knowledge-hub / trip-log / games）已整体
+移植为原生 Web 页面，合并进 `apps/web/`：
 
-三者均为零依赖、零构建的原生小程序（纯 JS + WXML + WXSS），无 pnpm / Taro / Vite 构建步骤。
-下文关于 `frontend/` monorepo 的结构与命令描述对应的是更早的一版前端布局，现已不适用。
+| 模块 | 路径 | 页面数 |
+|---|---|---|
+| 程序员工作台 | `/workbench/` | 18 |
+| 知识中心 | `/knowledge/` | 17 |
+| 足迹 | `/trip/` | 3 |
+| 游戏 | `/games/` | 5 |
+
+`apps/study-hub/`（学习中枢，5174）与 `apps/wiki-rag/`（Wiki 检索，8000）是**独立进程**，
+保持原地不动 —— 它们的前端硬编码了绝对路径，挂到子路径下会失效。
+
+```bash
+node apps/web/server/main.js                    # 合并应用，5173
+PORT=5174 node apps/study-hub/server/main.js    # 学习中枢，5174
+cd apps/wiki-rag && python -m server.main       # Wiki 检索，8000
+```
+
+合并应用零 npm 依赖、零构建（原生 ES2020 + DOM + Canvas，浏览器侧由
+`apps/web/web/cjs-loader.js` 加载 CommonJS 模块）。测试：`cd apps/web && node tests/run-all.js`。
+详见 [`apps/README.md`](apps/README.md)。
 
 ## 开发守则
 

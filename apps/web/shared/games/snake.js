@@ -1,7 +1,7 @@
 /**
  * snake.js —— 贪吃蛇核心逻辑
  *
- * 原生小程序版。移植自 engine/apps/games/snake/ (C) 的等价 JS 实现。
+ * Web 版。移植自 engine/apps/games/snake/ (C) 的等价 JS 实现。
  */
 
 const SNAKE_CONFIG = {

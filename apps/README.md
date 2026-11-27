@@ -1,88 +1,130 @@
-# 微信小程序集合
+# 应用集合
 
-本目录是仓库内**所有微信小程序的 canonical 位置**。每个小程序一个独立子目录，可直接用微信开发者工具「导入项目」打开。
+本目录是仓库内**所有本机应用**的 canonical 位置。
 
-> ⚠️ 微信小程序**不属于** `../engineering/` track。engineering 存放 C/C++ 库代码与 CMake 工程，两者的构建体系完全不同。
->
-> 历史说明：小程序源码原位于 `engine/apps/web/`（Taro 工程），已于 2026-10-22 完成原生化重写并迁入本目录。
+合并后的形态：一个入口 + 两个独立服务。
+
+```
+apps/
+├── web/           合并应用（Node 服务，5173）
+│   ├── server/    组合根：路由、静态托管、健康检查
+│   ├── shared/    共用层：core / ui / charts / platform / photos + 各模块数据层
+│   └── web/       各模块前端（workbench / knowledge / trip / games）
+├── study-hub/     学习中枢（Node，5174，独立进程）
+└── wiki-rag/      Wiki 检索（Python FastAPI，8000，独立进程）
+```
+
+> 历史说明：原先的 4 个微信小程序（workbench / knowledge-hub / trip-log / games）
+> 已于 2026-11-26 整体移植为原生 Web 页面并合并进 `apps/web/`。那些小程序更早前
+> 从 `engine/apps/web/`（Taro 工程）原生化重写而来。
 
 ---
 
-## 项目清单
+## 合并应用 · `web/`（5173）
 
-| 项目 | 目录 | 技术栈 | 简介 |
+**一个入口，四个模块。** 43 个页面，全部是原生 Web 页面。
+
+### 启动
+
+```bash
+node apps/web/server/main.js
+# 打开 http://127.0.0.1:5173
+```
+
+需要 Node ≥ 24。零 npm 依赖、零构建。
+
+### 模块
+
+| 模块 | 路径 | 页面数 | 说明 |
 |---|---|---|---|
-| **trip-log** | [`trip-log/`](./trip-log) | 原生 + 云 SDK | 足迹 —— 游玩记录 |
-| **games** | [`games/`](./games) | 原生小程序 | 游戏中心 —— 贪吃蛇 / 数独 / 2048 / 三消 |
-| **programmer-workbench** | [`programmer-workbench/`](./programmer-workbench) | 原生小程序 | DevBench —— 程序员个人工作台 |
-| **knowledge-hub** | [`knowledge-hub/`](./knowledge-hub) | 原生小程序 | Reading Radar —— 知识管理中心 |
+| 程序员工作台 | `/workbench/` | 18 | 待办、技术笔记、代码片段、面试题库、资源、读书、健身、心情、日程、项目集、闪念 + 10 个离线工具 |
+| 知识中心 | `/knowledge/` | 17 | SM-2 间隔复习、题库练习与错题本、面试追踪与模拟面试、知识图谱（Canvas）、技术雷达（Canvas）、五年计划 |
+| 足迹 | `/trip/` | 3 | 记录走过的地方与照片（照片存 IndexedDB） |
+| 游戏 | `/games/` | 5 | 贪吃蛇、2048、数独、消消乐 |
 
-> 三个新应用（games / programmer-workbench / knowledge-hub）均为**零依赖、零构建**：纯 JavaScript + WXML + WXSS，无 npm、无打包步骤，克隆即可跑。
-> `trip-log` 例外，它依赖 `@tencent-ai/workbuddy-cloud-sdk`（云服务能力所需）。
+### 数据存哪
 
----
+| 数据 | 存储 | 说明 |
+|---|---|---|
+| workbench / knowledge / trip 的业务数据 | `localStorage`，`db:` 前缀 | 按数据域分键 |
+| games 的存档 | `localStorage`，`games_` 前缀 | 与上面不冲突 |
+| trip 的照片 | **IndexedDB** | 单条记录最多 9 张 × 5MB，超出 localStorage 配额 |
 
-## 快速开始
+全部数据只在本机，不上传任何服务器。
 
-用**微信开发者工具导入项目**，选择对应的应用子目录即可（`appid` 默认 `touristappid`，可换成自己的）。
+### 目录
 
-```bash
-# 各应用的自测（静态校验 + 单元测试）
-cd programmer-workbench && node tests/run-all.js
-cd knowledge-hub        && node tests/run-all.js
-cd games                && node tests/engine.test.js
+```
+web/
+├── server/          组合根：main / app / router / static / health
+├── shared/
+│   ├── core/        通用层：storage / store / id / date / format / md / constants / theme
+│   ├── ui.js        构件层（页头 / 主卡 / 数字块 / 药丸 / 进度条 / 空态）
+│   ├── charts.js    手绘 SVG 图表层
+│   ├── platform.js  平台适配层（承接 wx 的交互 API，Promise 风格）
+│   ├── photos.js    IndexedDB 图片存储层
+│   ├── workbench/   workbench 数据层（12 个数据域 + 10 个工具）
+│   ├── knowledge/   knowledge-hub 数据层（14 个数据域 + 图谱/雷达布局）
+│   ├── trip/        trip 数据层 + 导出导入
+│   └── games/       4 个游戏引擎 + 存档层
+├── web/             各模块前端 + cjs-loader.js（浏览器侧 CommonJS 加载器）
+└── tests/           全部测试，一条命令跑完
 ```
 
-三个新应用共用同一套基础设施：
-
-- `core/` —— 主题、存储（`db:` 前缀）、数据域工厂、Markdown 渲染等纯逻辑层
-- `components/` —— card / tag / empty / progress-bar / header / fab 等通用组件
-- `tests/` —— `validate.js` 五项静态校验（JS 语法 / JSON / 页面注册 / 组件引用 / WXML handler 交叉校验）+ 单元测试
-
----
-
-## trip-log · 足迹
-
-游玩记录微信小程序，基于原生小程序框架 + `@tencent-ai/workbuddy-cloud-sdk`。
+### 测试
 
 ```bash
-cd trip-log
-# 用微信开发者工具直接打开本目录
-```
-
----
-
-## games · 游戏中心
-
-贪吃蛇 / 数独 / 2048 / 俄罗斯方块-match3，纯原生实现，无素材图片（图形全用 Canvas / CSS 绘制）。
-
-```bash
-cd games
-node tests/engine.test.js    # 游戏引擎单测
+cd apps/web && node tests/run-all.js
 ```
 
 ---
 
-## programmer-workbench · DevBench
+## 学习中枢 · `study-hub/`（5174）
 
-程序员个人工作台：工作台 / 技术栈 / 生活 / 项目集 / 工具箱 / 闪念 / 我的，18 个页面。
+算法 / 数据库 / AI 三轨合一的学习助手。本机运行，判题走真实编译执行。
 
-内置 10 个离线开发工具（JSON、Base64、URL、时间戳、UUID、正则、颜色、Hash、Diff、Cron），数据全部本地化（`wx.setStorageSync` + `db:` 前缀），支持导出/恢复。
+**独立进程**，不与合并应用耦合。
 
-详见 [`programmer-workbench/README.md`](./programmer-workbench/README.md)。
+```bash
+PORT=5174 node apps/study-hub/server/main.js
+# 打开 http://127.0.0.1:5174
+```
+
+需要 Node ≥ 24。设 `STUDY_HUB_LEARNING_ROOT` 指向 learning 仓可开启同步；不设则纯本地模式。
+
+```bash
+cd apps/study-hub && node tests/run-all.js
+```
 
 ---
 
-## knowledge-hub · Reading Radar
+## Wiki 检索 · `wiki-rag/`（8000）
 
-知识管理中心：首页 / 学习 / 面试 / 知识 / 我的，17 个页面、14 个数据域。
+本地 wiki 语料的三栏混合检索工作台。答案为抽取式，只拼接检索到的原文块。
 
-包含 SM-2 间隔重复复习、题库练习与错题本、面试追踪与模拟面试、知识图谱（Canvas）、技术雷达、月历打卡五年计划等。
+**独立进程**（Python）。
 
-详见 [`knowledge-hub/README.md`](./knowledge-hub/README.md)。
+```powershell
+cd apps\wiki-rag
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python tools/ingest.py --project postgres   # 建索引
+python -m server.main
+# 打开 http://127.0.0.1:8000
+```
+
+```powershell
+python -m pytest tests -q
+```
 
 ---
 
-## 共享代码层
+## 三个服务的关系
 
-`programmer-workbench` 与 `knowledge-hub` 共享同一套 `core/` 与 `components/`（逐字节相同，修改即分叉）。两者是**独立应用**（tabBar 上限 5 项 + 产品心智不同），只共享代码层，不合并。
+合并应用的外壳是**导航入口**；study-hub 与 wiki-rag 各自独立启动、独立端口。
+
+原因是这两个应用的前端硬编码了绝对路径（study-hub 有 35 处 `fetch("/api/...")`），
+挂到子路径下会全部失效。保持独立端口，它们一行都不用改。
+
+外壳首页会显示两个后端的在线状态（运行中 / 未启动），未启动时鼠标悬停给出启动命令。

@@ -2,7 +2,7 @@
 /**
  * format.js —— 日期与字符串格式化
  *
- * 从小程序版 apps/trip-log/utils/format.js 搬来，逻辑一字未改
+ * 原先在微信小程序 trip-log 的 utils/format.js，逻辑一字未改
  *（只是从 2 空格缩进的双引号风格统一成本仓的写法）。
  */
 

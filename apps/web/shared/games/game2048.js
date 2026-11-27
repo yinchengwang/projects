@@ -1,7 +1,7 @@
 /**
  * game2048.js —— 2048 核心逻辑
  *
- * 原生小程序版。移植自 engine/apps/games/2048/ (C) 的等价 JS 实现。
+ * Web 版。移植自 engine/apps/games/2048/ (C) 的等价 JS 实现。
  */
 
 const CONFIG = {
