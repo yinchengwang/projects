@@ -1,9 +1,0 @@
-{
-  "navigationBarTitleText": "技术雷达",
-  "usingComponents": {
-    "radar-chart": "../../../components/radar-chart/index",
-    "progress-bar": "../../../components/progress-bar/index",
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}

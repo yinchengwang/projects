@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "技术",
-  "usingComponents": {
-    "app-fab": "../../components/fab/index",
-    "capture-sheet": "../../components/capture-sheet/index"
-  },
-  "enablePullDownRefresh": false
-}

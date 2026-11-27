@@ -1,4 +1,0 @@
-<view
-  class="tag tag-{{type}}"
-  style="{{color ? 'color:' + color + ';background:' + color + '1F' : ''}}"
->{{text}}</view>

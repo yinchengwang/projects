@@ -1,7 +1,0 @@
-<view class="fab {{label ? 'is-wide' : ''}}" style="bottom: {{bottom}}rpx;" bindtap="onTap">
-  <view class="plus">
-    <view class="bar-h"></view>
-    <view class="bar-v"></view>
-  </view>
-  <text class="label" wx:if="{{label}}">{{label}}</text>
-</view>

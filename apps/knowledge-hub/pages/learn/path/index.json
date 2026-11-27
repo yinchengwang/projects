@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "学习路径",
-  "usingComponents": {
-    "progress-bar": "../../../components/progress-bar/index"
-  },
-  "enablePullDownRefresh": false
-}

@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "图解系列",
-  "usingComponents": {
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}

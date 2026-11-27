@@ -1,9 +1,0 @@
-{
-  "name": "trip-log",
-  "version": "1.0.0",
-  "description": "足迹 - 游玩记录微信小程序",
-  "private": true,
-  "dependencies": {
-    "@tencent-ai/workbuddy-cloud-sdk": "dev"
-  }
-}

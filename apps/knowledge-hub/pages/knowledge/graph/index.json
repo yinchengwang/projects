@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "知识图谱",
-  "usingComponents": {
-    "knowledge-graph": "../../../components/knowledge-graph/index"
-  },
-  "enablePullDownRefresh": false
-}

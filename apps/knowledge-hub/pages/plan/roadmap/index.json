@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "项目路线",
-  "usingComponents": {
-    "app-fab": "../../../components/fab/index",
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}

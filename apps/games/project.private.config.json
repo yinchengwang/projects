@@ -1,9 +1,0 @@
-{
-  "projectname": "games",
-  "setting": {
-    "compileHotReLoad": true,
-    "urlCheck": false
-  },
-  "libVersion": "3.17.4",
-  "condition": {}
-}

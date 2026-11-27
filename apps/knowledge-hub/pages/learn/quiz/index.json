@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "题库练习",
-  "usingComponents": {
-    "progress-bar": "../../../components/progress-bar/index",
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}

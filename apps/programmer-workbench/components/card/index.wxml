@@ -1,7 +1,0 @@
-<view class="card {{tight ? 'is-tight' : ''}} {{flat ? 'is-flat' : ''}}">
-  <view class="head" wx:if="{{title || extra}}">
-    <text class="title" wx:if="{{title}}">{{title}}</text>
-    <text class="extra" wx:if="{{extra}}">{{extra}}</text>
-  </view>
-  <slot></slot>
-</view>

@@ -1,6 +1,0 @@
-<view class="track" style="height: {{height}}rpx;">
-  <view
-    class="fill"
-    style="width: {{safePercent}}%; height: {{height}}rpx; background: {{color || 'var(--brand, #0284C7)'}};"
-  ></view>
-</view>

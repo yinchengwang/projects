@@ -1,8 +1,0 @@
-<view class="wrap">
-  <canvas
-    type="2d"
-    id="graph"
-    class="canvas"
-    style="width: 100%; height: 360px;"
-  ></canvas>
-</view>

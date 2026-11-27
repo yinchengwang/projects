@@ -1,9 +1,0 @@
-{
-  "navigationBarTitleText": "读书",
-  "usingComponents": {
-    "app-header": "../../../components/header/index",
-    "app-progress-bar": "../../../components/progress-bar/index",
-    "app-empty": "../../../components/empty/index",
-    "app-fab": "../../../components/fab/index"
-  }
-}

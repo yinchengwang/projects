@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "Reading Radar",
-  "usingComponents": {
-    "progress-bar": "../../components/progress-bar/index"
-  },
-  "enablePullDownRefresh": false
-}

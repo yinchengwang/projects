@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "摘抄管理",
-  "usingComponents": {
-    "app-fab": "../../../components/fab/index",
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}

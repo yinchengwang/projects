@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "今日",
-  "usingComponents": {
-    "app-fab": "../../components/fab/index",
-    "capture-sheet": "../../components/capture-sheet/index"
-  },
-  "enablePullDownRefresh": false
-}

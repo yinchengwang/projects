@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "心情",
-  "usingComponents": {
-    "app-header": "../../../components/header/index",
-    "app-tag": "../../../components/tag/index",
-    "app-empty": "../../../components/empty/index"
-  }
-}

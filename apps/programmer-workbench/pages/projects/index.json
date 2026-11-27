@@ -1,9 +1,0 @@
-{
-  "navigationBarTitleText": "项目集",
-  "usingComponents": {
-    "app-header": "../../components/header/index",
-    "app-tag": "../../components/tag/index",
-    "app-empty": "../../components/empty/index",
-    "app-fab": "../../components/fab/index"
-  }
-}

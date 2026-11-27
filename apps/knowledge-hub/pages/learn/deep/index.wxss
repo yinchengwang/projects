@@ -1,5 +1,0 @@
-/* 图解系列 —— 列表 + 全屏阅读面板 */
-
-.search-input {
-  margin: 16rpx 0 24rpx;
-}

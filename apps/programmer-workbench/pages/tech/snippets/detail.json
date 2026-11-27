@@ -1,6 +1,0 @@
-{
-  "navigationBarTitleText": "片段",
-  "usingComponents": {
-    "app-header": "../../../components/header/index"
-  }
-}

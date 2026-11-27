@@ -1,7 +1,0 @@
-{
-  "navigationBarTitleText": "复习计划",
-  "usingComponents": {
-    "app-empty": "../../../components/empty/index"
-  },
-  "enablePullDownRefresh": false
-}
