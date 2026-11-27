@@ -41,9 +41,23 @@ function makeCtx () {
 
 /** 最小 DOM 节点 */
 function makeNode (tag) {
-  return {
+  // children 模仿浏览器的 HTMLCollection：支持下标与 item()，
+  // 但没有 push / pop / splice —— 这样「在 children 上直接调 pop()」会在测试里就暴露。
+  const kids = []
+  const BLOCKED = { pop: 1, push: 1, shift: 1, unshift: 1, splice: 1, indexOf: 1, map: 1, forEach: 1, filter: 1 }
+  const collection = new Proxy(kids, {
+    get: function (target, prop) {
+      if (prop === "item") return function (i) { return kids[i] === undefined ? null : kids[i] }
+      // 数字下标与 length 放行；数组方法一律返回 undefined，
+      // 让 children.pop() 在测试里就是 TypeError，与真实浏览器一致。
+      if (typeof prop === "string" && BLOCKED[prop]) return undefined
+      return target[prop]
+    }
+  })
+  const node = {
     tagName: String(tag).toUpperCase(),
-    children: [],
+    get children () { return collection },
+    _kids: kids,
     attributes: {},
     listeners: {},
     style: {},
@@ -53,13 +67,13 @@ function makeNode (tag) {
     height: 0,
     _text: "",
     get textContent () {
-      return this.children.length ? this.children.map(function (c) { return c.textContent }).join("") : this._text
+      return kids.length ? kids.map(function (c) { return c.textContent }).join("") : this._text
     },
-    set textContent (v) { this.children = []; this._text = String(v) },
-    appendChild: function (child) { this.children.push(child); return child },
+    set textContent (v) { kids.length = 0; this._text = String(v) },
+    appendChild: function (child) { kids.push(child); return child },
     removeChild: function (child) {
-      const i = this.children.indexOf(child)
-      if (i >= 0) this.children.splice(i, 1)
+      const i = kids.indexOf(child)
+      if (i >= 0) kids.splice(i, 1)
       return child
     },
     setAttribute: function (k, v) { this.attributes[k] = String(v) },
@@ -73,6 +87,7 @@ function makeNode (tag) {
     getContext: function () { return makeCtx() },
     focus: function () {}
   }
+  return node
 }
 
 /**

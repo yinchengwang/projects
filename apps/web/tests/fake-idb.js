@@ -5,10 +5,15 @@
  * 复刻真实 IndexedDB 的语义：
  *   - `indexedDB.open(name, version)` **立即**发起请求（不需再调 open()）
  *   - 支持 `keyPath`：put 时若没显式给 key，取 value.key
+ *   - **`get` / `getAll` / `count` 返回 IDBRequest（带 result），不是数据本身**
  *   - onupgradeneeded → onsuccess 的顺序与真实一致，且都是异步
  *   - 事务在下一个宏任务触发 oncomplete
  *
- * photos.test.js 与 trip-store.test.js 共用这一份。
+ * 第三条是关键：真实浏览器里查询返回的是 IDBRequest，必须等事务完成才能
+ * 读 `.result`。若替身直接返回数据，代码里「把返回值当数据用」的错误就测不出来
+ * —— photos.list() 在浏览器里报「(all || []).filter is not a function」正是这个坑。
+ *
+ * photos.test.js、trip-store.test.js、trip-view.test.js 共用这一份。
  */
 
 /**
@@ -23,12 +28,28 @@ function install () {
     return db.stores.get(name)
   }
 
+  /**
+   * 造一个 IDBRequest 形状的对象。
+   * @param {*} result 结果值（在事务完成时被读走）
+   * @returns {object}
+   */
+  function makeRequest (result) {
+    return {
+      result: result,
+      error: null,
+      readyState: "done",
+      onsuccess: null,
+      onerror: null
+    }
+  }
+
   const indexedDB = {
     open: function (name, version) {
       const request = {
         onupgradeneeded: null,
         onsuccess: null,
         onerror: null,
+        onblocked: null,
         result: null,
         error: null,
         readyState: "pending"
@@ -55,16 +76,28 @@ function install () {
               objectStore: function (storeName) {
                 const store = getStore(db, storeName)
                 return {
-                  // 支持 keyPath：没显式给 key 时取 value.key
+                  // 写操作在真实 IndexedDB 里也返回 IDBRequest，结果无意义
                   put: function (value, key) {
                     const k = key !== undefined ? key : (value && value.key)
                     store.set(k, value)
+                    return makeRequest(k)
                   },
-                  get: function (key) { return store.get(key) },
-                  delete: function (key) { store.delete(key) },
-                  getAll: function () { return Array.from(store.values()) },
-                  clear: function () { store.clear() },
-                  count: function () { return store.size }
+                  add: function (value, key) {
+                    const k = key !== undefined ? key : (value && value.key)
+                    store.set(k, value)
+                    return makeRequest(k)
+                  },
+                  get: function (key) { return makeRequest(store.get(key)) },
+                  getAll: function () { return makeRequest(Array.from(store.values())) },
+                  delete: function (key) {
+                    store.delete(key)
+                    return makeRequest(undefined)
+                  },
+                  clear: function () {
+                    store.clear()
+                    return makeRequest(undefined)
+                  },
+                  count: function () { return makeRequest(store.size) }
                 }
               }
             }

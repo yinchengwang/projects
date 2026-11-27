@@ -71,7 +71,8 @@
   function draw () {
     const rootEl = document.getElementById("app-main")
     if (!rootEl) return
-    while (rootEl.children.length) rootEl.children.pop()
+    // children 是 HTMLCollection，没有 pop()；必须用 removeChild 逐个摘。
+    while (rootEl.children.length) rootEl.removeChild(rootEl.children[0])
     if (!currentPage) return
     const node = currentPage.render(currentPage.state)
     if (node) rootEl.appendChild(node)

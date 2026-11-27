@@ -66,10 +66,18 @@ function openDb () {
 
 /**
  * 在一个事务里执行操作。
+ *
+ * `fn` 可以返回 `IDBRequest`（get / getAll / count 这类查询），也可以返回
+ * 普通值（put / delete / clear 这类写操作，真实 IndexedDB 里它们也返回
+ * IDBRequest 但结果无意义）。**必须区分这两种**：真实浏览器里查询返回的是
+ * IDBRequest 而不是数据本身，直接把返回值当数据用会拿到一个没有 filter /
+ * map 的对象 —— 这正是 `photos.list()` 在浏览器里报
+ * 「(all || []).filter is not a function」的原因。
+ *
  * @param {string[]} storeNames
  * @param {string} mode
- * @param {Function} fn 接收 objectStore，返回要等待的结果
- * @returns {Promise<*>}
+ * @param {Function} fn 接收 objectStore，返回 IDBRequest 或普通值
+ * @returns {Promise<*>} 查询类返回 request.result，写入类返回 undefined
  */
 function withStore (storeNames, mode, fn) {
   return openDb().then(function (db) {
@@ -81,21 +89,30 @@ function withStore (storeNames, mode, fn) {
         reject(new Error("IndexedDB 事务创建失败：" + (e && e.message ? e.message : e)))
         return
       }
-      let result
-      let failed = false
-      tx.oncomplete = function () { if (!failed) resolve(result) }
+      let settled = false
+      let request = null
+      let plainValue
+      tx.oncomplete = function () {
+        if (settled) return
+        settled = true
+        resolve(request ? request.result : plainValue)
+      }
       tx.onerror = function () {
-        failed = true
+        if (settled) return
+        settled = true
         reject(new Error("IndexedDB 操作失败"))
       }
       tx.onabort = function () {
-        failed = true
+        if (settled) return
+        settled = true
         reject(new Error("IndexedDB 操作已中止"))
       }
       try {
-        result = fn(tx.objectStore(STORE_NAME))
+        const out = fn(tx.objectStore(STORE_NAME))
+        if (out && typeof out === "object" && "onsuccess" in out) request = out
+        else plainValue = out
       } catch (e) {
-        failed = true
+        settled = true
         reject(new Error("IndexedDB 操作失败：" + (e && e.message ? e.message : e)))
       }
     })
