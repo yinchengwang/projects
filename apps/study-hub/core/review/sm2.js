@@ -1,6 +1,6 @@
 "use strict"
 /**
- * sm2.js —— SM-2 间隔重复（公式逐字搬自 projects/apps/knowledge-hub/core/review.js）
+ * sm2.js —— SM-2 间隔重复（公式与 apps/web/shared/knowledge/review.js 一致）
  *
  * 公式来源：knowledge-hub/core/review.js 的 calculateNextReview(record, quality)。
  * 逐字搬运的部分（G23）：

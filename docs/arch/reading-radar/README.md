@@ -4,9 +4,9 @@
 >
 > 本文描述 Reading Radar 的**纯前端 SPA + Node.js 后端**原型。该原型（原 `engine/apps/web/reading-radar/`）已于 2026-10-22 删除。
 >
-> **当前实现**：`apps/knowledge-hub/` —— 原生微信小程序「Reading Radar · 知识管理中心」，承接了本原型的学习追踪 / 面试 / 摘抄 / 复习能力，并扩展为 5 tab / 17 页、14 个数据域的完整应用。
+> **当前实现**：`apps/web/` 的 `/knowledge/` 模块「Reading Radar · 知识中心」，承接了本原型的学习追踪 / 面试 / 摘抄 / 复习能力，并扩展为 5 tab / 17 页、14 个数据域的完整应用。
 > 本文档保留作为原型设计的**历史参考**；如需找回旧版，可从 git 历史恢复。
-> 详见 [`apps/knowledge-hub/README.md`](../../../wechat-miniprogram/knowledge-hub/README.md)。
+> 详见 [`apps/README.md`](../../../apps/README.md)。
 > 其所在目录 `engine/apps/` 已于 2026-10-23 整目录删除。
 
 > 阅读雷达 — 纯前端 SPA + Node.js 后端的个人学习与面试追踪系统（原型）
@@ -299,4 +299,4 @@ stateDiagram-v2
 
 ---
 
-> **项目位置**：已删除（2026-10-23）；现实现见 `apps/knowledge-hub/`
+> **项目位置**：已删除（2026-10-23）；现实现见 `apps/web/` 的 `/knowledge/` 模块

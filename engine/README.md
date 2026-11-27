@@ -68,15 +68,19 @@ mingw32-make check                       # 全套
 
 不可引用 `learning/` 任何路径（该目录已切出为独立仓 `yinchengwang/learning`）。
 
-## 微信小程序归属
+## 前端归属
 
-微信小程序**不属于** engineering track。
+前端**不属于** engineering track。
 
-所有微信小程序统一存放在仓库根的 `../wechat-miniprogram/`，每个小程序一个子目录：
+原先的 4 个微信小程序已重写为原生 Web 应用，合并进仓库根的 `apps/web/`（Node 服务，5173 端口）：
 
-| 项目 | 目录 | 技术栈 |
+| 模块 | 路径 | 页面数 |
 |---|---|---|
-| 足迹（游玩记录） | `apps/trip-log/` | 原生小程序 |
-| DevBench（程序员工作台） | `apps/programmer-workbench/` | Taro 3.6 + React 18 + TS |
+| 程序员工作台（DevBench） | `apps/web/` 的 `/workbench/` | 18 |
+| 知识中心（Reading Radar） | `apps/web/` 的 `/knowledge/` | 17 |
+| 足迹 | `apps/web/` 的 `/trip/` | 3 |
+| 游戏 | `apps/web/` 的 `/games/` | 5 |
 
-详见 `../wechat-miniprogram/README.md`。
+学习中枢（`apps/study-hub/`，5174）与 Wiki 检索（`apps/wiki-rag/`，8000）是独立进程。
+
+详见 `../apps/README.md`。
