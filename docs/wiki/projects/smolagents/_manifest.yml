@@ -1,0 +1,251 @@
+---
+project: smolagents
+schema_version: 1
+pages:
+  - feature: multi-step-agent
+    feature_group: A-智能体骨架
+    title: 多步智能体主循环
+    page_file: a01-multi-step-agent.md
+    refs:
+      - path: src/smolagents/agents.py
+        symbols: [MultiStepAgent, _step_stream, _handle_max_steps_reached]
+      - path: src/smolagents/agents.py
+        symbols: [run, _run_stream, interrupt]
+  - feature: tool-calling-agent
+    feature_group: A-智能体骨架
+    title: 工具调用式智能体
+    page_file: a02-tool-calling-agent.md
+    refs:
+      - path: src/smolagents/agents.py
+        symbols: [ToolCallingAgent, extract_action]
+  - feature: code-agent
+    feature_group: A-智能体骨架
+    title: 代码式智能体
+    page_file: a03-code-agent.md
+    refs:
+      - path: src/smolagents/agents.py
+        symbols: [CodeAgent]
+      - path: src/smolagents/utils.py
+        symbols: [parse_code_blobs, extract_code_from_text]
+  - feature: managed-agents
+    feature_group: A-智能体骨架
+    title: 被管理的子智能体
+    page_file: a04-managed-agents.md
+    refs:
+      - path: src/smolagents/agents.py
+        symbols: [_setup_managed_agents, _validate_tools_and_managed_agents]
+      - path: src/smolagents/agents.py
+        symbols: [ManagedAgentPromptTemplate]
+  - feature: local-python-executor
+    feature_group: B-代码执行沙箱
+    title: 本地 Python 解释器与能力裁剪
+    page_file: b01-local-python-executor.md
+    refs:
+      - path: src/smolagents/local_python_executor.py
+        symbols: [LocalPythonExecutor, evaluate_attribute, check_import_authorized]
+      - path: src/smolagents/local_python_executor.py
+        symbols: [InterpreterError, ExecutionTimeoutError, timeout]
+  - feature: executor-operations
+    feature_group: B-代码执行沙箱
+    title: 解释器支持的语句与表达式
+    page_file: b02-executor-operations.md
+    refs:
+      - path: src/smolagents/local_python_executor.py
+        symbols: [evaluate_while, evaluate_lambda, evaluate_class_def]
+      - path: src/smolagents/local_python_executor.py
+        symbols: [evaluate_augassign, create_function, evaluate_boolop]
+  - feature: final-answer-mechanism
+    feature_group: B-代码执行沙箱
+    title: 最终答案的表达与提取
+    page_file: b03-final-answer-mechanism.md
+    refs:
+      - path: src/smolagents/local_python_executor.py
+        symbols: [FinalAnswerException, fix_final_answer_code, CodeOutput]
+      - path: src/smolagents/agents.py
+        symbols: [_validate_final_answer, provide_final_answer]
+  - feature: base-tool
+    feature_group: C-工具定义
+    title: 工具基类与两种提示形态
+    page_file: c01-base-tool.md
+    refs:
+      - path: src/smolagents/tools.py
+        symbols: [BaseTool, Tool, to_code_prompt, to_tool_calling_prompt]
+  - feature: tool-source-handling
+    feature_group: C-工具定义
+    title: 工具源码与序列化往返
+    page_file: c02-tool-source-handling.md
+    refs:
+      - path: src/smolagents/tools.py
+        symbols: [to_dict, from_dict, from_code]
+      - path: src/smolagents/tools.py
+        symbols: [from_hub, from_langchain]
+  - feature: tool-collection
+    feature_group: C-工具定义
+    title: 工具集合与流水线工具
+    page_file: c03-tool-collection.md
+    refs:
+      - path: src/smolagents/tools.py
+        symbols: [ToolCollection, PipelineTool]
+  - feature: default-tools
+    feature_group: C-工具定义
+    title: 内置工具清单
+    page_file: c04-default-tools.md
+    refs:
+      - path: src/smolagents/default_tools.py
+        symbols: [PythonInterpreterTool, FinalAnswerTool, WebSearchTool]
+      - path: src/smolagents/default_tools.py
+        symbols: [VisitWebpageTool, UserInputTool, ApiWebSearchTool]
+  - feature: argument-validation
+    feature_group: D-工具启用与校验
+    title: 工具参数校验
+    page_file: d01-argument-validation.md
+    refs:
+      - path: src/smolagents/tools.py
+        symbols: [validate_tool_arguments, validate_arguments]
+  - feature: tool-code-validation
+    feature_group: D-工具启用与校验
+    title: 工具源码的静态校验
+    page_file: d02-tool-code-validation.md
+    refs:
+      - path: src/smolagents/tool_validation.py
+        symbols: [MethodChecker, validate_tool_attributes]
+      - path: src/smolagents/tools.py
+        symbols: [validate_after_init]
+  - feature: json-schema-from-signature
+    feature_group: D-工具启用与校验
+    title: 从签名与文档生成 JSON schema
+    page_file: d03-json-schema-from-signature.md
+    refs:
+      - path: src/smolagents/_function_type_hints_utils.py
+        symbols: [get_json_schema, _parse_type_hint, _parse_google_format_docstring]
+      - path: src/smolagents/_function_type_hints_utils.py
+        symbols: [_convert_type_hints_to_json_schema, _parse_union_type]
+  - feature: tool-visibility
+    feature_group: D-工具启用与校验
+    title: 工具暴露与描述注入
+    page_file: d04-tool-visibility.md
+    refs:
+      - path: src/smolagents/tools.py
+        symbols: [get_tools_definition_code, add_description]
+      - path: src/smolagents/models.py
+        symbols: [get_tool_json_schema]
+  - feature: model-base
+    feature_group: E-模型层
+    title: 模型基类与消息协议
+    page_file: e01-model-base.md
+    refs:
+      - path: src/smolagents/models.py
+        symbols: [Model, ChatMessage, get_tool_call_from_text]
+      - path: src/smolagents/models.py
+        symbols: [remove_content_after_stop_sequences, get_clean_message_list]
+  - feature: api-models
+    feature_group: E-模型层
+    title: API 模型实现
+    page_file: e02-api-models.md
+    refs:
+      - path: src/smolagents/models.py
+        symbols: [_prepare_completion_kwargs, generate]
+  - feature: local-inference
+    feature_group: E-模型层
+    title: 本地推理模型
+    page_file: e03-local-inference.md
+    refs:
+      - path: src/smolagents/models.py
+        symbols: [VLLMModel, MLXModel]
+  - feature: streaming-aggregation
+    feature_group: E-模型层
+    title: 流式增量与聚合
+    page_file: e04-streaming-aggregation.md
+    refs:
+      - path: src/smolagents/models.py
+        symbols: [ChatMessageStreamDelta, agglomerate_stream_deltas, ChatMessageToolCallStreamDelta]
+  - feature: memory-steps
+    feature_group: F-记忆与步骤
+    title: 记忆步骤类型与消息转换
+    page_file: f01-memory-steps.md
+    refs:
+      - path: src/smolagents/memory.py
+        symbols: [MemoryStep, ActionStep, PlanningStep]
+      - path: src/smolagents/memory.py
+        symbols: [TaskStep, SystemPromptStep, FinalAnswerStep]
+  - feature: agent-memory
+    feature_group: F-记忆与步骤
+    title: 记忆容器与重放
+    page_file: f02-agent-memory.md
+    refs:
+      - path: src/smolagents/memory.py
+        symbols: [AgentMemory, get_succinct_steps, replay, return_full_code]
+  - feature: callbacks
+    feature_group: F-记忆与步骤
+    title: 步骤回调注册
+    page_file: f03-callbacks.md
+    refs:
+      - path: src/smolagents/memory.py
+        symbols: [CallbackRegistry, register, callback]
+      - path: src/smolagents/agents.py
+        symbols: [_setup_step_callbacks]
+  - feature: remote-executor-contract
+    feature_group: G-远程执行
+    title: 远程执行器契约
+    page_file: g01-remote-executor-contract.md
+    refs:
+      - path: src/smolagents/remote_executors.py
+        symbols: [RemotePythonExecutor, run_code_raise_errors, _patch_final_answer_with_exception]
+  - feature: executor-backends
+    feature_group: G-远程执行
+    title: 远程执行后端实现
+    page_file: g02-executor-backends.md
+    refs:
+      - path: src/smolagents/remote_executors.py
+        symbols: [E2BExecutor, DockerExecutor, ModalExecutor]
+      - path: src/smolagents/remote_executors.py
+        symbols: [BlaxelExecutor, _wait_for_server]
+  - feature: tool-and-variable-transfer
+    feature_group: G-远程执行
+    title: 工具与变量跨进程传递
+    page_file: g03-tool-and-variable-transfer.md
+    refs:
+      - path: src/smolagents/remote_executors.py
+        symbols: [send_tools, send_variables, install_packages]
+  - feature: mcp-client
+    feature_group: H-MCP 与序列化
+    title: MCP 客户端与工具接入
+    page_file: h01-mcp-client.md
+    refs:
+      - path: src/smolagents/mcp_client.py
+        symbols: [MCPClient]
+  - feature: safe-serialization
+    feature_group: H-MCP 与序列化
+    title: 安全序列化
+    page_file: h02-safe-serialization.md
+    refs:
+      - path: src/smolagents/serialization.py
+        symbols: [SafeSerializer, SerializationError]
+      - path: src/smolagents/utils.py
+        symbols: [make_json_serializable]
+  - feature: error-taxonomy
+    feature_group: I-错误与可观测
+    title: 错误分类与重试
+    page_file: i01-error-taxonomy.md
+    refs:
+      - path: src/smolagents/utils.py
+        symbols: [AgentError, AgentParsingError, AgentMaxStepsError]
+      - path: src/smolagents/utils.py
+        symbols: [RateLimiter, Retrying]
+  - feature: parsing-and-truncation
+    feature_group: I-错误与可观测
+    title: 解析工具与内容截断
+    page_file: i02-parsing-and-truncation.md
+    refs:
+      - path: src/smolagents/utils.py
+        symbols: [parse_json_blob, truncate_content, extract_code_from_text]
+  - feature: monitoring
+    feature_group: I-错误与可观测
+    title: 监控、用量与日志
+    page_file: i03-monitoring.md
+    refs:
+      - path: src/smolagents/monitoring.py
+        symbols: [TokenUsage, Timing, Monitor]
+      - path: src/smolagents/monitoring.py
+        symbols: [AgentLogger, LogLevel]
+---

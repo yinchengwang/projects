@@ -2,9 +2,9 @@
 
 > **本文件是 wiki 收集任务的唯一持续进度入口。** 每次结束一个批次，先更新本文件的「当前状态」「批次台账」与「下一步」，再开始下一批；不要另开一份互不关联的进度记录。
 >
-> **本轮状态（2026-11-28）：** 10/270 项目的机制 wiki 已完成（postgres、redis、sqlite、mysql-server、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai），共 591 篇机制页。**阶段 2A（Agent 图执行与状态机）已收官**：六个框架 langgraph（40 篇）、autogen（39 篇）、crewai（43 篇）、metagpt（31 篇）、openai-agents（35 篇）、pydantic-ai（39 篇）逐个完成，逐篇 lint + refs 全 PASS，但 RAG 未入库，账本状态为 `gates-pass`。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 26 条已有真实 GitHub API 事实，其余尚未核验。项目状态账本 `wiki-project-status.yml` 已建立：270 条在册，4 项 `indexed`、6 项 `gates-pass`、260 项 `planned`。
+> **本轮状态（2026-11-28）：** 11/270 项目的机制 wiki 已完成（postgres、redis、sqlite、mysql-server、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents），共 621 篇机制页。**阶段 2A（Agent 图执行与状态机）已收官**（六个框架共 227 篇）；**阶段 2B（工具使用与软件工程 Agent）已启动**，smolagents 完成 30 篇。全部逐篇 lint + refs 全 PASS，但 RAG 未入库，账本状态为 `gates-pass`。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 26 条已有真实 GitHub API 事实，其余尚未核验。项目状态账本 `wiki-project-status.yml` 已建立：270 条在册，4 项 `indexed`、7 项 `gates-pass`、259 项 `planned`。
 >
-> **下次从这里开始：** 进入阶段 2B 工具使用与软件工程 Agent（browser-use、smolagents、mcp-python-sdk、openhands、goose、open-interpreter）。catalog 270 的 metadata 补全可并行推进。项目收集的终点是 270 项全部通过 wiki 验收。
+> **下次从这里开始：** 继续阶段 2B：mcp-python-sdk、browser-use、openhands。catalog 270 的 metadata 补全可并行推进。项目收集的终点是 270 项全部通过 wiki 验收。
 
 ---
 
@@ -27,11 +27,11 @@
 | 项目 catalog | 152 项 | 270 项；还需评审、核实并补入 118 项 |
 | 数据库与数据基础设施分类 | 96 项 | 150 项；缺 54 项 |
 | AI / Agent / RAG / LLM 分类 | 56 项 | 120 项；缺 64 项 |
-| 已完成机制 wiki 的项目 | 10 个：postgres、redis、sqlite、mysql-server、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai | 10/270 项目收集完成 |
-| 已完成机制页 | 591 篇（368 + langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39） | 逐项目盘点后汇总，不设外推总量 |
-| 已完成概览页 | 10 篇 | 每个完成项目 1 篇 |
+| 已完成机制 wiki 的项目 | 11 个：postgres、redis、sqlite、mysql-server、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents | 11/270 项目收集完成 |
+| 已完成机制页 | 621 篇（368 + langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39 + smolagents 30） | 逐项目盘点后汇总，不设外推总量 |
+| 已完成概览页 | 11 篇 | 每个完成项目 1 篇 |
 | wiki-rag 已入库 | 仅 postgres | 现有八库全部入库，然后每批新项目增量入库 |
-| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 227 页（langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39） | 全类别纳入，按阶段门槛推进 |
+| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 257 页（langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39 + smolagents 30） | 全类别纳入，按阶段门槛推进 |
 
 当前 152 项按 `model` 分类的分布：
 
@@ -188,7 +188,7 @@
 | 波次 | 范式 | 当前 catalog 中的示例（非新增清单） | 波次出口 |
 |---|---|---|---|
 | 2A | Agent 图执行与状态机 | **已完成（收官）langgraph 40、autogen 39、crewai 43、metagpt 31、openai-agents 35、pydantic-ai 39，共 227 篇** | 比较图 / 消息 / 团队 / SOP / 能力系统等机制；页数由逐库盘点决定 |
-| 2B | Agent 工具使用与软件工程 Agent | browser-use、openhands、smolagents、goose、open-interpreter、mcp-python-sdk | 工具调用、沙箱 / 浏览器 / MCP 边界有源码证据；不按产品功能列表切页 |
+| 2B | Agent 工具使用与软件工程 Agent | **已完成 smolagents（30 篇）**；待做 browser-use、openhands、goose、open-interpreter、mcp-python-sdk | 工具调用、沙箱 / 浏览器 / MCP 边界有源码证据；不按产品功能列表切页 |
 | 2C | RAG / 索引编排框架 | langchain、llama-index、haystack-ai、ragflow、dify、graphrag、lightrag、ragas | ingestion、chunk、retrieval、rerank、evaluation 与应用编排分别建机制图 |
 | 2D | 面向应用的 RAG 产品与知识平台 | open-webui、anythingllm、fastgpt、private-gpt、qanything、kotaemon、onyx、r2r、verba 等 | 项目间避免把相同功能词误当不同机制；保留各自真实架构差异 |
 | 2E | 开源模型运行时与本地推理 | llama.cpp、ollama、vllm、sglang、lmdeploy、tgi | 模型加载、内存布局、批处理、缓存、调度、量化与 API 服务链路 |
