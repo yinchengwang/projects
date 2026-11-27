@@ -1,0 +1,488 @@
+/* style.css —— knowledge-hub 模块样式
+ *
+ * 从小程序 WXSS 转来，换算基准「1px = 2rpx（375 设计稿）」。
+ * 主题变量来自 /style.css 的 .theme-light / .theme-dark。
+ *
+ * 进度条（.progress / .progress-fill / .progress-name / .progress-label）
+ * 是 shared/ui.js 的 progressBar() 构件所用样式，本模块自带一份，
+ * 不往全局 style.css 里塞。
+ */
+
+.kh-page {
+  padding-bottom: 24px;
+}
+
+/* ============ 入口卡网格 ============ */
+
+.kh-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kh-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  text-decoration: none;
+  color: inherit;
+}
+
+.kh-entry:hover {
+  border-color: var(--brand);
+}
+
+.kh-entry-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.kh-entry-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ============ 进度条 ============ */
+
+.progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  overflow: visible;
+  margin: 6px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+  transition: width 0.2s ease;
+}
+
+.progress-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
+/* ============ 列表 ============ */
+
+.kh-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--border);
+  width: 100%;
+}
+
+.kh-list-row:last-child {
+  border-bottom: none;
+}
+
+.kh-row-btn {
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kh-row-btn:hover {
+  background: var(--bg-subtle);
+}
+
+.kh-list-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.kh-list-title {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kh-list-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============ 表单 ============ */
+
+.kh-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kh-input,
+.kh-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.kh-textarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+/* ============ 按钮 ============ */
+
+.kh-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.kh-btn {
+  padding: 7px 16px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #ffffff;
+}
+
+.kh-btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+/* ============ 标签页 / 片选 ============ */
+
+.kh-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.kh-tab {
+  padding: 6px 14px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-tab.is-active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #ffffff;
+}
+
+.kh-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.kh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-chip.is-active {
+  background: var(--brand-soft);
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* ============ 答题 ============ */
+
+.kh-quiz-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.kh-quiz-stem {
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 8px 0;
+}
+
+.kh-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kh-option {
+  padding: 10px 12px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-option.is-active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.kh-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.kh-quality-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+/* ============ 学习路径 ============ */
+
+.kh-substeps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.kh-substep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-substep.is-done {
+  border-color: var(--ok);
+  background: rgba(48, 164, 108, 0.08);
+}
+
+.kh-substep-mark {
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.kh-substep.is-done .kh-substep-mark {
+  color: var(--ok);
+}
+
+/* ============ Canvas ============ */
+
+.kh-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 220px;
+}
+
+.kh-canvas-wrap canvas,
+.kh-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ============ Markdown ============ */
+
+.kh-md {
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.kh-md h1,
+.kh-md h2,
+.kh-md h3 {
+  font-size: 15px;
+  margin: 14px 0 6px;
+}
+
+.kh-md pre {
+  background: var(--bg-subtle);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.kh-md code {
+  background: var(--bg-subtle);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.kh-md blockquote {
+  margin: 8px 0;
+  padding: 4px 0 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+/* ============ 五年计划月历 ============ */
+
+.kh-week-head {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.kh-week-cell {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.kh-week-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.kh-day-cell {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.kh-day-cell.is-blank {
+  border: none;
+  background: none;
+  cursor: default;
+}
+
+.kh-day-cell.is-today {
+  border-color: var(--brand);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.kh-day-cell.has-learning {
+  background: var(--brand-soft);
+}
+
+/* ============ 我的 ============ */
+
+.kh-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.kh-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* ============ 杂项 ============ */
+
+.kh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.kh-stack-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
