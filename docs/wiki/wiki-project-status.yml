@@ -919,8 +919,8 @@ projects:
   - slug: openai-agents
     model: ai/agent
     repo: https://github.com/openai/openai-agents-python
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
+    state: gates-pass
+    next_action: 待阶段 0B 扩展后入 wiki-rag
   - slug: openhands
     model: ai/agent
     repo: https://github.com/OpenHands/OpenHands

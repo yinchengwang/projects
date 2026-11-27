@@ -1,0 +1,281 @@
+---
+project: openai-agents
+schema_version: 1
+pages:
+  - feature: agent-definition
+    feature_group: A-Agent 定义与运行入口
+    title: Agent 定义与配置合并
+    page_file: a01-agent-definition.md
+    refs:
+      - path: src/agents/agent.py
+        symbols: [AgentBase, Agent, ToolsToFinalOutputResult]
+      - path: src/agents/agent.py
+        symbols: [StopAtTools, MCPConfig, _initial_model_settings_for_model]
+  - feature: runner-entry
+    feature_group: A-Agent 定义与运行入口
+    title: Runner 唯一入口与默认运行器
+    page_file: a02-runner-entry.md
+    refs:
+      - path: src/agents/run.py
+        symbols: [Runner, AgentRunner, set_default_agent_runner]
+      - path: src/agents/run.py
+        symbols: [get_default_agent_runner]
+  - feature: run-context
+    feature_group: A-Agent 定义与运行入口
+    title: 运行上下文与用途约束
+    page_file: a03-run-context.md
+    refs:
+      - path: src/agents/run_context.py
+        symbols: [RunContextWrapper, AgentHookContext]
+      - path: src/agents/tool_context.py
+        symbols: [ToolContext]
+  - feature: run-state
+    feature_group: A-Agent 定义与运行入口
+    title: 运行状态与序列化恢复
+    page_file: a04-run-state.md
+    refs:
+      - path: src/agents/run_state.py
+        symbols: [RunState, _HeldCurrentResponse, _PendingSessionWrite]
+  - feature: turn-loop
+    feature_group: B-单轮执行循环
+    title: 单轮循环与最大轮次
+    page_file: b01-turn-loop.md
+    refs:
+      - path: src/agents/run_internal/run_loop.py
+        symbols: [_prepare_turn_input_items, _publish_streamed_result_agent]
+      - path: src/agents/run_internal/agent_runner_helpers.py
+        symbols: [snapshot_usage, usage_delta]
+  - feature: run-config
+    feature_group: B-单轮执行循环
+    title: 运行配置与敏感数据开关
+    page_file: b02-run-config.md
+    refs:
+      - path: src/agents/run_config.py
+        symbols: [ModelInputData, CallModelData, ToolExecutionConfig]
+      - path: src/agents/run_config.py
+        symbols: [_default_trace_include_sensitive_data, _coerce_run_config]
+  - feature: model-retry
+    feature_group: B-单轮执行循环
+    title: 模型调用重试与裁决合并
+    page_file: b03-model-retry.md
+    refs:
+      - path: src/agents/retry.py
+        symbols: [ModelRetrySettings, RetryDecision, ModelRetryAdvice]
+      - path: src/agents/retry.py
+        symbols: [_merge_positive_retry_decisions, RetryPolicyContext]
+      - path: src/agents/run_internal/model_retry.py
+        symbols: [_normalize_retry_error, apply_retry_attempt_usage]
+  - feature: lifecycle-hooks
+    feature_group: B-单轮执行循环
+    title: 生命周期钩子
+    page_file: b04-lifecycle-hooks.md
+    refs:
+      - path: src/agents/lifecycle.py
+        symbols: [RunHooksBase, AgentHooksBase]
+  - feature: tool-types
+    feature_group: C-工具系统
+    title: 工具类型体系与输出形态
+    page_file: c01-tool-types.md
+    refs:
+      - path: src/agents/tool.py
+        symbols: [ToolOutputText, ToolOutputImage, FunctionToolCustomDataContext]
+      - path: src/agents/tool.py
+        symbols: [CustomToolCustomDataContext, ComputerToolCustomDataContext, ApplyPatchToolCustomDataContext]
+  - feature: function-tool-schema
+    feature_group: C-工具系统
+    title: 函数工具与 schema 生成
+    page_file: c02-function-tool-schema.md
+    refs:
+      - path: src/agents/function_schema.py
+        symbols: [function_schema, generate_func_documentation, FuncSchema]
+      - path: src/agents/strict_schema.py
+        symbols: [ensure_strict_json_schema, _ensure_strict_root]
+  - feature: tool-invocation
+    feature_group: C-工具系统
+    title: 工具调用与参数解析
+    page_file: c03-tool-invocation.md
+    refs:
+      - path: src/agents/tool.py
+        symbols: [with_function_tool_failure_error_handler, get_function_tool_origin]
+      - path: src/agents/util/_approvals.py
+        symbols: [parse_function_tool_arguments]
+  - feature: tool-approvals
+    feature_group: C-工具系统
+    title: 工具审批与拒绝路径
+    page_file: c04-tool-approvals.md
+    refs:
+      - path: src/agents/run_internal/approvals.py
+        symbols: [filter_tool_approvals, approvals_from_step, append_approval_error_output]
+  - feature: input-output-guardrails
+    feature_group: D-护栏
+    title: 输入输出护栏与触发语义
+    page_file: d01-input-output-guardrails.md
+    refs:
+      - path: src/agents/guardrail.py
+        symbols: [InputGuardrail, OutputGuardrail, GuardrailFunctionOutput]
+  - feature: tool-guardrails
+    feature_group: D-护栏
+    title: 工具级护栏与行为策略
+    page_file: d02-tool-guardrails.md
+    refs:
+      - path: src/agents/tool_guardrails.py
+        symbols: [ToolInputGuardrailData, ToolGuardrailFunctionOutput, RejectContentBehavior, RaiseExceptionBehavior]
+  - feature: guardrail-gating
+    feature_group: D-护栏
+    title: 护栏门控与并行任务取消
+    page_file: d03-guardrail-gating.md
+    refs:
+      - path: src/agents/run_internal/guardrails.py
+        symbols: [_InputGuardrailToolGate, input_guardrail_tool_gate_scope, cancel_tools_on_input_guardrail_rejection]
+  - feature: handoff-model
+    feature_group: E-交接
+    title: 交接对象与输入改造
+    page_file: e01-handoff-model.md
+    refs:
+      - path: src/agents/handoffs/__init__.py
+        symbols: [Handoff, HandoffInputData, handoff]
+  - feature: handoff-execution
+    feature_group: E-交接
+    title: 交接在循环中的识别与切换
+    page_file: e02-handoff-execution.md
+    refs:
+      - path: src/agents/items.py
+        symbols: [HandoffCallItem, HandoffOutputItem]
+      - path: src/agents/run_internal/run_loop.py
+        symbols: [_publish_resumed_stream_turn, _complete_stream_interruption]
+  - feature: handoff-filters
+    feature_group: E-交接
+    title: 交接过滤器与提示扩展
+    page_file: e03-handoff-filters.md
+    refs:
+      - path: src/agents/extensions/handoff_filters.py
+        symbols: [remove_all_tools, _remove_tool_types_from_input]
+      - path: src/agents/extensions/handoff_prompt.py
+        symbols: [RECOMMENDED_PROMPT_PREFIX, prompt_with_handoff_instructions]
+  - feature: agent-as-tool
+    feature_group: E-交接
+    title: 智能体作为工具
+    page_file: e04-agent-as-tool.md
+    refs:
+      - path: src/agents/agent_tool_input.py
+        symbols: [AgentAsToolInput, build_structured_input_schema_info, default_tool_input_builder]
+      - path: src/agents/agent_tool_state.py
+        symbols: [record_agent_tool_run_result, get_agent_tool_state_scope]
+  - feature: model-interface
+    feature_group: F-模型层
+    title: 模型接口与追踪模式
+    page_file: f01-model-interface.md
+    refs:
+      - path: src/agents/models/interface.py
+        symbols: [Model, ModelProvider, ModelTracing]
+  - feature: responses-model
+    feature_group: F-模型层
+    title: Responses 模型实现
+    page_file: f02-responses-model.md
+    refs:
+      - path: src/agents/models/openai_responses.py
+        symbols: [OpenAIResponsesModel, _materialize_responses_tool_params, _usage_from_response]
+      - path: src/agents/models/openai_responses.py
+        symbols: [OpenAIResponsesWebSocketOptions, _construct_response_stream_event_from_payload]
+  - feature: chatcmpl-model
+    feature_group: F-模型层
+    title: Chat Completions 实现与转换
+    page_file: f03-chatcmpl-model.md
+    refs:
+      - path: src/agents/models/openai_chatcompletions.py
+        symbols: [OpenAIChatCompletionsModel]
+      - path: src/agents/models/chatcmpl_converter.py
+        symbols: [Converter, items_to_messages]
+  - feature: multi-provider
+    feature_group: F-模型层
+    title: 多提供方映射
+    page_file: f04-multi-provider.md
+    refs:
+      - path: src/agents/models/multi_provider.py
+        symbols: [MultiProvider, MultiProviderMap]
+  - feature: session-interface
+    feature_group: G-会话与记忆
+    title: 会话接口与压缩感知
+    page_file: g01-session-interface.md
+    refs:
+      - path: src/agents/memory/session.py
+        symbols: [Session, SessionABC, is_openai_responses_compaction_aware_session]
+  - feature: sqlite-session
+    feature_group: G-会话与记忆
+    title: SQLite 会话实现
+    page_file: g02-sqlite-session.md
+    refs:
+      - path: src/agents/memory/sqlite_session.py
+        symbols: [SQLiteSession]
+  - feature: server-conversation-tracking
+    feature_group: G-会话与记忆
+    title: 服务端会话追踪
+    page_file: g03-server-conversation-tracking.md
+    refs:
+      - path: src/agents/run_internal/oai_conversation.py
+        symbols: [OpenAIServerConversationTracker, _fingerprint_for_tracker]
+  - feature: mcp-server-connection
+    feature_group: H-MCP 集成
+    title: MCP 服务器连接与工具快照
+    page_file: h01-mcp-server-connection.md
+    refs:
+      - path: src/agents/mcp/server.py
+        symbols: [RequireApprovalToolList, _snapshot_tools]
+      - path: src/agents/mcp/server.py
+        symbols: [_first_unsafe_transport_error, _transport_error_urls_are_safe]
+  - feature: mcp-manager
+    feature_group: H-MCP 集成
+    title: 多服务器管理与工作进程
+    page_file: h02-mcp-manager.md
+    refs:
+      - path: src/agents/mcp/manager.py
+        symbols: [MCPServerManager, _ServerWorker, _ServerCommand]
+  - feature: tracing-spans
+    feature_group: I-追踪与可观测
+    title: 追踪跨度与错误记录
+    page_file: i01-tracing-spans.md
+    refs:
+      - path: src/agents/tracing/spans.py
+        symbols: [Span, SpanImpl, NoOpSpan, SpanError]
+  - feature: tracing-processors
+    feature_group: I-追踪与可观测
+    title: 追踪处理器与导出
+    page_file: i02-tracing-processors.md
+    refs:
+      - path: src/agents/tracing/processor_interface.py
+        symbols: [TracingProcessor, TracingExporter]
+  - feature: tracing-scope
+    feature_group: I-追踪与可观测
+    title: 追踪作用域与上下文传播
+    page_file: i03-tracing-scope.md
+    refs:
+      - path: src/agents/tracing/scope.py
+        symbols: [Scope]
+      - path: src/agents/tracing/create.py
+        symbols: [agent_span, trace]
+  - feature: streaming-events
+    feature_group: J-流式与结果
+    title: 流式事件与三层事件源
+    page_file: j01-streaming-events.md
+    refs:
+      - path: src/agents/stream_events.py
+        symbols: [RawResponsesStreamEvent, RunItemStreamEvent, AgentUpdatedStreamEvent]
+      - path: src/agents/run_internal/run_loop.py
+        symbols: [_stream_event_item_occurrence_key, _ensure_stream_event_item_occurrence_key]
+  - feature: result-objects
+    feature_group: J-流式与结果
+    title: 结果对象与项模型
+    page_file: j02-result-objects.md
+    refs:
+      - path: src/agents/result.py
+        symbols: [RunResult, RunResultStreaming, RunResultBase]
+      - path: src/agents/items.py
+        symbols: [RunItemBase, MessageOutputItem, ToolCallItem]
+  - feature: structured-output
+    feature_group: J-流式与结果
+    title: 结构化输出与校验
+    page_file: j03-structured-output.md
+    refs:
+      - path: src/agents/agent_output.py
+        symbols: [AgentOutputSchema, AgentOutputSchemaBase]
+---
