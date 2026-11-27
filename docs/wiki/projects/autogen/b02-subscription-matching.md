@@ -46,7 +46,11 @@ refs:
 
 **广播的默认 source 由上下文决定。** `DefaultTopicId()` 在消息处理上下文里会把 source 设成当前智能体的 key，否则设成 `"default"`。配合「source → agent key」的映射，这意味着「在某处理器里发布到默认主题」会把消息送给同 key 的那批智能体，而不是全部。
 
-**前缀订阅只被框架内部使用。** `TypePrefixSubscription` 在仓内唯一的构造点是 `BaseAgent.register` 与 `register_instance`，前缀固定为 `agent_type + ":"`，注释写明「前缀必须包含 `:` 以避免与其他智能体冲突」。它是「直连消息」这条能力的实现方式：把一个带冒号的字符串当主题类型，就能定向到一个具体 agent type。注册时若该订阅已存在会吞掉 `ValueError`。至于「谁按这个约定去拼主题类型」，仓内没有对应的构造代码，说明这是一条留给上层（或跨语言实现）遵循的命名约定，而不是框架自己生成的地址。
+**前缀订阅为直连消息而存在。** `TypePrefixSubscription` 在 Python 仓内唯一的构造点是 `BaseAgent.register` 与 `register_instance`，前缀固定为 `agent_type + ":"`，注释写明「前缀必须包含 `:` 以避免与其他智能体冲突」。注册时若该订阅已存在会吞掉 `ValueError`（`register` 路径不吞，`register_instance` 路径吞）。
+
+为什么是前缀而不是精确的 `TypeSubscription`：仓内设计文档 `docs/design/02 - Topics.md` 定义了四个「众所周知的主题类型」——`{AgentType}:`（通用直连）、`{AgentType}:rpc_request={RequesterAgentType}`、`{AgentType}:rpc_response={RequestId}`、`{AgentType}:error={RequestId}`。这些都共享 `{AgentType}:` 这一段，用精确匹配只能覆盖第一个。`is_match` 走 `startswith` 正是为了把带后缀的变体一并吃掉。
+
+设计文档把「按这个约定拼主题类型」写成对应用的约定（"Agents should subscribe via a prefix subscription to the `{AgentType}:` topic"），Python 侧没有生成这些主题的代码；仓内唯一消费该约定的地方是 grpc worker 运行时，它解析 `topic_id.type` 里第一个冒号之后的后缀来判断是否 RPC 请求。也就是说：订阅一侧用前缀兜住，发送一侧靠约定拼接，两边的契约落在设计文档而不是某个构造函数里。
 
 ## 关键取舍
 
@@ -83,6 +87,7 @@ refs:
 - [AutoGen 源码：_default_subscription.py](https://github.com/microsoft/autogen/blob/main/python/packages/autogen-core/src/autogen_core/_default_subscription.py)
 - [AutoGen 文档：主题与订阅](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/core-concepts/topic-and-subscription.html)
 - [AutoGen 文档：主题与订阅场景](https://microsoft.github.io/autogen/stable/user-guide/core-user-guide/cookbook/topic-subscription-scenarios.html)
+- [AutoGen 设计文档：Topics](https://github.com/microsoft/autogen/blob/main/docs/design/02%20-%20Topics.md)
 
 ## 与主核 / AI 的关系
 

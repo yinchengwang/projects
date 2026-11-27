@@ -43,7 +43,7 @@ refs:
 
 点对点与回复都有等待方（`future`），所以错误与丢弃能传回调用方；广播没有等待方，源码在 `on_publish` 的异常分支上留了注释 `# TODO: we should raise the intervention exception to the publisher.`，承认这是未解的问题——一次被拦截失败的广播就此消失，发布方无从得知。
 
-**多处理器不是链式的。** 这是最容易误读的一处。源码事实：`for handler in self._intervention_handlers:` 循环体里调用的是 `handler.on_send(message, ...)`，而 `message` 是模式匹配时绑定的**原始**变量；循环末尾的 `message_envelope.message = temp_message` 只更新信封，不回写 `message`。因此当配置了两个以上处理器时，每个处理器看到的都是同一条原始消息，最终被投递的是**最后一个处理器**的返回值。要把它们串成管道，得让它们自己共享可变状态，或者只配一个处理器。
+**多处理器不是链式的。** 这是最容易误读的一处。源码事实：`for handler in self._intervention_handlers:` 循环体里调用的是 `handler.on_send(message, ...)`，而 `message` 是模式匹配时绑定的**原始**变量，从头到尾没被重新赋值；`message_envelope.message = temp_message` 虽然在循环内（每轮迭代末尾都会执行），但写的是信封，不改 `message`。因此配置两个以上处理器时，每个处理器看到的都是同一条原始消息，最终被投递的是**最后一个处理器**的返回值。要把它们串成管道，得让它们自己共享可变状态，或者只配一个处理器。三条信封路径的这三段代码结构相同。
 
 **返回 `None` 不是「无改动」。** 文档字符串写的是「返回 None 会告警并按无改动处理」，但实现里只有 `_warn_if_none` 发一条 `RuntimeWarning`，随后照样执行 `message_envelope.message = temp_message`——即把 `None` 当成新消息写回信封，消息类型随之变成 `NoneType`。上游 `RoutedAgent` 查 `type(None)` 必然落空，最后走 `on_unhandled_message`。所以在严格模式下，忘记 `return message` 的表现是「消息被静默地变成 None」。
 

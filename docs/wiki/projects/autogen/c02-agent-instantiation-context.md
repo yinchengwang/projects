@@ -76,7 +76,7 @@ refs:
 | `python/packages/autogen-core/src/autogen_core/_subscription_context.py` | `SubscriptionInstantiationContext` | 订阅构造上下文，只带 `AgentType` |
 | `python/packages/autogen-core/src/autogen_core/_subscription_context.py` | `SubscriptionInstantiationContext.populate_context` | 同样的 set/reset 模式 |
 | `python/packages/autogen-core/src/autogen_core/_subscription_context.py` | `SubscriptionInstantiationContext.agent_type` | 取当前注册类型，缺失抛 `RuntimeError` |
-| `python/packages/autogen-core/src/autogen_core/_single_threaded_agent_runtime.py` | `_invoke_agent_factory` | 唯一写入实例化上下文的运行时实现 |
+| `python/packages/autogen-core/src/autogen_core/_single_threaded_agent_runtime.py` | `_invoke_agent_factory` | 包住工厂执行，按 0/2 参数分派并 await 结果 |
 
 ## 参考
 
