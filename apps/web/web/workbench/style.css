@@ -1,0 +1,213 @@
+/* style.css —— workbench 模块样式
+ *
+ * 从小程序 WXSS 转来，换算基准「1px = 2rpx（375 设计稿）」，
+ * 故所有 rpx 值除以 2 写成 px。
+ */
+
+.wb-page {
+  padding-bottom: 24px;
+}
+
+.wb-todo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.wb-todo:last-child {
+  border-bottom: none;
+}
+
+.wb-todo-bar {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--brand);
+  flex: 0 0 auto;
+}
+
+.wb-todo-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-todo-tag {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.wb-mood-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-mood-dot {
+  padding: 4px 10px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-mood-dot.active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.wb-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+}
+
+.wb-shortcut {
+  display: block;
+  padding: 12px 8px;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  text-align: center;
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.wb-shortcut:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.wb-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--border);
+}
+
+.wb-list-row:last-child {
+  border-bottom: none;
+}
+
+.wb-list-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-list-title {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-list-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.wb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-input,
+.wb-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.wb-textarea {
+  min-height: 140px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.wb-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.wb-btn {
+  padding: 7px 16px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #ffffff;
+}
+
+.wb-btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.wb-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.wb-tool-card {
+  padding: 12px;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.wb-tool-card:hover {
+  border-color: var(--brand);
+}
+
+.wb-md {
+  line-height: 1.7;
+}
+
+.wb-md pre {
+  background: var(--bg-subtle);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.wb-md code {
+  background: var(--bg-subtle);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 13px;
+}

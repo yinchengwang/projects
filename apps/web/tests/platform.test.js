@@ -128,3 +128,47 @@ test("chooseMedia：没有文件选择器时 reject 中文错误", async functio
     }
   )
 })
+
+test("setClipboardData：写入剪贴板并 resolve", async function () {
+  const written = []
+  Object.defineProperty(global, "navigator", { configurable: true, value: {} })
+  global.navigator.clipboard = {
+    writeText: function (t) { written.push(t); return Promise.resolve() }
+  }
+  await platform.setClipboardData({ data: "hello" })
+  assert.strictEqual(written.length, 1)
+  assert.strictEqual(written[0], "hello")
+})
+
+test("getClipboardData：读回剪贴板内容", async function () {
+  Object.defineProperty(global, "navigator", { configurable: true, value: {} })
+  global.navigator.clipboard = {
+    readText: function () { return Promise.resolve("读到的内容") }
+  }
+  const res = await platform.getClipboardData()
+  assert.strictEqual(res.data, "读到的内容")
+})
+
+test("剪贴板不可用时 reject 中文错误", async function () {
+  Object.defineProperty(global, "navigator", { configurable: true, value: { clipboard: undefined } })
+  await assert.rejects(
+    function () { return platform.setClipboardData({ data: "x" }) },
+    function (err) {
+      assert.ok(err && err.message.indexOf("剪贴板") >= 0, "错误信息应为中文，实际：" + (err && err.message))
+      return true
+    }
+  )
+})
+
+test("vibrateShort：没有 navigator.vibrate 时静默不抛异常", function () {
+  Object.defineProperty(global, "navigator", { configurable: true, value: {} })
+  platform.vibrateShort({ type: "light" })
+})
+
+test("vibrateShort：有 navigator.vibrate 时调用它", function () {
+  const calls = []
+  Object.defineProperty(global, "navigator", { configurable: true, value: { vibrate: function (p) { calls.push(p) } } })
+  platform.vibrateShort({ type: "heavy" })
+  assert.strictEqual(calls.length, 1)
+  assert.ok(calls[0] > 0, "震动时长应大于 0")
+})

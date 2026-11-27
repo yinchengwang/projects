@@ -200,11 +200,13 @@
    * ============================================================ */
 
   /**
-   * 压栈跳转。
-   * @param {string} url
+   * 压栈跳转。接受字符串或 `{url}` 对象，兼容旧调用形状。
+   * 小程序风格的 `/pages/...` 会补上 `/workbench` 前缀。
+   * @param {string|{url:string}} target
    */
-  function navigateTo (url) {
-    if (!isBrowser) return
+  function navigateTo (target) {
+    const url = normalizeUrl(target)
+    if (!url || !isBrowser) return
     global.history.pushState({ url: url }, "", url)
   }
 
@@ -216,11 +218,24 @@
 
   /**
    * 切换主标签：替换当前记录，不压栈。
-   * @param {string} url
+   * @param {string|{url:string}} target
    */
-  function switchTab (url) {
-    if (!isBrowser) return
+  function switchTab (target) {
+    const url = normalizeUrl(target)
+    if (!url || !isBrowser) return
     global.history.replaceState({ url: url }, "", url)
+  }
+
+  /**
+   * 统一跳转地址：字符串与 `{url}` 均可，`/pages/` 开头补 `/workbench`。
+   * @param {string|{url:string}} target
+   * @returns {string} 规范化后的路径
+   */
+  function normalizeUrl (target) {
+    const raw = typeof target === "string" ? target : (target && target.url) || ""
+    if (!raw) return ""
+    if (raw.indexOf("/pages/") === 0) return "/workbench" + raw
+    return raw
   }
 
   /* ============================================================
@@ -243,6 +258,71 @@
     if (activeMask) closeMask(activeMask)
   }
 
+  /* ============================================================
+   * 剪贴板
+   * ============================================================ */
+
+  /**
+   * 写剪贴板。
+   * @param {{data: string}} opts
+   * @returns {Promise<void>}
+   */
+  function setClipboardData (opts) {
+    const o = opts || {}
+    const clipboard = (typeof navigator !== "undefined") ? navigator.clipboard : null
+    if (!clipboard || typeof clipboard.writeText !== "function") {
+      return Promise.reject(new Error("当前环境不支持剪贴板写入"))
+    }
+    return clipboard.writeText(String(o.data === undefined ? "" : o.data))
+  }
+
+  /**
+   * 读剪贴板。
+   * @returns {Promise<{data: string}>}
+   */
+  function getClipboardData () {
+    const clipboard = (typeof navigator !== "undefined") ? navigator.clipboard : null
+    if (!clipboard || typeof clipboard.readText !== "function") {
+      return Promise.reject(new Error("当前环境不支持剪贴板读取"))
+    }
+    return clipboard.readText().then(function (text) {
+      return { data: String(text === undefined ? "" : text) }
+    })
+  }
+
+  /* ============================================================
+   * 触感反馈
+   * ============================================================ */
+
+  /** 震动时长（毫秒），与 wx.vibrateShort 的 type 对应 */
+  const VIBRATE_MS = { light: 15, medium: 40, heavy: 80 }
+
+  /**
+   * 短震动。设备不支持时静默返回（不打断交互）。
+   * @param {{type?: 'light'|'medium'|'heavy'}} opts
+   */
+  function vibrateShort (opts) {
+    const o = opts || {}
+    try {
+      if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return false
+      const ms = VIBRATE_MS[o.type] || VIBRATE_MS.light
+      return navigator.vibrate(ms)
+    } catch (e) {
+      return false
+    }
+  }
+
+  /**
+   * 长震动。设备不支持时静默返回（不打断交互）。
+   */
+  function vibrateLong () {
+    try {
+      if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return false
+      return navigator.vibrate(400)
+    } catch (e) {
+      return false
+    }
+  }
   /* ============================================================
    * 图片
    * ============================================================ */
@@ -332,6 +412,10 @@
     switchTab: switchTab,
     showLoading: showLoading,
     hideLoading: hideLoading,
+    setClipboardData: setClipboardData,
+    getClipboardData: getClipboardData,
+    vibrateShort: vibrateShort,
+    vibrateLong: vibrateLong,
     chooseMedia: chooseMedia,
     previewImage: previewImage,
     stopPullDownRefresh: stopPullDownRefresh,
