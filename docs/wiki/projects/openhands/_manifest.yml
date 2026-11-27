@@ -1,0 +1,210 @@
+---
+project: openhands
+schema_version: 1
+pages:
+  - feature: backend-model
+    feature_group: A-后端注册表与选择
+    title: 后端类型模型
+    page_file: a01-backend-model.md
+    refs:
+      - path: src/api/backend-registry/types.ts
+        symbols: [BackendKind, BackendAuthMode, Backend, BackendSelection]
+      - path: src/api/backend-registry/types.ts
+        symbols: [ResolvedActiveBackend]
+  - feature: active-backend
+    feature_group: A-后端注册表与选择
+    title: 当前后端的选定与回退
+    page_file: a02-active-backend.md
+    refs:
+      - path: src/api/backend-registry/active-store.ts
+        symbols: [getActiveBackend, getEffectiveLocalBackend, getRegisteredBackends, getSnapshot]
+      - path: src/api/backend-registry/active-store.ts
+        symbols: [computeSnapshot, pickFallbackBackend, readInitialSelection]
+  - feature: default-backend
+    feature_group: A-后端注册表与选择
+    title: 默认后端与锁定后端
+    page_file: a03-default-backend.md
+    refs:
+      - path: src/api/backend-registry/default-backend.ts
+        symbols: [SEEDED_DEFAULT_BACKEND_ID, makeDefaultLocalBackend]
+      - path: src/api/backend-registry/default-backend.ts
+        symbols: [LOCKED_CLOUD_BACKEND_ID, makeLockedCloudBackend]
+  - feature: backend-health
+    feature_group: B-后端健康与存储
+    title: 后端健康状态跟踪
+    page_file: b01-backend-health.md
+    refs:
+      - path: src/api/backend-registry/health-store.ts
+        symbols: [getHealthSnapshot, getBackendHealthEntry, subscribeBackendHealth]
+      - path: src/api/backend-registry/health-store.ts
+        symbols: [recordBackendFailure, recordBackendSuccess, dropBackendHealth]
+  - feature: backend-storage
+    feature_group: B-后端健康与存储
+    title: 后端清单的本地持久化
+    page_file: b02-backend-storage.md
+    refs:
+      - path: src/api/backend-registry/storage.ts
+        symbols: [BACKENDS_STORAGE_KEY, readStoredBackends, writeStoredBackends]
+      - path: src/api/backend-registry/storage.ts
+        symbols: [isValidBackend, isLoopbackUrl, parseBackendSelection]
+  - feature: acp-auth-probe
+    feature_group: C-ACP 智能体接入
+    title: ACP 智能体认证探测
+    page_file: c01-acp-auth-probe.md
+    refs:
+      - path: src/api/acp-service/acp-service.api.ts
+        symbols: [AcpAuthStatus, AcpAuthProbe, PROBE_TIMEOUT_SECONDS]
+      - path: src/api/acp-service/acp-service.api.ts
+        symbols: [classifyClaude, classifyCodex, ACP_AUTH_PROBES, AcpService]
+  - feature: agent-profiles
+    feature_group: C-ACP 智能体接入
+    title: 智能体档案与当前档案
+    page_file: c02-agent-profiles.md
+    refs:
+      - path: src/hooks/use-active-agent-profile.ts
+        symbols: [useActiveAgentProfile, useActiveAgentKind]
+      - path: src/api/conversation-service/agent-server-conversation-service.api.ts
+        symbols: [normalizeAcpModels, normalizeAcpEfforts]
+  - feature: conversation-service
+    feature_group: D-会话与事件
+    title: 会话服务与响应归一化
+    page_file: d01-conversation-service.md
+    refs:
+      - path: src/api/conversation-service/agent-server-conversation-service.api.ts
+        symbols: [normalizeWorkspace, normalizeRuntimeInfo, normalizeAgent]
+      - path: src/api/conversation-service/agent-server-conversation-service.api.ts
+        symbols: [normalizeTokenUsage, requirePathInsideDirectory]
+  - feature: conversation-types
+    feature_group: D-会话与事件
+    title: 会话类型与启动任务
+    page_file: d02-conversation-types.md
+    refs:
+      - path: src/api/conversation-service/agent-server-conversation-service.types.ts
+        symbols: [SandboxStatus, AppConversationStartTaskStatus, AppConversationStartRequest]
+      - path: src/api/conversation-service/agent-server-conversation-service.types.ts
+        symbols: [MessageContent, TokenUsage, MetricsSnapshot]
+  - feature: event-service
+    feature_group: D-会话与事件
+    title: 事件检索与确认响应
+    page_file: d03-event-service.md
+    refs:
+      - path: src/api/event-service/event-service.api.ts
+        symbols: [EventService]
+      - path: src/api/event-service/event-service.types.ts
+        symbols: [EventSortOrder, EventSearchOptions, ConfirmationResponseRequest]
+  - feature: mcp-service
+    feature_group: E-MCP 集成
+    title: MCP 服务器配置与测试
+    page_file: e01-mcp-service.md
+    refs:
+      - path: src/api/mcp-service/mcp-service.api.ts
+        symbols: [McpService, toMcpServer, buildMcpTestRequest]
+      - path: src/api/mcp-service/mcp-service.api.ts
+        symbols: [redactMcpTestResponse, finalizeMcpTestResponse, getMcpTestTimeout]
+  - feature: mcp-redacted-credentials
+    feature_group: E-MCP 集成
+    title: MCP 凭据脱敏与服务端替换
+    page_file: e02-mcp-redacted-credentials.md
+    refs:
+      - path: src/api/mcp-service/mcp-redacted-credentials.ts
+        symbols: [hasRedactedValue, substituteRedactedLeaves, substituteRedactedMcpCredentials]
+      - path: src/api/mcp-service/mcp-redacted-credentials.ts
+        symbols: [fetchEncryptedStoredServer, findStoredServer]
+  - feature: mcp-health
+    feature_group: E-MCP 集成
+    title: MCP 健康探测与重授权
+    page_file: e03-mcp-health.md
+    refs:
+      - path: src/api/mcp-health/probe-mcp-server-health.ts
+        symbols: [probeMcpServerHealth, interpretMcpTestResponse, reauthorizeMcpServerHealth]
+      - path: src/api/mcp-health/mcp-health-store.ts
+        symbols: [getMcpHealthSnapshot, beginMcpHealthCheck, resolveMcpHealthCheck]
+  - feature: automation-service
+    feature_group: F-自动化与工具目录
+    title: 自动化与自定义 Webhook
+    page_file: f01-automation-service.md
+    refs:
+      - path: src/api/automation-service/automation-service.api.ts
+        symbols: [AUTOMATION_BASE_PATH, AUTOMATION_KV_PATH, automationCreateEndpointForTarget]
+      - path: src/api/automation-service/automation-service.api.ts
+        symbols: [CustomWebhook, AutomationHealthResponse, normalizeAutomationSdkVersion]
+  - feature: tool-catalog
+    feature_group: F-自动化与工具目录
+    title: 工具目录校验
+    page_file: f02-tool-catalog.md
+    refs:
+      - path: src/api/tool-catalog-service/tool-catalog-service.api.ts
+        symbols: [isToolCatalogEntry, assertValidCatalog, ToolCatalogService]
+  - feature: git-service
+    feature_group: G-工作区与 Git
+    title: Git 服务与云/本地分支
+    page_file: g01-git-service.md
+    refs:
+      - path: src/api/git-service/git-service.api.ts
+        symbols: [safeProvider, isCloudActive, normalizeRepositoryPage]
+      - path: src/api/git-service/git-service.api.ts
+        symbols: [EMPTY_REPOSITORY_PAGE, searchAgentServerRepositories, GitService]
+  - feature: agent-server-git
+    feature_group: G-工作区与 Git
+    title: 运行时侧 Git 与路径换算
+    page_file: g02-agent-server-git.md
+    refs:
+      - path: src/api/git-service/agent-server-git-service.api.ts
+        symbols: [AgentServerGitChange, AgentServerGitCommit, toAbsoluteRuntimePath]
+      - path: src/api/git-service/agent-server-git-service.api.ts
+        symbols: [getFromRuntime, isEndpointMissingError, AgentServerGitService]
+  - feature: bash-service
+    feature_group: G-工作区与 Git
+    title: Bash 输出分页与检索
+    page_file: g03-bash-service.md
+    refs:
+      - path: src/api/bash-service/bash-service.api.ts
+        symbols: [isBashOutput, MAX_OUTPUT_PAGES, BashService]
+      - path: src/api/bash-service/bash-service.api.ts
+        symbols: [SearchOptions]
+  - feature: mars-tunnel
+    feature_group: H-云隧道与桥接
+    title: Mars 隧道与沙箱代理
+    page_file: h01-mars-tunnel.md
+    refs:
+      - path: src/api/mars/mars-tunnel-backend.ts
+        symbols: [MarsConnection, MarsAuthState, MarsSession]
+      - path: src/api/mars/mars-tunnel-backend.ts
+        symbols: [MarsTransport, isValidAgentName, MarsAgentConfig]
+  - feature: mars-web-bridge
+    feature_group: H-云隧道与桥接
+    title: Mars Web 桥接与 RPC
+    page_file: h02-mars-web-bridge.md
+    refs:
+      - path: src/api/mars/mars-web-bridge.ts
+        symbols: [RpcEnvelope, rpc, createMarsWebBridge]
+      - path: src/api/mars/mars-web-bridge.ts
+        symbols: [MarsWebBridgeError, getMarsBridgeHeaders, probeMarsWebBridge]
+  - feature: conversation-store
+    feature_group: I-状态容器与路由
+    title: 会话状态容器
+    page_file: i01-conversation-store.md
+    refs:
+      - path: src/stores/conversation-store.ts
+        symbols: [ConversationTab, ConversationState, ConversationActions]
+      - path: src/stores/conversation-store.ts
+        symbols: [getConversationIdFromLocation, getInitialConversationMode]
+  - feature: url-selection
+    feature_group: I-状态容器与路由
+    title: 后端选择的 URL 参数
+    page_file: i02-url-selection.md
+    refs:
+      - path: src/api/backend-registry/url-selection.ts
+        symbols: [BACKEND_QUERY_PARAM, withBackendSelectionParams, readBackendSelectionFromUrl]
+      - path: src/api/backend-registry/url-selection.ts
+        symbols: [ORG_QUERY_PARAM, readLockedCloudOrgFromUrl]
+  - feature: agent-state
+    feature_group: I-状态容器与路由
+    title: 智能体执行状态的派生
+    page_file: i03-agent-state.md
+    refs:
+      - path: src/hooks/use-agent-state.ts
+        symbols: [mapExecutionStatusToAgentState, useAgentState]
+      - path: src/stores/agent-store.ts
+        symbols: [AgentStateData, useAgentStore]
+---
