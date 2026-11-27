@@ -143,6 +143,41 @@
   }
 
   /**
+   * 进度条。
+   * @param {number} percent 0..100，超出自动夹紧
+   * @param {{color?: string, height?: number, label?: string}} [opts]
+   * @returns {object} DOM 节点
+   */
+  function progressBar (percent, opts) {
+    const o = opts || {}
+    let p = Number(percent)
+    if (!isFinite(p)) p = 0
+    if (p < 0) p = 0
+    if (p > 100) p = 100
+    const rounded = Math.round(p)
+
+    const fill = el("div", { class: "progress-fill" })
+    // 浏览器里 style 是只读的 CSSStyleDeclaration，直接整体赋值无效；
+    // 测试桩里没有 style 属性，先兜一个空对象，两种环境都成立。
+    fill.style = fill.style || {}
+    fill.style.width = rounded + "%"
+    if (o.color) fill.style.background = o.color
+    if (o.height) fill.style.height = o.height + "px"
+
+    const label = el("span", { class: "progress-label", text: rounded + "%" })
+    const children = [fill]
+    if (o.label) children.unshift(el("span", { class: "progress-name", text: o.label }))
+
+    const root = el("div", { class: "progress" }, children)
+    if (o.height) {
+      root.style = root.style || {}
+      root.style.height = o.height + "px"
+    }
+    root.appendChild(label)
+    return root
+  }
+
+  /**
    * 把页面挂到容器上。
    *
    * 页面形状：{ data, render(state) → 节点, on? }
@@ -185,6 +220,7 @@
     pill: pill,
     kv: kv,
     empty: empty,
+    progressBar: progressBar,
     mount: mount,
     rerender: rerender
   }
