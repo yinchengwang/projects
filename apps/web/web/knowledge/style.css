@@ -4,8 +4,8 @@
  * 主题变量来自 /style.css 的 .theme-light / .theme-dark。
  *
  * 进度条（.progress / .progress-fill / .progress-name / .progress-label）
- * 是 shared/ui.js 的 progressBar() 构件所用样式，本模块自带一份，
- * 不往全局 style.css 里塞。
+ * 是 shared/ui.js 的 progressBar() 构件所用样式，已提到全局 /style.css，
+ * 本模块不再重复定义。
  */
 
 .kh-page {
@@ -46,40 +46,6 @@
 .kh-entry-desc {
   font-size: 12px;
   color: var(--text-muted);
-}
-
-/* ============ 进度条 ============ */
-
-.progress {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--bg-subtle);
-  overflow: visible;
-  margin: 6px 0;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--brand);
-  transition: width 0.2s ease;
-}
-
-.progress-name {
-  font-size: 12px;
-  color: var(--text-secondary);
-  flex: 0 0 auto;
-}
-
-.progress-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
 }
 
 /* ============ 列表 ============ */

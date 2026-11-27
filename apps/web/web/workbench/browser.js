@@ -23,6 +23,11 @@
     "/shared/core/store.js",
     "/shared/core/theme.js",
     "/shared/core/with-theme.js",
+    // ui.js / platform.js 虽然在外壳里也用 <script> 引过（挂到 window 上），
+    // 但页面模块走的是 CommonJS require —— 那是 cjs-loader 的缓存，
+    // 与 <script> 的全局挂载是两回事，必须在这里也预载一次。
+    "/shared/ui.js",
+    "/shared/platform.js",
     "/shared/workbench/keys.js",
     "/shared/workbench/seed.js",
     "/shared/workbench/codetools.js",

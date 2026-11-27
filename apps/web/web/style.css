@@ -216,6 +216,41 @@ body {
   border-style: dashed;
 }
 
+/* 进度条：shared/ui.js 的 progressBar() 构件样式。
+ * 放在全局是因为构件本身在共用层，任何模块都可能用它；
+ * 各模块自己的 style.css 里重复定义只会造成漂移。 */
+.progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  overflow: visible;
+  margin: 6px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+  transition: width 0.2s ease;
+}
+
+.progress-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
 /* 卡内嵌套块 */
 .block {
   background: var(--bg-subtle);
