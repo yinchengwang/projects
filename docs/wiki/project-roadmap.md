@@ -131,12 +131,15 @@
 **工作包**：
 
 - 候选审阅矩阵（118 个候选已冻结，metadata 部分核验）：[`project-catalog-review.md`](project-catalog-review.md)
+- 项目状态账本（270 条，机器可读）：[`wiki-project-status.yml`](wiki-project-status.yml)
 - 阶段 0A 实施步骤：[`2026-11-26-wiki-catalog-270-implementation.md`](../superpowers/plans/2026-11-26-wiki-catalog-270-implementation.md)
+
+**账本口径（2026-11-27）**：270 条全部在册；`indexed` 4 项（postgres、redis、sqlite、mysql-server，别名分别回指 catalog 的 `sqlite3`、`mysql`）；其余 266 项为 `planned`。账本由 `scripts/wiki/gen_project_status.py` 从 catalog 与候选矩阵生成，`scripts/wiki/wiki_project_status.py` 校验 schema／阶段／slug／repo／别名冲突。
 
 - 0A.1 盘点旧候选目录和 reference 镜像清单，按 canonical repo 去重，检查 catalog 当前条目是否仍活跃、官方 repo 是否变更、分类和 tier 是否合理。**状态：已完成一轮；`apache-hawq` 归档→carbondata，`zincsearch` 归档→bleve，`hsqldb` 错误指向→derby，`consul`→memcached，`dbt`/`go-ycsb` 移出，`aphrodite-engine` 归并为 `sonar`，NeMo 重定向至语音仓→lmcache。**
 - 0A.2 补 118 个候选：数据库类别缺口 54、AI 缺口 64。**状态：候选集合已冻结为 DB 54 / Agent 24 / RAG 20 / LLM 20，共 118，表内唯一且与现有 catalog 零冲突。**
 - 0A.3 取数使用 `fill_stars.py`，优先 `GITHUB_TOKEN` 或 `GH_TOKEN`；若无 token，分批使用未认证速率额度并依赖缓存，不能因 60 次/小时限制而放弃台账更新。每次最多 55 条的脚本限制保持。
-- 0A.4 写入机器可读项目状态/alias 登记：区分 `catalog`、`planned`、`source-ready`、`inventoried`、`pages-written`、`gates-pass`、`indexed`、`blocked`；至少能按项目名查询当前阶段与下一动作。不得把项目状态塞进冻结的 wiki 页面 frontmatter；优先用独立项目注册表和本文件链接。
+- 0A.4 写入机器可读项目状态/alias 登记：区分 `catalog`、`planned`、`source-ready`、`inventoried`、`pages-written`、`gates-pass`、`indexed`、`blocked`、`excluded-with-reason`；至少能按项目名查询当前阶段与下一动作。不得把项目状态塞进冻结的 wiki 页面 frontmatter；优先用独立项目注册表和本文件链接。**状态：已完成 `wiki-project-status.yml`（270 条）+ 解析／校验／生成三个脚本与两组测试。**
 - 0A.5 处理 catalog 名与 canonical slug 的别名；明确每项只对应一个 canonical repo 和唯一 wiki slug；补充 CI 与 ingest 使用的 slug 映射。
 - 0A.6 通过 catalog schema、重复 repo/name 检查、分类配额检查、stars/date 来源复核后锁定 270 版本；未通过核实的候选放在待审队列，不以虚假值补满 270。
 
