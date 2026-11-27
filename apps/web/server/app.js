@@ -7,6 +7,7 @@
  */
 
 const http = require("node:http")
+const fs = require("node:fs")
 const path = require("node:path")
 
 const { createRouter, HttpError } = require("./router.js")
@@ -15,6 +16,9 @@ const { createStaticHandler } = require("./static.js")
 const ROOT = path.resolve(__dirname, "..")
 const WEB_DIR = path.join(ROOT, "web")
 const SHARED_DIR = path.join(ROOT, "shared")
+
+/** workbench 模块的 HTML 外壳：所有 /workbench/pages/* 都返回它 */
+const WORKBENCH_SHELL = path.join(WEB_DIR, "workbench", "shell.html")
 
 /**
  * 默认的静态挂载点。
@@ -53,12 +57,47 @@ function createApp (opts) {
   routes.forEach(function (route) {
     router.add(route.method, route.pattern, route.handler)
   })
+
+  // workbench 模块：所有 /workbench/pages/* 都返回同一个 HTML 壳，
+  // 实际页面由前端的 cjs-loader 按路径加载。
+  // 带扩展名的请求（页面模块 .js、样式 .css）必须落到静态托管，否则壳会盖住源码。
+  const shellPath = options.workbenchShell || WORKBENCH_SHELL
+  const workbenchShell = function (req, res) {
+    const reqPath = (req.url || "/").split("?")[0]
+    if (/\.[a-z0-9]+$/i.test(reqPath)) {
+      if (serveStatic(req, res)) return
+      sendJson(res, 404, { error: "未找到该路径：" + reqPath })
+      return
+    }
+    let html
+    try {
+      html = fs.readFileSync(shellPath, "utf8")
+    } catch (e) {
+      sendJson(res, 500, { error: "workbench 页面壳读取失败" })
+      return
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": Buffer.byteLength(html)
+    })
+    res.end(html)
+  }
   // 静态挂载点：调用方显式传 mounts 就用它，否则用默认（含 /shared/）。
   // 显式传 webRoot 但没传 mounts 时，仍带上 /shared/ —— 那是共用层，永远需要。
   const mounts = options.mounts !== undefined
     ? options.mounts
     : [{ prefix: "/shared/", dir: options.sharedDir || SHARED_DIR }]
   const serveStatic = createStaticHandler({ webRoot: webRoot, mounts: mounts })
+
+  router.add("GET", "/workbench/pages/:a/:b/:c", workbenchShell)
+  router.add("GET", "/workbench/pages/:a/:b", workbenchShell)
+  // 模块入口：/workbench/ 与 /workbench 直接进今日页，避免落到目录列表。
+  const workbenchEntry = function (req, res) {
+    res.writeHead(302, { Location: "/workbench/pages/dashboard/index" })
+    res.end()
+  }
+  router.add("GET", "/workbench", workbenchEntry)
+  router.add("GET", "/workbench/", workbenchEntry)
 
   const server = http.createServer(function (req, res) {
     const rawUrl = req.url || "/"

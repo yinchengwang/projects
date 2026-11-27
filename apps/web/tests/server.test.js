@@ -141,3 +141,27 @@ test("外壳：首页含六个模块导航入口", async function (t) {
     assert.ok(r.body.indexOf(href) >= 0, "外壳应含入口：" + href)
   })
 })
+
+test("workbench 模块的页面能被访问", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const r = await request(app.server, "/workbench/pages/dashboard/index")
+  assert.strictEqual(r.status, 200)
+  assert.ok(r.body.indexOf("app-main") >= 0, "应返回 workbench 外壳")
+  assert.ok(r.body.indexOf("/workbench/browser.js") >= 0, "外壳应引入模块入口脚本")
+})
+
+test("workbench 模块的静态资源可访问", async function (t) {
+  const app = createApp({ webRoot: path.resolve(__dirname, "..", "web"), routes: [] })
+  await app.listen(0)
+  t.after(function () { return app.close() })
+
+  const loader = await request(app.server, "/cjs-loader.js")
+  assert.strictEqual(loader.status, 200)
+
+  const page = await request(app.server, "/workbench/pages/dashboard/index.js")
+  assert.strictEqual(page.status, 200)
+  assert.ok(page.body.indexOf("module.exports") >= 0, "页面模块应是 CommonJS 源码")
+})

@@ -31,24 +31,24 @@
 
   /** 模块内路径 → 页面文件路径 */
   const PAGES = {
-    "/pages/dashboard/index": "/web/workbench/pages/dashboard/index.js",
-    "/pages/profile/index": "/web/workbench/pages/profile/index.js",
-    "/pages/tech/index": "/web/workbench/pages/tech/index.js",
-    "/pages/tech/notes/index": "/web/workbench/pages/tech/notes/index.js",
-    "/pages/tech/notes/detail": "/web/workbench/pages/tech/notes/detail.js",
-    "/pages/tech/snippets/index": "/web/workbench/pages/tech/snippets/index.js",
-    "/pages/tech/snippets/detail": "/web/workbench/pages/tech/snippets/detail.js",
-    "/pages/tech/interview/index": "/web/workbench/pages/tech/interview/index.js",
-    "/pages/tech/interview/detail": "/web/workbench/pages/tech/interview/detail.js",
-    "/pages/tech/resources/index": "/web/workbench/pages/tech/resources/index.js",
-    "/pages/life/index": "/web/workbench/pages/life/index.js",
-    "/pages/life/reading/index": "/web/workbench/pages/life/reading/index.js",
-    "/pages/life/fitness/index": "/web/workbench/pages/life/fitness/index.js",
-    "/pages/life/mood/index": "/web/workbench/pages/life/mood/index.js",
-    "/pages/life/schedule/index": "/web/workbench/pages/life/schedule/index.js",
-    "/pages/projects/index": "/web/workbench/pages/projects/index.js",
-    "/pages/insights/index": "/web/workbench/pages/insights/index.js",
-    "/pages/tools/index": "/web/workbench/pages/tools/index.js"
+    "/pages/dashboard/index": "/workbench/pages/dashboard/index.js",
+    "/pages/profile/index": "/workbench/pages/profile/index.js",
+    "/pages/tech/index": "/workbench/pages/tech/index.js",
+    "/pages/tech/notes/index": "/workbench/pages/tech/notes/index.js",
+    "/pages/tech/notes/detail": "/workbench/pages/tech/notes/detail.js",
+    "/pages/tech/snippets/index": "/workbench/pages/tech/snippets/index.js",
+    "/pages/tech/snippets/detail": "/workbench/pages/tech/snippets/detail.js",
+    "/pages/tech/interview/index": "/workbench/pages/tech/interview/index.js",
+    "/pages/tech/interview/detail": "/workbench/pages/tech/interview/detail.js",
+    "/pages/tech/resources/index": "/workbench/pages/tech/resources/index.js",
+    "/pages/life/index": "/workbench/pages/life/index.js",
+    "/pages/life/reading/index": "/workbench/pages/life/reading/index.js",
+    "/pages/life/fitness/index": "/workbench/pages/life/fitness/index.js",
+    "/pages/life/mood/index": "/workbench/pages/life/mood/index.js",
+    "/pages/life/schedule/index": "/workbench/pages/life/schedule/index.js",
+    "/pages/projects/index": "/workbench/pages/projects/index.js",
+    "/pages/insights/index": "/workbench/pages/insights/index.js",
+    "/pages/tools/index": "/workbench/pages/tools/index.js"
   }
 
   let currentPage = null
@@ -62,6 +62,28 @@
     if (node) rootEl.appendChild(node)
   }
 
+  /**
+   * 给页面补一个 setData：合并到 state 后重画。
+   * 页面模块沿用小程序写法（setData + render），这里用一处适配层衔接，
+   * 页面与测试里的代码都不需要改。
+   * @param {object} page 页面实例
+   */
+  function attach (page) {
+    page.setData = function (patch) {
+      Object.keys(patch || {}).forEach(function (key) {
+        const parts = key.split(".")
+        let node = page.state
+        for (let i = 0; i < parts.length - 1; i++) {
+          const part = parts[i]
+          if (typeof node[part] !== "object" || node[part] === null) node[part] = {}
+          node = node[part]
+        }
+        node[parts[parts.length - 1]] = patch[key]
+      })
+      draw()
+    }
+  }
+
   function loadPage (pathname) {
     const key = pathname.replace(/^\/workbench/, "") || "/pages/dashboard/index"
     const file = PAGES[key]
@@ -73,6 +95,7 @@
     return CJS.load(file).then(function (page) {
       currentPage = page
       currentPage.state = Object.assign({}, currentPage.data)
+      attach(currentPage)
       if (typeof currentPage.onMount === "function") currentPage.onMount(document.getElementById("app-main"))
       draw()
       return currentPage
