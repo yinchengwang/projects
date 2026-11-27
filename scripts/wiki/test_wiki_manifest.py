@@ -262,6 +262,21 @@ class TestRoundTripIdentity(unittest.TestCase):
         self.assertEqual(text, "---\n---\n")
         self.assertEqual(_load(text), {})
 
+    def test_yaml11_boolean_like_symbol_stays_string(self):
+        """`on` / `yes` / `true` 在 YAML 1.1 里是布尔关键字。
+
+        本仓解析器只认整数，所以这些值必须原样保留成字符串；否则 crewai 的
+        `symbols: [CrewAIEventsBus, on, set_runtime_state]` 会把方法名 `on`
+        读成 True，refs 校验随即找不到符号。外部工具（PyYAML）会解析成布尔，
+        因此这里锁住本仓行为，避免有人为了「兼容 YAML」把标量推断扩到布尔。
+        """
+        for keyword in ("on", "off", "yes", "no", "true", "false", "null", "~"):
+            manifest = {"project": "x", "pages": [{"feature": "f",
+                                                   "refs": [{"symbols": [keyword]}]}]}
+            again = _load(dump_manifest(manifest))
+            self.assertEqual(again["pages"][0]["refs"][0]["symbols"], [keyword])
+            self.assertIsInstance(again["pages"][0]["refs"][0]["symbols"][0], str)
+
 
 if __name__ == "__main__":
     unittest.main()

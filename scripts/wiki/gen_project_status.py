@@ -34,6 +34,7 @@ INDEXED_PROJECTS = {
 GATES_PASS_PROJECTS = {
     "langgraph": "待阶段 0B 扩展后入 wiki-rag",
     "autogen": "待阶段 0B 扩展后入 wiki-rag",
+    "crewai": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

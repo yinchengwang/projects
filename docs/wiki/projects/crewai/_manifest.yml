@@ -1,0 +1,343 @@
+---
+project: crewai
+schema_version: 1
+pages:
+  - feature: crew-object
+    feature_group: A-团队与流程
+    title: Crew 对象与配置校验
+    page_file: a01-crew-object.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [Crew, check_config, validate_tasks]
+  - feature: sequential-and-hierarchical
+    feature_group: A-团队与流程
+    title: 顺序与层级两种流程
+    page_file: a02-sequential-and-hierarchical.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [kickoff, _arun_sequential_process, _arun_hierarchical_process]
+      - path: lib/crewai/src/crewai/process.py
+        symbols: [Process]
+  - feature: task-loop-and-async
+    feature_group: A-团队与流程
+    title: 任务循环与异步任务排队
+    page_file: a03-task-loop-and-async.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [_execute_tasks, _process_async_tasks, _get_context]
+  - feature: replay-and-checkpoint
+    feature_group: A-团队与流程
+    title: 重放与执行起点定位
+    page_file: a04-replay-and-checkpoint.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [replay, _get_execution_start_index, _validate_replay_tasks]
+  - feature: task-execution-core
+    feature_group: B-任务与条件执行
+    title: Task 执行内核
+    page_file: b01-task-execution-core.md
+    refs:
+      - path: lib/crewai/src/crewai/task.py
+        symbols: [Task, execute_sync, _execute_core]
+      - path: lib/crewai/src/crewai/task.py
+        symbols: [execute_async, aexecute_sync, _aexecute_core]
+  - feature: conditional-task
+    feature_group: B-任务与条件执行
+    title: 条件任务的跳过判定
+    page_file: b02-conditional-task.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [_handle_conditional_task, _ahandle_conditional_task]
+  - feature: guardrail
+    feature_group: B-任务与条件执行
+    title: 护栏与重试上限
+    page_file: b03-guardrail.md
+    refs:
+      - path: lib/crewai/src/crewai/task.py
+        symbols: [validate_guardrail_function, ensure_guardrail_is_callable]
+  - feature: task-output-handling
+    feature_group: B-任务与条件执行
+    title: 任务输出与结构化导出
+    page_file: b04-task-output-handling.md
+    refs:
+      - path: lib/crewai/src/crewai/task.py
+        symbols: [check_output, _validate_output_file_path, artifact_kind_validation]
+      - path: lib/crewai/src/crewai/utilities/task_output_storage_handler.py
+        symbols: [TaskOutputStorageHandler, update, load]
+  - feature: agent-definition
+    feature_group: C-智能体执行循环
+    title: Agent 定义与属性校验
+    page_file: c01-agent-definition.md
+    refs:
+      - path: lib/crewai/src/crewai/agent/core.py
+        symbols: [Agent, validate_from_repository, post_init_setup]
+      - path: lib/crewai/src/crewai/agents/agent_builder/base_agent.py
+        symbols: [BaseAgent, execute_task]
+  - feature: delegation
+    feature_group: C-智能体执行循环
+    title: 委派工具注入与层级协作
+    page_file: c02-delegation.md
+    refs:
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [_prepare_tools, _add_delegation_tools, _update_manager_tools]
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [_create_manager_agent, _get_agent_to_use]
+  - feature: agent-executor-loop
+    feature_group: C-智能体执行循环
+    title: 执行器循环与工具调用
+    page_file: c03-agent-executor-loop.md
+    refs:
+      - path: lib/crewai/src/crewai/utilities/agent_utils.py
+        symbols: [get_llm_response, process_llm_response, handle_agent_action_core]
+      - path: lib/crewai/src/crewai/utilities/agent_utils.py
+        symbols: [has_reached_max_iterations, handle_max_iterations_exceeded, format_answer]
+  - feature: context-summarization
+    feature_group: C-智能体执行循环
+    title: 上下文压缩与空回复重试
+    page_file: c04-context-summarization.md
+    refs:
+      - path: lib/crewai/src/crewai/utilities/agent_utils.py
+        symbols: [_summarize_context_before_llm_call, _proactively_summarize_context, _call_llm_retrying_empty]
+  - feature: flow-decorators
+    feature_group: D-Flow 编排
+    title: Flow 装饰器与触发条件
+    page_file: d01-flow-decorators.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/dsl/_start.py
+        symbols: [start]
+      - path: lib/crewai/src/crewai/flow/dsl/_listen.py
+        symbols: [listen]
+      - path: lib/crewai/src/crewai/flow/dsl/_router.py
+        symbols: [router]
+      - path: lib/crewai/src/crewai/flow/dsl/_conditions.py
+        symbols: [or_, and_]
+  - feature: flow-definition
+    feature_group: D-Flow 编排
+    title: Flow 定义契约与状态模型
+    page_file: d02-flow-definition.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/flow_definition.py
+        symbols: [FlowDefinition, FlowMethodDefinition, FlowConfigDefinition]
+  - feature: flow-runtime
+    feature_group: D-Flow 编排
+    title: Flow 运行时与监听器执行
+    page_file: d03-flow-runtime.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/runtime/__init__.py
+        symbols: [Flow, kickoff, _execute_listeners]
+      - path: lib/crewai/src/crewai/flow/runtime/__init__.py
+        symbols: [_execute_start_method, _find_triggered_methods, _execute_racing_listeners]
+  - feature: flow-expressions
+    feature_group: D-Flow 编排
+    title: Flow 表达式与模板渲染
+    page_file: d04-flow-expressions.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/expressions.py
+        symbols: [Expression, evaluate, render_template]
+  - feature: human-feedback
+    feature_group: D-Flow 编排
+    title: 人工反馈与恢复
+    page_file: d05-human-feedback.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/human_feedback.py
+        symbols: [human_feedback, HumanFeedbackConfig, HumanFeedbackResult]
+      - path: lib/crewai/src/crewai/flow/runtime/__init__.py
+        symbols: [resume, pending_feedback, from_pending]
+  - feature: flow-persistence
+    feature_group: D-Flow 编排
+    title: Flow 持久化与恢复
+    page_file: d06-flow-persistence.md
+    refs:
+      - path: lib/crewai/src/crewai/flow/persistence/decorators.py
+        symbols: [persist]
+      - path: lib/crewai/src/crewai/flow/persistence/sqlite.py
+        symbols: [SQLiteFlowPersistence]
+      - path: lib/crewai/src/crewai/flow/runtime/__init__.py
+        symbols: [install_persistence, reload, _persist_method_completion]
+  - feature: unified-memory
+    feature_group: E-记忆系统
+    title: 统一记忆入口
+    page_file: e01-unified-memory.md
+    refs:
+      - path: lib/crewai/src/crewai/memory/unified_memory.py
+        symbols: [Memory, remember, recall]
+      - path: lib/crewai/src/crewai/memory/unified_memory.py
+        symbols: [_submit_save, drain_writes, forget]
+  - feature: memory-scope
+    feature_group: E-记忆系统
+    title: 记忆作用域与隔离
+    page_file: e02-memory-scope.md
+    refs:
+      - path: lib/crewai/src/crewai/memory/memory_scope.py
+        symbols: [MemoryScope, MemorySlice, subscope]
+  - feature: recall-flow
+    feature_group: E-记忆系统
+    title: 记忆检索流程
+    page_file: e03-recall-flow.md
+    refs:
+      - path: lib/crewai/src/crewai/memory/recall_flow.py
+        symbols: [RecallFlow, analyze_query_step, recursive_exploration]
+  - feature: encoding-flow
+    feature_group: E-记忆系统
+    title: 记忆编码与去重
+    page_file: e04-encoding-flow.md
+    refs:
+      - path: lib/crewai/src/crewai/memory/encoding_flow.py
+        symbols: [EncodingFlow, batch_embed, intra_batch_dedup]
+  - feature: knowledge
+    feature_group: E-记忆系统
+    title: 知识库与来源管理
+    page_file: e05-knowledge.md
+    refs:
+      - path: lib/crewai/src/crewai/knowledge/knowledge.py
+        symbols: [Knowledge, query, add_sources]
+  - feature: rag-factory
+    feature_group: E-记忆系统
+    title: RAG 存储工厂
+    page_file: e06-rag-factory.md
+    refs:
+      - path: lib/crewai/src/crewai/rag/factory.py
+        symbols: [create_client, register_rag_client_factory]
+  - feature: base-tool
+    feature_group: F-工具系统
+    title: 工具基类与参数模式
+    page_file: f01-base-tool.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/base_tool.py
+        symbols: [BaseTool, Tool, _serialize_args_schema]
+  - feature: structured-tool
+    feature_group: F-工具系统
+    title: 结构化工具与描述生成
+    page_file: f02-structured-tool.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/structured_tool.py
+        symbols: [CrewStructuredTool, from_function, format_description_for_llm]
+  - feature: tool-usage
+    feature_group: F-工具系统
+    title: 工具调用编排与重复检测
+    page_file: f03-tool-usage.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/tool_usage.py
+        symbols: [ToolUsage, use, _check_tool_repeated_usage]
+  - feature: tool-calling-schema
+    feature_group: F-工具系统
+    title: 函数调用式工具协议
+    page_file: f04-tool-calling-schema.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/tool_calling.py
+        symbols: [ToolCalling, InstructorToolCalling]
+      - path: lib/crewai/src/crewai/utilities/agent_utils.py
+        symbols: [convert_tools_to_openai_schema, render_text_description_and_args]
+  - feature: tool-failure
+    feature_group: F-工具系统
+    title: 工具失败分类与策略
+    page_file: f05-tool-failure.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/tool_failure.py
+        symbols: [ToolFailureReason, detect_tool_failure, resolve_tool_failure_policy]
+  - feature: mcp-client
+    feature_group: G-MCP 与技能
+    title: MCP 客户端与连接生命周期
+    page_file: g01-mcp-client.md
+    refs:
+      - path: lib/crewai/src/crewai/mcp/client.py
+        symbols: [MCPClient, connect, call_tool]
+  - feature: mcp-native-tool
+    feature_group: G-MCP 与技能
+    title: MCP 工具的原生暴露
+    page_file: g02-mcp-native-tool.md
+    refs:
+      - path: lib/crewai/src/crewai/tools/mcp_native_tool.py
+        symbols: [MCPNativeTool]
+      - path: lib/crewai/src/crewai/crew.py
+        symbols: [_add_mcp_tools, _inject_mcp_tools]
+  - feature: skills
+    feature_group: G-MCP 与技能
+    title: 技能发现与加载
+    page_file: g03-skills.md
+    refs:
+      - path: lib/crewai/src/crewai/skills/loader.py
+        symbols: [discover_skills, load_skill, format_skill_context]
+      - path: lib/crewai/src/crewai/skills/tool.py
+        symbols: [LoadSkillTool, create_skill_loader_tool]
+  - feature: event-bus
+    feature_group: H-事件与钩子
+    title: 事件总线与处理器登记
+    page_file: h01-event-bus.md
+    refs:
+      - path: lib/crewai/src/crewai/events/event_bus.py
+        symbols: [CrewAIEventsBus, on, set_runtime_state]
+  - feature: event-context
+    feature_group: H-事件与钩子
+    title: 事件上下文与因果链
+    page_file: h02-event-context.md
+    refs:
+      - path: lib/crewai/src/crewai/events/event_context.py
+        symbols: [push_event_scope, get_triggering_event_id, triggered_by_scope]
+  - feature: hooks
+    feature_group: H-事件与钩子
+    title: 工具与模型调用钩子
+    page_file: h03-hooks.md
+    refs:
+      - path: lib/crewai/src/crewai/hooks/dispatch.py
+        symbols: [register, InterceptionPoint, HookAborted]
+      - path: lib/crewai/src/crewai/hooks/tool_hooks.py
+        symbols: [run_before_tool_call_hooks, register_before_tool_call_hook]
+      - path: lib/crewai/src/crewai/hooks/llm_hooks.py
+        symbols: [before_llm_call_reducer, LLMCallHookContext, register_before_llm_call_hook]
+  - feature: base-llm
+    feature_group: I-模型层与安全
+    title: 模型基类与调用包装
+    page_file: i01-base-llm.md
+    refs:
+      - path: lib/crewai/src/crewai/llms/base_llm.py
+        symbols: [BaseLLM, _wrap_call_method, to_config_dict]
+  - feature: llm-factory
+    feature_group: I-模型层与安全
+    title: 模型创建与环境回退
+    page_file: i02-llm-factory.md
+    refs:
+      - path: lib/crewai/src/crewai/utilities/llm_utils.py
+        symbols: [create_llm, create_llm_like, _llm_via_environment_or_fallback]
+  - feature: security-fingerprint
+    feature_group: I-模型层与安全
+    title: 安全配置与指纹
+    page_file: i03-security-fingerprint.md
+    refs:
+      - path: lib/crewai/src/crewai/security/security_config.py
+        symbols: [SecurityConfig]
+      - path: lib/crewai/src/crewai/security/fingerprint.py
+        symbols: [Fingerprint]
+  - feature: runtime-state
+    feature_group: J-运行时状态与检查点
+    title: 运行时状态与序列化
+    page_file: j01-runtime-state.md
+    refs:
+      - path: lib/crewai/src/crewai/state/runtime.py
+        symbols: [RuntimeState, _serialize, _deserialize]
+  - feature: checkpoint-triggers
+    feature_group: J-运行时状态与检查点
+    title: 检查点配置与触发
+    page_file: j02-checkpoint-triggers.md
+    refs:
+      - path: lib/crewai/src/crewai/state/checkpoint_config.py
+        symbols: [CheckpointConfig, trigger_events, apply_checkpoint]
+      - path: lib/crewai/src/crewai/state/checkpoint_listener.py
+        symbols: [_on_any_event, _should_checkpoint, _do_checkpoint]
+  - feature: event-record-graph
+    feature_group: J-运行时状态与检查点
+    title: 事件记录图与因果重建
+    page_file: j03-event-record-graph.md
+    refs:
+      - path: lib/crewai/src/crewai/state/event_record.py
+        symbols: [EventRecord, EventNode, descendants]
+  - feature: execution-context
+    feature_group: J-运行时状态与检查点
+    title: 执行上下文与追踪标识
+    page_file: j04-execution-context.md
+    refs:
+      - path: lib/crewai/src/crewai/context.py
+        symbols: [ExecutionContext, capture_execution_context, apply_execution_context]
+      - path: lib/crewai/src/crewai/execution.py
+        symbols: [ExecutionTrace, begin_execution, end_execution]
+---
