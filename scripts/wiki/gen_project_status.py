@@ -40,6 +40,7 @@ GATES_PASS_PROJECTS = {
     "pydantic-ai": "待阶段 0B 扩展后入 wiki-rag",
     "smolagents": "待阶段 0B 扩展后入 wiki-rag",
     "mcp-python-sdk": "待阶段 0B 扩展后入 wiki-rag",
+    "browser-use": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

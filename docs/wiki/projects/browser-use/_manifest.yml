@@ -1,0 +1,239 @@
+---
+project: browser-use
+schema_version: 1
+pages:
+  - feature: agent-entry
+    feature_group: A-Agent 入口与生命周期
+    title: Agent 门面与运行生命周期
+    page_file: a01-agent-entry.md
+    refs:
+      - path: browser_use/agent/service.py
+        symbols: [Agent, run, build]
+      - path: browser_use/agent/service.py
+        symbols: [close, __aenter__, _shutdown]
+  - feature: agent-construction
+    feature_group: A-Agent 入口与生命周期
+    title: Agent 构造期校验与参数透传
+    page_file: a02-agent-construction.md
+    refs:
+      - path: browser_use/agent/service.py
+        symbols: [_check_task_arg, _check_task, __getattr__]
+      - path: browser_use/agent/service.py
+        symbols: [workspace, add_new_task]
+  - feature: agent-loop
+    feature_group: B-循环、投递与预算
+    title: 循环骨架与 python 工具
+    page_file: b01-agent-loop.md
+    refs:
+      - path: browser_use/agent/loop.py
+        symbols: [BrowserLoop, python, run]
+      - path: browser_use/agent/loop.py
+        symbols: [build_agent, model_kind]
+  - feature: delivery-guards
+    feature_group: B-循环、投递与预算
+    title: 投递校验与预算
+    page_file: b02-delivery-guards.md
+    refs:
+      - path: browser_use/agent/loop.py
+        symbols: [Session, check_delivery, check_split_delivery]
+      - path: browser_use/agent/loop.py
+        symbols: [delivery_tool_choice, _sendable, last_text]
+  - feature: compaction-and-images
+    feature_group: B-循环、投递与预算
+    title: 上下文压缩与图像裁剪
+    page_file: b03-compaction-and-images.md
+    refs:
+      - path: browser_use/agent/loop.py
+        symbols: [Compaction, LazyCompaction, _compact]
+      - path: browser_use/agent/loop.py
+        symbols: [_prune_images, _estimate, redact_part]
+  - feature: streaming-recording
+    feature_group: B-循环、投递与预算
+    title: 响应流改造与请求录制
+    page_file: b04-streaming-recording.md
+    refs:
+      - path: browser_use/agent/loop.py
+        symbols: [StreamResponses, StreamedRequest, _cut_after_response]
+      - path: browser_use/agent/loop.py
+        symbols: [Recording, thinking_and_text, usage_and_cost]
+  - feature: repl-session
+    feature_group: C-REPL 会话与工作进程
+    title: REPL 父进程侧与会话管理
+    page_file: c01-repl-session.md
+    refs:
+      - path: browser_use/repl/session.py
+        symbols: [Repl, start, call]
+      - path: browser_use/repl/session.py
+        symbols: [check_mode, check_loop, _kill_tree, kill_workers]
+  - feature: repl-worker
+    feature_group: C-REPL 会话与工作进程
+    title: 工作进程与单元执行
+    page_file: c02-repl-worker.md
+    refs:
+      - path: browser_use/repl/worker.py
+        symbols: [CellStats, _compile, _run]
+      - path: browser_use/repl/worker.py
+        symbols: [_watch_parent, _redact_between_cells, main]
+  - feature: secret-redaction
+    feature_group: C-REPL 会话与工作进程
+    title: 敏感值脱敏与环境白名单
+    page_file: c03-secret-redaction.md
+    refs:
+      - path: browser_use/repl/session.py
+        symbols: [scoped_secrets, redact, redact_forms, secret_forms]
+      - path: browser_use/repl/session.py
+        symbols: [worker_env, clip]
+  - feature: tools-and-actions
+    feature_group: D-动作、观测与结果
+    title: 工具注册与动作结果
+    page_file: d01-tools-and-actions.md
+    refs:
+      - path: browser_use/tools.py
+        symbols: [Tools, action, ActionResult]
+      - path: browser_use/tools.py
+        symbols: [_check_done_results, _without_0x_defaults]
+  - feature: accessibility-tree
+    feature_group: D-动作、观测与结果
+    title: 无障碍树观测与交互原语
+    page_file: d02-accessibility-tree.md
+    refs:
+      - path: browser_use/ax.py
+        symbols: [AxHelpers, state, settle, drain_events]
+      - path: browser_use/ax.py
+        symbols: [click, type, _describe, _capture]
+  - feature: history-and-result
+    feature_group: D-动作、观测与结果
+    title: 历史列表与结果提取
+    page_file: d03-history-and-result.md
+    refs:
+      - path: browser_use/agent/views.py
+        symbols: [AgentHistoryList, final_result, is_successful]
+      - path: browser_use/agent/views.py
+        symbols: [Usage, load_from_file, structured_output]
+  - feature: browser-backends
+    feature_group: E-浏览器后端
+    title: 浏览器后端选择与连接
+    page_file: e01-browser-backends.md
+    refs:
+      - path: browser_use/browser/browser.py
+        symbols: [Browser, start, reattach]
+      - path: browser_use/browser/browser.py
+        symbols: [is_cloud_cdp, _kind, _ensure_daemon]
+  - feature: local-browser
+    feature_group: E-浏览器后端
+    title: 本地浏览器进程与用户目录
+    page_file: e02-local-browser.md
+    refs:
+      - path: browser_use/browser/local.py
+        symbols: [LocalBrowser, start, find_binary]
+      - path: browser_use/browser/local.py
+        symbols: [resolve_profile, require_debug_port, chrome_args]
+  - feature: downloads-and-proxy
+    feature_group: E-浏览器后端
+    title: 下载与代理轮换
+    page_file: e03-downloads-and-proxy.md
+    refs:
+      - path: browser_use/browser/browser.py
+        symbols: [list_downloads, download_files, download_records]
+      - path: browser_use/browser/browser.py
+        symbols: [rotate_proxy, can_rotate_proxy]
+  - feature: domain-rules
+    feature_group: F-域名与网络策略
+    title: 域名规则与守卫进程
+    page_file: f01-domain-rules.md
+    refs:
+      - path: browser_use/domains.py
+        symbols: [DomainRules, of, blocked]
+      - path: browser_use/domains.py
+        symbols: [Guard, pattern_matches, sweep]
+  - feature: network-and-url
+    feature_group: F-域名与网络策略
+    title: URL 规范化与 TLS 请求
+    page_file: f02-network-and-url.md
+    refs:
+      - path: browser_use/domains.py
+        symbols: [Url, canonical_host, parse_url]
+      - path: browser_use/utils.py
+        symbols: [tls_context, install_tls_opener, urlopen_keyed]
+  - feature: web-search
+    feature_group: F-域名与网络策略
+    title: 网页搜索接入
+    page_file: f03-web-search.md
+    refs:
+      - path: browser_use/search.py
+        symbols: [WebSearch, SearchError]
+      - path: browser_use/agent/service.py
+        symbols: [_web_search]
+  - feature: cli-mcp-server
+    feature_group: G-MCP 与 CLI 接入
+    title: CLI MCP 服务端
+    page_file: g01-cli-mcp-server.md
+    refs:
+      - path: browser_use/mcp/cli_mcp.py
+        symbols: [CLIMCPServer, run, _tool_definitions]
+      - path: browser_use/mcp/cli_mcp.py
+        symbols: [_Cell, _Login, _run_cell]
+  - feature: skills-packaging
+    feature_group: G-MCP 与 CLI 接入
+    title: 技能包与安装
+    page_file: g02-skills-packaging.md
+    refs:
+      - path: browser_use/skills/browser_use.py
+        symbols: [as_browser_use_skill, skill_text]
+      - path: browser_use/skills/install.py
+        symbols: [handle, _build_parser]
+  - feature: product-telemetry
+    feature_group: H-遥测与录制
+    title: 产品遥测与离线投递
+    page_file: h01-product-telemetry.md
+    refs:
+      - path: browser_use/telemetry/service.py
+        symbols: [ProductTelemetry, capture, telemetry]
+      - path: browser_use/telemetry/service.py
+        symbols: [get_or_create_device_id, _send_outbox]
+  - feature: run-recorder
+    feature_group: H-遥测与录制
+    title: 运行录制与步骤归集
+    page_file: h02-run-recorder.md
+    refs:
+      - path: browser_use/telemetry/recorder.py
+        symbols: [RunRecorder, build, Step]
+      - path: browser_use/telemetry/recorder.py
+        symbols: [_timings, _hosts, _struggle]
+  - feature: feedback-and-auth-events
+    feature_group: H-遥测与录制
+    title: 反馈与登录事件
+    page_file: h03-feedback-and-auth-events.md
+    refs:
+      - path: browser_use/telemetry/feedback.py
+        symbols: [feedback, RunReports]
+      - path: browser_use/telemetry/auth_events.py
+        symbols: [capture, keyed_success]
+  - feature: legacy-compat
+    feature_group: I-兼容、配置与自评
+    title: 0.x 兼容层与已移除名称
+    page_file: i01-legacy-compat.md
+    refs:
+      - path: browser_use/legacy.py
+        symbols: [removed_name, removed_module, install]
+      - path: browser_use/tools.py
+        symbols: [RemovedField, _no_removed_fields]
+  - feature: config-and-errors
+    feature_group: I-兼容、配置与自评
+    title: 配置加载与错误类型
+    page_file: i02-config-and-errors.md
+    refs:
+      - path: browser_use/config.py
+        symbols: [Config, load_env]
+      - path: browser_use/exceptions.py
+        symbols: [MissingAPIKeyError, BrowserConfigError, BrowserConnectionLost]
+  - feature: self-judging
+    feature_group: I-兼容、配置与自评
+    title: 运行后自评
+    page_file: i03-self-judging.md
+    refs:
+      - path: browser_use/agent/judge.py
+        symbols: [Judgement, judge_run, judge_cached]
+      - path: browser_use/agent/service.py
+        symbols: [_judge]
+---
