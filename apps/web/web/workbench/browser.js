@@ -53,6 +53,18 @@
 
   let currentPage = null
 
+  /**
+   * 读取查询串，形状与小程序 onLoad(query) 的参数一致。
+   * @returns {object}
+   */
+  function readQuery () {
+    const out = {}
+    const search = window.location.search || ""
+    if (!search) return out
+    new URLSearchParams(search).forEach(function (value, key) { out[key] = value })
+    return out
+  }
+
   function draw () {
     const rootEl = document.getElementById("app-main")
     if (!rootEl) return
@@ -96,7 +108,10 @@
       currentPage = page
       currentPage.state = Object.assign({}, currentPage.data)
       attach(currentPage)
+      // 生命周期与小程序一致：onMount 建好容器与主题，onLoad 初始化，onShow 每次进入刷新。
       if (typeof currentPage.onMount === "function") currentPage.onMount(document.getElementById("app-main"))
+      if (typeof currentPage.onLoad === "function") currentPage.onLoad(readQuery())
+      if (typeof currentPage.onShow === "function") currentPage.onShow()
       draw()
       return currentPage
     })
