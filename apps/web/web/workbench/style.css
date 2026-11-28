@@ -8,7 +8,118 @@
   padding-bottom: 24px;
 }
 
-.wb-todo {
+/* 页面级修饰类：目前只作语义标记，样式由下面的具体块承担 */
+.wb-dashboard,
+.wb-tech,
+.wb-life,
+.wb-projects,
+.wb-tools {
+  display: block;
+}
+
+/* ============ 通用按钮与文字 ============ */
+
+.btn {
+  padding: 7px 16px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #ffffff;
+}
+
+.btn.primary:hover {
+  filter: brightness(1.08);
+  color: #ffffff;
+}
+
+.btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn.danger:hover {
+  filter: brightness(1.08);
+  color: #ffffff;
+}
+
+.wb-muted {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.wb-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 10px 0 6px;
+}
+
+/* ============ 模块入口卡（技术 / 生活） ============ */
+
+.wb-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.wb-module-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  color: inherit;
+  text-decoration: none;
+}
+
+.wb-module-card:hover {
+  border-color: var(--brand);
+}
+
+.wb-module-card strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wb-module-symbol {
+  display: inline-block;
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ============ 今日页 ============ */
+
+.wb-todos {
+  display: flex;
+  flex-direction: column;
+}
+
+.wb-todo-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -16,19 +127,11 @@
   border-bottom: 0.5px solid var(--border);
 }
 
-.wb-todo:last-child {
+.wb-todo-row:last-child {
   border-bottom: none;
 }
 
-.wb-todo-bar {
-  width: 3px;
-  height: 14px;
-  border-radius: 2px;
-  background: var(--brand);
-  flex: 0 0 auto;
-}
-
-.wb-todo-title {
+.wb-todo-row span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -36,33 +139,47 @@
   white-space: nowrap;
 }
 
-.wb-todo-tag {
-  font-size: 11px;
+.wb-todo-row .is-done {
+  text-decoration: line-through;
   color: var(--text-muted);
+}
+
+.wb-check {
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
-}
-
-.wb-mood-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.wb-mood-dot {
-  padding: 4px 10px;
-  border: 0.5px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--bg-subtle);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
   font-family: inherit;
 }
 
-.wb-mood-dot.active {
+.wb-check.is-done {
+  background: var(--brand);
   border-color: var(--brand);
-  background: var(--brand-soft);
-  color: var(--brand);
+  color: #ffffff;
+}
+
+.wb-priority {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-moods {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .wb-shortcuts {
@@ -81,12 +198,33 @@
   text-align: center;
   text-decoration: none;
   font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .wb-shortcut:hover {
   border-color: var(--brand);
   color: var(--brand);
 }
+
+.wb-mood {
+  padding: 5px 12px;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-mood.is-active {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* ============ 通用列表行 ============ */
 
 .wb-list-row {
   display: flex;
@@ -118,10 +256,51 @@
   margin-top: 2px;
 }
 
+.wb-chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* ============ 记录卡（笔记 / 片段 / 题库 / 资源 / 读书 / 健身 / 心情 / 日程） ============ */
+
+.wb-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-record-card {
+  padding: 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.wb-record-preview {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* ============ 表单 ============ */
+
 .wb-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.wb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .wb-input,
@@ -142,6 +321,61 @@
   line-height: 1.6;
 }
 
+.wb-input:focus,
+.wb-textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+.wb-search-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.wb-search-row .wb-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-quick-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.wb-quick-add .wb-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wb-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 0.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  gap: 2px;
+}
+
+.wb-toggle button {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-toggle button.is-active {
+  background: var(--brand);
+  color: #ffffff;
+}
+
 .wb-actions {
   display: flex;
   gap: 8px;
@@ -149,28 +383,46 @@
   margin-top: 12px;
 }
 
-.wb-btn {
-  padding: 7px 16px;
+/* ============ 选项与主题色 ============ */
+
+.wb-choice-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-choice {
+  padding: 5px 12px;
   border: 0.5px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--bg-subtle);
-  color: var(--text-primary);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: 12px;
   cursor: pointer;
   font-family: inherit;
 }
 
-.wb-btn.primary {
-  background: var(--brand);
+.wb-choice.is-active {
   border-color: var(--brand);
-  color: #ffffff;
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
-.wb-btn.danger {
-  background: var(--danger);
-  border-color: var(--danger);
-  color: #ffffff;
+.wb-color {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0;
+  padding: 0;
 }
+
+.wb-color.is-active {
+  border-color: var(--text-primary);
+}
+
+/* ============ 工具箱 ============ */
 
 .wb-tool-grid {
   display: grid;
@@ -179,17 +431,225 @@
 }
 
 .wb-tool-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   padding: 12px;
   border: 0.5px solid var(--border);
   border-radius: 8px;
   background: var(--bg-subtle);
+  color: var(--text-primary);
   cursor: pointer;
+  text-align: left;
   font-size: 13px;
+  font-family: inherit;
 }
 
 .wb-tool-card:hover {
   border-color: var(--brand);
 }
+
+.wb-output {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ============ 项目集 ============ */
+
+.wb-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.wb-project-card {
+  padding: 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.wb-project-open {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.wb-project-open:hover {
+  color: var(--brand);
+}
+
+/* ============ 闪念 ============ */
+
+.wb-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-insight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wb-insight-card {
+  padding: 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+}
+
+.wb-insight-content {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wb-insight-content:hover {
+  color: var(--brand);
+}
+
+/* ============ 我的 ============ */
+
+.wb-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 0 8px;
+}
+
+.wb-profile-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 24px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wb-profile-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ============ 捕获面板 ============ */
+
+.wb-capture-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.wb-capture-panel {
+  width: 100%;
+  max-width: 520px;
+  padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
+  background: var(--bg-surface);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.wb-capture-handle {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 12px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.wb-capture-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.wb-capture-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.wb-capture-option:hover {
+  border-color: var(--brand);
+}
+
+.wb-capture-symbol {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wb-capture-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wb-capture-option-copy strong {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.wb-capture-option-copy small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wb-capture-cancel {
+  width: 100%;
+  margin-top: 16px;
+}
+
+/* ============ Markdown ============ */
 
 .wb-md {
   line-height: 1.7;
