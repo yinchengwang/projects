@@ -39,7 +39,11 @@ function applyTheme (page, settingsKey) {
   page.state.isDark = data.isDark
   page.state.brand = data.brand
   page.state.brandSoft = data.brandSoft
-  theme.applyThemeClass(page.rootElement || (typeof document !== "undefined" ? document.body : null), data)
+  // 主题类必须挂在 body 上。
+  // 之前挂在 rootElement(#app-main) —— 页头在 #app-main 外面，
+  // 暗色主题只染黑了正文区域，页头还是亮的，半深半浅。
+  const root = (typeof document !== "undefined" && document.body) || page.rootElement || null
+  theme.applyThemeClass(root, data)
   return data
 }
 
@@ -54,8 +58,8 @@ function withTheme (options, settingsKey) {
   config.data = Object.assign({
     themeClass: "theme-light",
     isDark: false,
-    brand: "#0284C7",
-    brandSoft: "rgba(2,132,199,0.12)"
+    brand: "#0369A1",
+    brandSoft: "rgba(3,105,161,0.10)"
   }, options.data)
 
   const userOnMount = options.onMount

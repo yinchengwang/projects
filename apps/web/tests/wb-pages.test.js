@@ -327,7 +327,7 @@ test('切换主色后 brand 变化', () => {
   const page = openProfile()
   h.tap(page, 'onSetPrimary', { key: 'violet' })
   assert.strictEqual(stores.settings.get().primaryColor, 'violet')
-  assert.strictEqual(page.data.brand, '#6366F1')
+  assert.strictEqual(page.data.brand, '#4F46E5')
 })
 
 test('深色下主色取深色版色值', () => {

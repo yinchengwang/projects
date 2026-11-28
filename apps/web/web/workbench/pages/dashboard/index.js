@@ -59,7 +59,7 @@ module.exports = withTheme({
     const todoNodes = (state.todoItems || []).map(function (item) {
       const toggle = ui.el('button', { class: 'wb-check' + (item.done ? ' is-done' : ''), 'data-id': item.id, text: item.done ? '✓' : '○' })
       toggle.addEventListener('click', function () { this.onToggleTodo({ currentTarget: { dataset: { id: item.id } } }) }.bind(this))
-      const priority = ui.el('button', { class: 'wb-priority', text: item.priorityLabel || '一般', 'data-id': item.id })
+      const priority = ui.el('button', { class: 'wb-priority', text: item.priorityLabel || '一般', 'data-id': item.id, 'data-priority': item.priorityKey })
       priority.addEventListener('click', function () { this.onCyclePriority({ currentTarget: { dataset: { id: item.id } } }) }.bind(this))
       return ui.el('div', { class: 'wb-todo-row' }, [toggle, ui.el('span', { class: item.done ? 'is-done' : '', text: item.title }), priority])
     }.bind(this))
@@ -115,6 +115,7 @@ module.exports = withTheme({
         done: !!t.done,
         barColor: p.color,
         priorityLabel: p.label,
+        priorityKey: t.priority,
         categoryLabel: t.category ? constants.todoCategory(t.category).label : ''
       }
     })
@@ -193,7 +194,8 @@ module.exports = withTheme({
     return constants.MOOD_LEVELS.map(function (m) {
       return {
         level: m.level,
-        label: m.label,
+        // 带表情：MOOD_LEVELS 里本来就有 emoji，之前谁都没渲染出来
+        label: m.emoji + " " + m.label,
         color: m.color,
         active: m.level === current
       }

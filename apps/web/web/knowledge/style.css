@@ -26,7 +26,7 @@
   flex-direction: column;
   gap: 2px;
   padding: 12px;
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-subtle);
   text-decoration: none;
@@ -55,7 +55,7 @@
   align-items: center;
   gap: 8px;
   padding: 10px 0;
-  border-bottom: 0.5px solid var(--border);
+  border-bottom: 1px solid var(--border);
   width: 100%;
 }
 
@@ -137,7 +137,7 @@
 
 .kh-btn {
   padding: 7px 16px;
-  border: 0.5px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-subtle);
   color: var(--text-primary);
@@ -169,7 +169,7 @@
 
 .kh-tab {
   padding: 6px 14px;
-  border: 0.5px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--bg-surface);
   color: var(--text-secondary);
@@ -196,7 +196,7 @@
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  border: 0.5px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--bg-subtle);
   color: var(--text-secondary);
@@ -234,7 +234,7 @@
 
 .kh-option {
   padding: 10px 12px;
-  border: 0.5px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-subtle);
   color: var(--text-primary);
@@ -278,7 +278,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-surface);
   color: var(--text-primary);
@@ -383,7 +383,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 0.5px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-subtle);
   color: var(--text-secondary);
@@ -451,4 +451,17 @@
   justify-content: center;
   font-size: 11px;
   flex: 0 0 auto;
+}
+
+/* 交互手感 */
+.kh-btn,
+.kh-chip,
+.kh-tab,
+.kh-entry,
+.kh-row-btn,
+.kh-input,
+.kh-textarea {
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
 }

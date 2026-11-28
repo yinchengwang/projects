@@ -7,13 +7,13 @@
 
 /** 技术分类 */
 const TECH_CATEGORIES = [
-  { key: 'frontend', label: '前端', color: '#0284C7', emoji: '🎨' },
-  { key: 'backend', label: '后端', color: '#30A46C', emoji: '⚙️' },
-  { key: 'mobile', label: '移动端', color: '#7F77DD', emoji: '📱' },
-  { key: 'devops', label: '运维', color: '#F5A524', emoji: '🚀' },
-  { key: 'ai', label: 'AI', color: '#DB2777', emoji: '🧠' },
-  { key: 'database', label: '数据库', color: '#0D9488', emoji: '🗄️' },
-  { key: 'other', label: '其它', color: '#64748B', emoji: '📌' }
+  { key: 'frontend', label: '前端', color: '#0369A1', emoji: '🎨' },
+  { key: 'backend', label: '后端', color: '#059669', emoji: '⚙️' },
+  { key: 'mobile', label: '移动端', color: '#4F46E5', emoji: '📱' },
+  { key: 'devops', label: '运维', color: '#B45309', emoji: '🚀' },
+  { key: 'ai', label: 'AI', color: '#BE185D', emoji: '🧠' },
+  { key: 'database', label: '数据库', color: '#0F766E', emoji: '🗄️' },
+  { key: 'other', label: '其它', color: '#5B6B80', emoji: '📌' }
 ]
 
 function techCategory (key) {
@@ -25,9 +25,9 @@ function techCategory (key) {
 
 /** 待办优先级 */
 const PRIORITIES = [
-  { key: 'high', label: '高', color: '#E5484D' },
-  { key: 'med', label: '中', color: '#F5A524' },
-  { key: 'low', label: '低', color: '#30A46C' }
+  { key: 'high', label: '高', color: '#DC2626' },
+  { key: 'med', label: '中', color: '#B45309' },
+  { key: 'low', label: '低', color: '#059669' }
 ]
 
 function priority (key) {
@@ -53,16 +53,16 @@ function todoCategory (key) {
 
 /** 代码片段语言 */
 const LANGUAGES = [
-  { key: 'typescript', label: 'TypeScript', color: '#0284C7' },
-  { key: 'javascript', label: 'JavaScript', color: '#D97706' },
-  { key: 'python', label: 'Python', color: '#30A46C' },
-  { key: 'go', label: 'Go', color: '#0D9488' },
+  { key: 'typescript', label: 'TypeScript', color: '#0369A1' },
+  { key: 'javascript', label: 'JavaScript', color: '#B45309' },
+  { key: 'python', label: 'Python', color: '#059669' },
+  { key: 'go', label: 'Go', color: '#0F766E' },
   { key: 'rust', label: 'Rust', color: '#B45309' },
   { key: 'java', label: 'Java', color: '#DC2626' },
-  { key: 'cpp', label: 'C/C++', color: '#7F77DD' },
-  { key: 'sql', label: 'SQL', color: '#6366F1' },
-  { key: 'shell', label: 'Shell', color: '#64748B' },
-  { key: 'other', label: '其它', color: '#64748B' }
+  { key: 'cpp', label: 'C/C++', color: '#4F46E5' },
+  { key: 'sql', label: 'SQL', color: '#4F46E5' },
+  { key: 'shell', label: 'Shell', color: '#5B6B80' },
+  { key: 'other', label: '其它', color: '#5B6B80' }
 ]
 
 function language (key) {
@@ -74,9 +74,9 @@ function language (key) {
 
 /** 面试题难度 */
 const DIFFICULTIES = [
-  { key: 'easy', label: '简单', color: '#30A46C' },
-  { key: 'med', label: '中等', color: '#F5A524' },
-  { key: 'hard', label: '困难', color: '#E5484D' }
+  { key: 'easy', label: '简单', color: '#059669' },
+  { key: 'med', label: '中等', color: '#B45309' },
+  { key: 'hard', label: '困难', color: '#DC2626' }
 ]
 
 function difficulty (key) {
@@ -105,10 +105,10 @@ function resourceType (key) {
 
 /** 读书状态 */
 const READING_STATUS = [
-  { key: 'wishlist', label: '想读', color: '#64748B' },
-  { key: 'reading', label: '在读', color: '#0284C7' },
-  { key: 'finished', label: '已读', color: '#30A46C' },
-  { key: 'paused', label: '搁置', color: '#F5A524' }
+  { key: 'wishlist', label: '想读', color: '#5B6B80' },
+  { key: 'reading', label: '在读', color: '#0369A1' },
+  { key: 'finished', label: '已读', color: '#059669' },
+  { key: 'paused', label: '搁置', color: '#B45309' }
 ]
 
 function readingStatus (key) {
@@ -136,11 +136,11 @@ function fitnessType (key) {
 
 /** 心情等级 1-5 */
 const MOOD_LEVELS = [
-  { level: 1, label: '很差', color: '#E5484D', emoji: '😞' },
-  { level: 2, label: '偏差', color: '#F5A524', emoji: '😕' },
-  { level: 3, label: '一般', color: '#64748B', emoji: '😐' },
-  { level: 4, label: '不错', color: '#0284C7', emoji: '🙂' },
-  { level: 5, label: '很好', color: '#30A46C', emoji: '😄' }
+  { level: 1, label: '很差', color: '#DC2626', emoji: '😞' },
+  { level: 2, label: '偏差', color: '#B45309', emoji: '😕' },
+  { level: 3, label: '一般', color: '#5B6B80', emoji: '😐' },
+  { level: 4, label: '不错', color: '#0369A1', emoji: '🙂' },
+  { level: 5, label: '很好', color: '#059669', emoji: '😄' }
 ]
 
 function moodLevel (level) {
@@ -152,9 +152,9 @@ function moodLevel (level) {
 
 /** 项目状态 */
 const PROJECT_STATUS = [
-  { key: 'active', label: '进行中', color: '#30A46C' },
-  { key: 'wip', label: '开发中', color: '#F5A524' },
-  { key: 'archived', label: '已归档', color: '#64748B' }
+  { key: 'active', label: '进行中', color: '#059669' },
+  { key: 'wip', label: '开发中', color: '#B45309' },
+  { key: 'archived', label: '已归档', color: '#5B6B80' }
 ]
 
 function projectStatus (key) {
@@ -171,13 +171,16 @@ const THEME_MODES = [
   { key: 'auto', label: '跟随系统' }
 ]
 
-/** 可选主色（5 种） */
+/** 可选主色（5 种）
+ *
+ *  light 一律取深一档的色 —— 配白字要过 WCAG AA（4.5:1），
+ *  原来的 #0369A1 只有 4.1:1。 */
 const PRIMARY_COLORS = [
-  { key: 'sky', label: '天蓝', light: '#0284C7', dark: '#38BDF8' },
-  { key: 'violet', label: '靛紫', light: '#6366F1', dark: '#818CF8' },
-  { key: 'teal', label: '青碧', light: '#0D9488', dark: '#2DD4BF' },
-  { key: 'amber', label: '琥珀', light: '#D97706', dark: '#FBBF24' },
-  { key: 'rose', label: '玫红', light: '#DB2777', dark: '#F472B6' }
+  { key: 'sky', label: '天蓝', light: '#0369A1', dark: '#38BDF8' },
+  { key: 'violet', label: '靛紫', light: '#4F46E5', dark: '#818CF8' },
+  { key: 'teal', label: '青碧', light: '#0F766E', dark: '#2DD4BF' },
+  { key: 'amber', label: '琥珀', light: '#B45309', dark: '#FBBF24' },
+  { key: 'rose', label: '玫红', light: '#BE185D', dark: '#F472B6' }
 ]
 
 module.exports = {

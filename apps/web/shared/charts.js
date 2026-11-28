@@ -35,7 +35,7 @@
     const w = o.width || 480
     const h = o.height || 200
     const pad = 32
-    const color = o.color || "#0284C7"
+    const color = o.color || "#0369A1"
 
     if (points.length === 0) {
       return svgWrap(w, h, '<text x="' + (w / 2) + '" y="' + (h / 2) +
@@ -85,7 +85,7 @@
     const w = o.width || 480
     const h = o.height || 200
     const pad = 32
-    const color = o.color || "#0284C7"
+    const color = o.color || "#0369A1"
 
     if (bars.length === 0) {
       return svgWrap(w, h, '<text x="' + (w / 2) + '" y="' + (h / 2) +
@@ -123,7 +123,7 @@
     const cx = size / 2
     const cy = size / 2
     const r = size / 2 - 30
-    const color = o.color || "#0284C7"
+    const color = o.color || "#0369A1"
 
     if (axes.length < 3) {
       return svgWrap(size, size, '<text x="' + cx + '" y="' + cy +
@@ -159,7 +159,7 @@
     const labels = axes.map(function (a, i) {
       const p = pointAt(i, 1.18)
       return '<text x="' + p.x.toFixed(1) + '" y="' + p.y.toFixed(1) +
-        '" text-anchor="middle" fill="#64748B" font-size="11">' + esc(a.label) + "</text>"
+        '" text-anchor="middle" fill="#5B6B80" font-size="11">' + esc(a.label) + "</text>"
     }).join("")
 
     return svgWrap(size, size,
@@ -190,7 +190,7 @@
       const alpha = ratio === 0 ? 0.05 : 0.15 + ratio * 0.6
       return '<rect x="' + (c.x * cell) + '" y="' + (c.y * cell) +
         '" width="' + (cell - 1) + '" height="' + (cell - 1) + '" rx="2"' +
-        ' fill="#0284C7" fill-opacity="' + alpha.toFixed(2) + '"/>'
+        ' fill="#0369A1" fill-opacity="' + alpha.toFixed(2) + '"/>'
     }).join("")
 
     return svgWrap(w, h, rects)

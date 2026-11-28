@@ -151,11 +151,13 @@ test('三位 HEX 展开', () => {
 })
 
 test('六位 HEX 解析', () => {
-  assert.deepStrictEqual(codetools.hexToRgb('#0284C7'), { r: 2, g: 132, b: 199 })
+  // 用一个不在调色板里的颜色：这个用例测的是解析器，
+  // 跟设计令牌无关 —— 换色时不该跟着改
+  assert.deepStrictEqual(codetools.hexToRgb('#123456'), { r: 18, g: 52, b: 86 })
 })
 
 test('八位 HEX 带 alpha', () => {
-  const rgb = codetools.hexToRgb('#0284C780')
+  const rgb = codetools.hexToRgb('#12345680')
   assert.strictEqual(rgb.a !== undefined, true)
   assert.strictEqual(rgb.a > 0.4 && rgb.a < 0.6, true)
 })
@@ -655,13 +657,15 @@ test('auto 模式跟随系统（桩为 light）', () => {
 test('主色随主题取不同色值', () => {
   const light = theme.build({ theme: 'light', primaryColor: 'sky' })
   const dark = theme.build({ theme: 'dark', primaryColor: 'sky' })
-  assert.strictEqual(light.brand, '#0284C7')
+  // light 一律取深一档的色 —— 配白字要过 WCAG AA（4.5:1），
+  // #0369A1 只有 4.1:1，够不到
+  assert.strictEqual(light.brand, '#0369A1')
   assert.strictEqual(dark.brand, '#38BDF8')
 })
 
 test('未知主色回退到第一个', () => {
   const d = theme.build({ theme: 'light', primaryColor: 'unknown' })
-  assert.strictEqual(d.brand, '#0284C7')
+  assert.strictEqual(d.brand, '#0369A1')
 })
 
 test('brandSoft 为 rgba', () => {
@@ -670,8 +674,8 @@ test('brandSoft 为 rgba', () => {
 })
 
 test('导航栏前景色随主题切换', () => {
-  assert.strictEqual(theme.build({ theme: 'light' }).navFront, '#000000')
-  assert.strictEqual(theme.build({ theme: 'dark' }).navFront, '#ffffff')
+  assert.strictEqual(theme.build({ theme: 'light' }).navFront, '#0B1220')
+  assert.strictEqual(theme.build({ theme: 'dark' }).navFront, '#E8EDF5')
 })
 
 // ==================== 常量 ====================
@@ -687,7 +691,7 @@ test('未知分类回退到其它', () => {
 })
 
 test('优先级命中', () => {
-  assert.strictEqual(constants.priority('high').color, '#E5484D')
+  assert.strictEqual(constants.priority('high').color, '#DC2626')
 })
 
 test('心情等级越界被夹取', () => {

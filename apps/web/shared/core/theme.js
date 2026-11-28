@@ -78,9 +78,9 @@ function build (settings) {
     themeClass: isDark ? "theme-dark" : "theme-light",
     isDark: isDark,
     brand: brand,
-    brandSoft: hexToRgba(brand, isDark ? 0.18 : 0.12),
-    navFront: isDark ? "#ffffff" : "#000000",
-    navBg: isDark ? "#0B0F17" : "#F7F8FA"
+    brandSoft: hexToRgba(brand, isDark ? 0.18 : 0.10),
+    navFront: isDark ? "#E8EDF5" : "#0B1220",
+    navBg: isDark ? "#0B1220" : "#EEF2F7"
   }
 }
 
