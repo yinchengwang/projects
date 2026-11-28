@@ -35,7 +35,7 @@ refs:
 
 ## 怎么实现的
 
-**输入护栏的精确拦截点。** `_execute_single_tool_body` 先排除「nested continuation」（被嵌套 agent 中断后恢复的工具调用），然后标记调用已开始、跑输入护栏，之后才调 `on_tool_start` hooks，再真正创建 `_invoke_tool_and_run_post_invoke` 任务。输入护栏位于函数调用之前，所以 `reject_content` 的分支返回 `function_rejection_item(...)`，工具函数体完全不执行；结果被标记进 `schema_bypassed_tool_runs`，以免拒绝文本再被当成工具正常返回值校验。
+**输入护栏的精确拦截点。** `_execute_single_tool_body` 先排除「nested continuation」（被嵌套 agent 中断后恢复的工具调用），然后标记调用已开始、跑输入护栏，之后才调 `on_tool_start` hooks，再真正创建 `_invoke_tool_and_run_post_invoke` 任务。输入护栏位于函数调用之前，所以拒绝时函数体完全不执行：`reject_content` 让该方法直接返回那条拒绝消息，并把该次工具运行登记进 `schema_bypassed_tool_runs`；后续构造结果项时（`_build_function_tool_results`）看到这个标记，就用 `function_tool_error_output` 把拒绝消息包装成符合工具输出契约的形状，并跳过正常返回值的类型校验与输出 schema 适配。
 
 输入护栏按配置列表顺序串行遍历。每个结果先追加进 `tool_input_guardrail_results`，然后看 `behavior["type"]`：`raise_exception` 抛 `ToolInputGuardrailTripwireTriggered(guardrail, output)`；`reject_content` 返回消息并停止后续护栏；全部 `allow` 才返回 `None` 表示继续执行。也就是说**第一个拒绝就短路**，后面的输入护栏不再跑。
 

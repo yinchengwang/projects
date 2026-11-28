@@ -51,9 +51,11 @@ refs:
 
 **`input_items` 的分叉。** 若过滤器返回的 `input_items` 不为 `None`，则 `session_step_items = new_items`（完整）、`new_step_items = input_items`（裁剪后）；否则 `session_step_items = None`。这一个分支就是「模型输入」与「会话历史」分离的落地点。嵌套历史路径结构相同：`session_step_items` 拿完整 `nested.new_items`，模型输入拿 `nested.input_items`。
 
-**结果收尾。** 返回 `SingleStepResult`，`next_step=NextStepHandoff(new_agent)`，并带上 `session_step_items`、`nested_history_owned_items`、以及 `handoff_input_filtered=input_filter is not None`。最后这个布尔很重要：它告诉持久化层「本轮的历史被过滤器改写过」，需要重新定位 response 锚点（见 `session_persistence.py` 里对 `NextStepHandoff` 的处理）。
+**结果收尾。** 返回 `SingleStepResult`，`next_step=NextStepHandoff(new_agent)`，并带上 `session_step_items`、`nested_history_owned_items`、以及 `handoff_input_filtered=input_filter is not None`。最后这个布尔很重要：它告诉持久化层「本轮的历史被过滤器改写过」，需要重新定位 response 锚点。
 
-**循环里的切换动作。** 非流式循环拿到 `NextStepHandoff` 后做的事依次是：把本轮的工具护栏结果写回 run state、`current_agent = turn_result.next_step.new_agent`、更新 run state 的当前 agent、持久化本轮项、结束旧 agent 的 span、置 `should_run_agent_start_hooks = True`、发 `AgentUpdatedStreamEvent`。流式路径多一步 `_publish_streamed_result_agent`：先把 `streamed_result.current_agent` 与 `_current_agent_output_schema` 更新掉，再持久化——注释说明这是为了「在取消可能完成流之前先发布 agent 切换」，避免消费者看到旧的 current_agent。
+**循环里的切换动作。** 非流式循环拿到 `NextStepHandoff` 后依次做：把本轮工具护栏结果写回 run state、`current_agent = turn_result.next_step.new_agent`、更新 run state 的当前 agent、持久化本轮项、结束旧 agent 的 span、置 `should_run_agent_start_hooks = True`、发 `AgentUpdatedStreamEvent`。
+
+流式路径多两步。一是**切换前的输入护栏复核**：若存在并行的输入护栏任务就先 `await` 它，然后逐条检查 `input_guardrail_results`，任一触发就抛 `InputGuardrailTripwireTriggered` 并把 run state 标成 `_terminal_unrecoverable`；注释说明这一轮已经执行过工具调用，重放会跳过起始 agent 的护栏，所以不能回滚而是整体判为不可恢复。二是 `_publish_streamed_result_agent`：先把 `streamed_result.current_agent` 与 `_current_agent_output_schema` 更新掉，再持久化——注释说明这是为了「在取消可能完成流之前先发布 agent 切换」。此外 `AgentUpdatedStreamEvent` 被特意安排在**可能失败**的会话写入之前入队，这样即使写入抛错，消费者也已经看到切换。切换完成后把 `run_state._current_step` 重置为 `NextStepRunAgain()`，否则恢复时会重复认成「刚交接完」。
 
 **续跑的发布。** `_publish_resumed_stream_turn` 用于「恢复既有 RunState 后完成一轮」的场景：它把这一轮的结果同步到 `RunResultStreaming` 上，包括 `input`（用 `turn_result.original_input` 覆盖，因为交接可能改写过历史）、`_original_input` 的独立副本、`new_items`（用会话项）、`_model_input_items`（用生成项）、以及 `_replay_from_model_input_items = generated_items != new_items`。最后这个布尔标记「模型输入与会话项不一致」，消费者据此知道不能把会话项直接当作模型输入回放。若本轮带了嵌套历史来源追踪，还要通过 `reconcile_nested_history_owned_session_item_refs` 重新对齐引用。
 
@@ -71,7 +73,9 @@ refs:
 
 **源码事实：** `handoff_input_filtered` 会一路传到持久化层。它存在的唯一目的就是让「历史被改写」这件事可被下游感知，因为一旦改写，之前记录的位置锚点（例如某条响应在历史里的偏移）就失效了。
 
-**源码事实：** 流式路径把 agent 切换的发布提到持久化之前。这是一个可取消性设计：如果持久化阶段被取消，消费者至少已经看到「现在由谁接手」，不会留下「已经在用新 agent 跑但 UI 还显示旧 agent」的错位。
+**源码事实：** 流式路径在交接发生时才补齐输入护栏的结论，并且把「护栏触发」升级为不可恢复终止（`run_state._terminal_unrecoverable = True`）。理由是这一轮已经跑过工具调用，重放会跳过起始 agent 的护栏，宁可整体失败也不能产出「绕过输入检查」的历史。
+
+**源码事实：** 流式路径把 agent 切换的发布与 `AgentUpdatedStreamEvent` 都提到会话写入之前。这是一个可取消性设计：如果持久化阶段被取消或失败，消费者至少已经看到「现在由谁接手」，不会留下「已经在用新 agent 跑但 UI 还显示旧 agent」的错位。
 
 **架构推论：** 交接的执行被刻意拆成「识别（解析期）→ 执行（切换期）→ 记账（结果项）」三段，每段都有独立的失败语义。识别失败退化成「工具找不到」，执行失败退化成「工具调用失败」，记账环节则保证 `HandoffCallItem` 与 `HandoffOutputItem` 成对出现。这种分层让「交接」复用了工具系统全部的健壮性，只额外增加「切换 agent」这一件事。
 

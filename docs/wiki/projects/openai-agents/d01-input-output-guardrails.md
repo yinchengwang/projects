@@ -35,7 +35,7 @@ refs:
 
 **并发执行 + 边完成边记录。** 两个批量函数都为每个护栏建一个 `asyncio.Task`，然后用 `asyncio.as_completed` 逐个收取，把结果追加进本地列表与调用方的 `results_sink`。关键在触发分支的次序：拿到触发结果后**先** `record(triggering)`，**再**补齐兄弟结果，**最后**才取消 task 并抛异常。这样即使异常抛出，调用方看到的列表里也一定包含触发项与所有已完成的兄弟项，不会缺项。
 
-**触发时的收集补齐。** 一旦某个结果 `tripwire_triggered` 为真，函数不会立刻跳出——先调 `_unreported_guardrail_results` 扫一遍所有 task，把「已经完成、没被取消、没有异常、但 `as_completed` 还没轮到」的兄弟结果补进列表。源码注释解释了动机：`as_completed` 的产出顺序不等于完成顺序，可能有已经跑完的护栏结论还没被 yield 出来；不补，这些结论就会在异常路径上丢失，调用方看到的结果集就会缺项。
+**`_unreported_guardrail_results` 的补齐规则。** 它遍历所有 task，只收「`done()` 为真、未被取消、没有异常、且结果对象 id 不在已记录集合里」的项。用 `id()` 去重而不是相等比较，因为结果 dataclass 之间可能有相同内容但不同实例；用 `task.result()` 取值而不是 `await`，因为这里不做等待，只收割已经跑完的。源码注释解释了动机：`as_completed` 的产出顺序不等于完成顺序，可能有已经跑完的护栏结论还没被 yield 出来；不补，这些结论就会在异常路径上丢失。
 
 补齐之后才取消所有 task 并 `asyncio.gather(..., return_exceptions=True)` 等它们收尾。两个批量函数的外层还有一层 `except BaseException`：任何错误（包括护栏自己抛异常、调用方被取消）都会取消并等待兄弟任务，注释写明目的是「不让它们泄漏到这个函数返回之后」。
 
