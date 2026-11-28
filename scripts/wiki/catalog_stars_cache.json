@@ -156,6 +156,18 @@
       "stars": 3213,
       "status": "ok"
     },
+    "LMCache/LMCache": {
+      "fetched_at": "2026-11-28T18:06:05+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "lmcache",
+      "rate_remaining": "34",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/LMCache/LMCache",
+      "stars": 12504,
+      "status": "ok"
+    },
     "LMDB/lmdb": {
       "fetched_at": "2026-11-23T07:29:30+00:00",
       "http_status": 200,
@@ -204,11 +216,23 @@
       "stars": 489,
       "status": "ok"
     },
+    "NVIDIA/TensorRT-LLM": {
+      "fetched_at": "2026-11-28T18:05:04+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "NOASSERTION",
+      "name": "tensorrt-llm",
+      "rate_remaining": "54",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/NVIDIA/TensorRT-LLM",
+      "stars": 15151,
+      "status": "ok"
+    },
     "OSU-NLP-Group/AgentLite": {
-      "body": "{\"message\":\"API rate limit exceeded for 45.146.232.49. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)\",\"documentation_url\":\"https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting\"}\n",
-      "error": "HTTP 403（可能触发 GitHub API 限流）",
-      "fetched_at": "2026-11-28T17:03:48+00:00",
-      "http_status": 403,
+      "body": "{\"message\":\"Not Found\",\"documentation_url\":\"https://docs.github.com/rest/repos/repos#get-a-repository\",\"status\":\"404\"}",
+      "error": "HTTP 404",
+      "fetched_at": "2026-11-28T18:06:10+00:00",
+      "http_status": 404,
       "name": "agentlite",
       "repo": "https://github.com/OSU-NLP-Group/AgentLite",
       "status": "failed"
@@ -319,6 +343,15 @@
       "rate_reset": "1795888856",
       "repo": "https://github.com/SWE-agent/SWE-agent",
       "stars": 20885,
+      "status": "ok"
+    },
+    "SalesforceAIResearch/AgentLite": {
+      "http_status": 200,
+      "language": "Jupyter Notebook",
+      "license": "Apache-2.0",
+      "name": "agentlite",
+      "repo": "https://github.com/SalesforceAIResearch/AgentLite",
+      "stars": 651,
       "status": "ok"
     },
     "SciPhi-AI/R2R": {
@@ -463,6 +496,15 @@
       "rate_reset": "1795888856",
       "repo": "https://github.com/akopytov/sysbench",
       "stars": 6818,
+      "status": "ok"
+    },
+    "alibaba/MNN": {
+      "http_status": 200,
+      "language": "C++",
+      "license": "Apache-2.0",
+      "name": "mnn",
+      "repo": "https://github.com/alibaba/MNN",
+      "stars": 16644,
       "status": "ok"
     },
     "amazon-science/RAGChecker": {
@@ -957,6 +999,18 @@
       "stars": 41109,
       "status": "ok"
     },
+    "deepseek-ai/DeepEP": {
+      "fetched_at": "2026-11-28T18:05:53+00:00",
+      "http_status": 200,
+      "language": "Cuda",
+      "license": "MIT",
+      "name": "deepep",
+      "rate_remaining": "37",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/deepseek-ai/DeepEP",
+      "stars": 10484,
+      "status": "ok"
+    },
     "deepset-ai/haystack": {
       "fetched_at": "2026-11-23T07:01:29+00:00",
       "http_status": 200,
@@ -991,6 +1045,30 @@
       "rate_reset": "1795888856",
       "repo": "https://github.com/docling-project/docling",
       "stars": 71167,
+      "status": "ok"
+    },
+    "dottxt-ai/outlines": {
+      "fetched_at": "2026-11-28T18:04:59+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "outlines",
+      "rate_remaining": "56",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/dottxt-ai/outlines",
+      "stars": 16026,
+      "status": "ok"
+    },
+    "dphnAI/sonar": {
+      "fetched_at": "2026-11-28T18:05:20+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "AGPL-3.0",
+      "name": "sonar",
+      "rate_remaining": "48",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/dphnAI/sonar",
+      "stars": 1915,
       "status": "ok"
     },
     "dragonflydb/dragonfly": {
@@ -1101,6 +1179,18 @@
       "stars": 41873,
       "status": "ok"
     },
+    "flashinfer-ai/flashinfer": {
+      "fetched_at": "2026-11-28T18:05:51+00:00",
+      "http_status": 200,
+      "language": "Cuda",
+      "license": "Apache-2.0",
+      "name": "flashinfer",
+      "rate_remaining": "38",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/flashinfer-ai/flashinfer",
+      "stars": 7027,
+      "status": "ok"
+    },
     "geekan/MetaGPT": {
       "fetched_at": "2026-11-23T07:01:22+00:00",
       "http_status": 200,
@@ -1173,6 +1263,18 @@
       "stars": 219,
       "status": "ok"
     },
+    "guidance-ai/guidance": {
+      "fetched_at": "2026-11-28T18:04:52+00:00",
+      "http_status": 200,
+      "language": "Jupyter Notebook",
+      "license": "MIT",
+      "name": "guidance",
+      "rate_remaining": "58",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/guidance-ai/guidance",
+      "stars": 21830,
+      "status": "ok"
+    },
     "h2database/h2database": {
       "fetched_at": "2026-11-23T07:29:42+00:00",
       "http_status": 200,
@@ -1183,6 +1285,42 @@
       "rate_reset": "1795422285",
       "repo": "https://github.com/h2database/h2database",
       "stars": 4644,
+      "status": "ok"
+    },
+    "huggingface/candle": {
+      "fetched_at": "2026-11-28T18:05:37+00:00",
+      "http_status": 200,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "name": "candle",
+      "rate_remaining": "43",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/huggingface/candle",
+      "stars": 21443,
+      "status": "ok"
+    },
+    "huggingface/peft": {
+      "fetched_at": "2026-11-28T18:05:48+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "peft",
+      "rate_remaining": "39",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/huggingface/peft",
+      "stars": 21925,
+      "status": "ok"
+    },
+    "huggingface/transformers": {
+      "fetched_at": "2026-11-28T18:05:46+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "transformers",
+      "rate_remaining": "40",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/huggingface/transformers",
+      "stars": 169315,
       "status": "ok"
     },
     "hyrise/hyrise": {
@@ -1581,6 +1719,30 @@
       "stars": 46722,
       "status": "ok"
     },
+    "ml-explore/mlx": {
+      "fetched_at": "2026-11-28T18:05:01+00:00",
+      "http_status": 200,
+      "language": "C++",
+      "license": "MIT",
+      "name": "mlx",
+      "rate_remaining": "55",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/ml-explore/mlx",
+      "stars": 29317,
+      "status": "ok"
+    },
+    "mlc-ai/mlc-llm": {
+      "fetched_at": "2026-11-28T18:05:06+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "mlc-llm",
+      "rate_remaining": "53",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/mlc-ai/mlc-llm",
+      "stars": 23404,
+      "status": "ok"
+    },
     "modelscope/agentscope": {
       "fetched_at": "2026-11-23T07:02:40+00:00",
       "http_status": 200,
@@ -1603,6 +1765,18 @@
       "rate_reset": "1795420233",
       "repo": "https://github.com/mongodb/mongo",
       "stars": 28706,
+      "status": "ok"
+    },
+    "mudler/LocalAI": {
+      "fetched_at": "2026-11-28T18:05:22+00:00",
+      "http_status": 200,
+      "language": "Go",
+      "license": "MIT",
+      "name": "localai",
+      "rate_remaining": "47",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/mudler/LocalAI",
+      "stars": 50600,
       "status": "ok"
     },
     "mysql/mysql-server": {
@@ -1744,6 +1918,15 @@
       "rate_reset": "1795888856",
       "repo": "https://github.com/opendatalab/MinerU",
       "stars": 84459,
+      "status": "ok"
+    },
+    "opengauss-mirror/openGauss-server": {
+      "http_status": 200,
+      "language": "C++",
+      "license": "NOASSERTION",
+      "name": "openGauss",
+      "repo": "https://github.com/opengauss-mirror/openGauss-server",
+      "stars": 797,
       "status": "ok"
     },
     "openobserve/openobserve": {
@@ -2172,6 +2355,27 @@
       "stars": 4406,
       "status": "ok"
     },
+    "turboderp-org/exllamav2": {
+      "http_status": 200,
+      "language": "Python",
+      "license": "MIT",
+      "name": "exllamav2",
+      "repo": "https://github.com/turboderp-org/exllamav2",
+      "stars": 4657,
+      "status": "ok"
+    },
+    "turboderp/exllamav2": {
+      "fetched_at": "2026-11-28T18:05:15+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "MIT",
+      "name": "exllamav2",
+      "rate_remaining": "49",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/turboderp/exllamav2",
+      "stars": 4657,
+      "status": "ok"
+    },
     "tursodatabase/libsql": {
       "fetched_at": "2026-11-28T16:51:02+00:00",
       "http_status": 200,
@@ -2338,6 +2542,18 @@
       "rate_reset": "1795421641",
       "repo": "https://github.com/weaviate/weaviate",
       "stars": 16959,
+      "status": "ok"
+    },
+    "xorbitsai/inference": {
+      "fetched_at": "2026-11-28T18:05:25+00:00",
+      "http_status": 200,
+      "language": "Python",
+      "license": "Apache-2.0",
+      "name": "xinference",
+      "rate_remaining": "46",
+      "rate_reset": "1795892693",
+      "repo": "https://github.com/xorbitsai/inference",
+      "stars": 9679,
       "status": "ok"
     },
     "ydb-platform/ydb": {

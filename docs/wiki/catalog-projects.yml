@@ -826,11 +826,11 @@ projects:
   - name: openGauss
     model: relational
     tier: T2
-    repo: https://gitee.com/opengauss/openGauss-server
-    license: MulanPSL-2.0
-    language: unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    repo: https://github.com/opengauss-mirror/openGauss-server
+    license: NOASSERTION
+    language: C++
+    stars: 797
+    stars_as_of: 2026-11-29
   - name: meilisearch
     model: search
     tier: T2
@@ -1754,11 +1754,11 @@ projects:
   - name: agentlite
     model: ai/agent
     tier: T2
-    repo: https://github.com/OSU-NLP-Group/AgentLite
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    repo: https://github.com/SalesforceAIResearch/AgentLite
+    license: Apache-2.0
+    language: Jupyter Notebook
+    stars: 651
+    stars_as_of: 2026-11-29
   - name: aider
     model: ai/agent
     tier: T2
@@ -2019,130 +2019,122 @@ projects:
     model: ai/llm
     tier: T2
     repo: https://github.com/guidance-ai/guidance
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: MIT
+    language: Jupyter Notebook
+    stars: 21830
+    stars_as_of: 2026-11-29
   - name: outlines
     model: ai/llm
     tier: T2
     repo: https://github.com/dottxt-ai/outlines
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 16026
+    stars_as_of: 2026-11-29
   - name: mlx
     model: ai/llm
     tier: T2
     repo: https://github.com/ml-explore/mlx
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: MIT
+    language: C++
+    stars: 29317
+    stars_as_of: 2026-11-29
   - name: tensorrt-llm
     model: ai/llm
     tier: T2
     repo: https://github.com/NVIDIA/TensorRT-LLM
     license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    language: Python
+    stars: 15151
+    stars_as_of: 2026-11-29
   - name: mlc-llm
     model: ai/llm
     tier: T2
     repo: https://github.com/mlc-ai/mlc-llm
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 23404
+    stars_as_of: 2026-11-29
   - name: exllamav2
     model: ai/llm
     tier: T2
-    repo: https://github.com/turboderp/exllamav2
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    repo: https://github.com/turboderp-org/exllamav2
+    license: MIT
+    language: Python
+    stars: 4657
+    stars_as_of: 2026-11-29
   - name: sonar
     model: ai/llm
     tier: T2
     repo: https://github.com/dphnAI/sonar
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: AGPL-3.0
+    language: Python
+    stars: 1915
+    stars_as_of: 2026-11-29
   - name: localai
     model: ai/llm
     tier: T2
     repo: https://github.com/mudler/LocalAI
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: MIT
+    language: Go
+    stars: 50600
+    stars_as_of: 2026-11-29
   - name: xinference
     model: ai/llm
     tier: T2
     repo: https://github.com/xorbitsai/inference
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 9679
+    stars_as_of: 2026-11-29
   - name: candle
     model: ai/llm
     tier: T2
     repo: https://github.com/huggingface/candle
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
-  - name: onnxruntime-genai
-    model: ai/llm
-    tier: T2
-    repo: https://github.com/microsoft/onnxruntime-genai
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Rust
+    stars: 21443
+    stars_as_of: 2026-11-29
   - name: transformers
     model: ai/llm
     tier: T2
     repo: https://github.com/huggingface/transformers
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 169315
+    stars_as_of: 2026-11-29
   - name: peft
     model: ai/llm
     tier: T2
     repo: https://github.com/huggingface/peft
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 21925
+    stars_as_of: 2026-11-29
   - name: flashinfer
     model: ai/llm
     tier: T2
     repo: https://github.com/flashinfer-ai/flashinfer
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Cuda
+    stars: 7027
+    stars_as_of: 2026-11-29
   - name: deepep
     model: ai/llm
     tier: T2
     repo: https://github.com/deepseek-ai/DeepEP
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: MIT
+    language: Cuda
+    stars: 10484
+    stars_as_of: 2026-11-29
   - name: lmcache
     model: ai/llm
     tier: T2
     repo: https://github.com/LMCache/LMCache
-    license: NOASSERTION
-    language: Unknown
-    stars: 0
-    stars_as_of: 1970-01-01
+    license: Apache-2.0
+    language: Python
+    stars: 12504
+    stars_as_of: 2026-11-29
   - name: tigerbeetle
     model: relational
     tier: T1
@@ -2158,4 +2150,12 @@ projects:
     license: Apache-2.0
     language: C
     stars: 1230
+    stars_as_of: 2026-11-29
+  - name: mnn
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/alibaba/MNN
+    license: Apache-2.0
+    language: C++
+    stars: 16644
     stars_as_of: 2026-11-29

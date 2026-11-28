@@ -522,7 +522,7 @@ projects:
     aliases: [mysql]
   - slug: openGauss
     model: relational
-    repo: https://gitee.com/opengauss/openGauss-server
+    repo: https://github.com/opengauss-mirror/openGauss-server
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: postgres
@@ -763,7 +763,7 @@ projects:
     next_action: 待源码盘点与机制 wiki 生产
   - slug: agentlite
     model: ai/agent
-    repo: https://github.com/OSU-NLP-Group/AgentLite
+    repo: https://github.com/SalesforceAIResearch/AgentLite
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: agents
@@ -1013,7 +1013,7 @@ projects:
     next_action: 待源码盘点与机制 wiki 生产
   - slug: exllamav2
     model: ai/llm
-    repo: https://github.com/turboderp/exllamav2
+    repo: https://github.com/turboderp-org/exllamav2
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: flashinfer
@@ -1076,14 +1076,14 @@ projects:
     repo: https://github.com/ml-explore/mlx
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
+  - slug: mnn
+    model: ai/llm
+    repo: https://github.com/alibaba/MNN
+    state: planned
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ollama
     model: ai/llm
     repo: https://github.com/ollama/ollama
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
-  - slug: onnxruntime-genai
-    model: ai/llm
-    repo: https://github.com/microsoft/onnxruntime-genai
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: outlines

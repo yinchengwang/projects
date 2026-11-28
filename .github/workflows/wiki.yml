@@ -85,9 +85,18 @@ jobs:
       # 四个库各有一份清单，逐一过门禁。
       - name: manifest 门禁
         run: |
-          for lib in postgres redis mysql-server sqlite; do
-            python scripts/wiki/wiki_manifest_lint.py "docs/wiki/projects/$lib/_manifest.yml" || exit 1
+          # 遍历所有已产出机制 wiki 的项目目录，逐个校验 manifest 与机制页的一致性。
+          found=0
+          for m in docs/wiki/projects/*/_manifest.yml; do
+            [ -e "$m" ] || continue
+            found=$((found+1))
+            python scripts/wiki/wiki_manifest_lint.py "$m" || exit 1
           done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::没有找到任何 _manifest.yml"
+            exit 1
+          fi
+          echo "manifest 门禁覆盖 $found 个项目"
 
   # ============ 引用门禁（需要各库源码）============
   wiki-refs:
@@ -106,6 +115,50 @@ jobs:
             url: https://github.com/sqlite/sqlite
           - name: mysql-server
             url: https://github.com/mysql/mysql-server
+          - name: langchain
+            url: https://github.com/langchain-ai/langchain
+          - name: llama-index
+            url: https://github.com/run-llama/llama_index
+          - name: haystack
+            url: https://github.com/deepset-ai/haystack
+          - name: lightrag
+            url: https://github.com/HKUDS/LightRAG
+          - name: graphrag
+            url: https://github.com/microsoft/graphrag
+          - name: ragas
+            url: https://github.com/explodinggradients/ragas
+          - name: ragflow
+            url: https://github.com/infiniflow/ragflow
+          - name: dify
+            url: https://github.com/langgenius/dify
+          - name: langgraph
+            url: https://github.com/langchain-ai/langgraph
+          - name: autogen
+            url: https://github.com/microsoft/autogen
+          - name: crewai
+            url: https://github.com/crewAIInc/crewAI
+          - name: metagpt
+            url: https://github.com/FoundationAgents/MetaGPT
+          - name: openai-agents
+            url: https://github.com/openai/openai-agents-python
+          - name: pydantic-ai
+            url: https://github.com/pydantic/pydantic-ai
+          - name: smolagents
+            url: https://github.com/huggingface/smolagents
+          - name: mcp-python-sdk
+            url: https://github.com/modelcontextprotocol/python-sdk
+          - name: browser-use
+            url: https://github.com/browser-use/browser-use
+          - name: openhands
+            url: https://github.com/All-Hands-AI/OpenHands
+          - name: goose
+            url: https://github.com/block/goose
+          - name: open-interpreter
+            url: https://github.com/OpenInterpreter/open-interpreter
+          - name: vllm
+            url: https://github.com/vllm-project/vllm
+          - name: sglang
+            url: https://github.com/sgl-project/sglang
     steps:
       - name: Checkout
         uses: actions/checkout@v4
