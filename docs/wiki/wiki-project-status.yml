@@ -8,32 +8,27 @@ projects:
     model: benchmark
     repo: https://github.com/cmu-db/benchbase
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: clickbench
     model: benchmark
     repo: https://github.com/ClickHouse/ClickBench
-    state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
-  - slug: db-bench
-    model: benchmark
-    repo: https://github.com/wagjamin/db-bench
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: hammerdb
     model: benchmark
     repo: https://github.com/TPC-Council/HammerDB
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: oltpbench
     model: benchmark
     repo: https://github.com/oltpbenchmark/oltpbench
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: sysbench
     model: benchmark
     repo: https://github.com/akopytov/sysbench
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tpcds
     model: benchmark
     repo: https://github.com/gregrahn/tpcds-kit
@@ -53,17 +48,17 @@ projects:
     model: benchmark
     repo: https://github.com/brianfrankcooper/YCSB
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: apache-impala
     model: columnar
     repo: https://github.com/apache/impala
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: carbondata
     model: columnar
     repo: https://github.com/apache/carbondata
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: cassandra
     model: columnar
     repo: https://github.com/apache/cassandra
@@ -93,17 +88,17 @@ projects:
     model: columnar
     repo: https://github.com/hyrise/hyrise
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: kudu
     model: columnar
     repo: https://github.com/apache/kudu
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: monetdb
     model: columnar
     repo: https://github.com/MonetDB/MonetDB
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pinot
     model: columnar
     repo: https://github.com/apache/pinot
@@ -123,7 +118,7 @@ projects:
     model: distributed-sql
     repo: https://github.com/citusdata/citus
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: cockroachdb
     model: distributed-sql
     repo: https://github.com/cockroachdb/cockroach
@@ -143,7 +138,7 @@ projects:
     model: distributed-sql
     repo: https://github.com/apache/shardingsphere
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tidb
     model: distributed-sql
     repo: https://github.com/pingcap/tidb
@@ -158,12 +153,12 @@ projects:
     model: distributed-sql
     repo: https://github.com/vitessio/vitess
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ydb
     model: distributed-sql
     repo: https://github.com/ydb-platform/ydb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: yugabytedb
     model: distributed-sql
     repo: https://github.com/yugabyte/yugabyte-db
@@ -183,7 +178,7 @@ projects:
     model: document
     repo: https://github.com/Softmotions/ejdb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ferretdb
     model: document
     repo: https://github.com/FerretDB/FerretDB
@@ -193,7 +188,7 @@ projects:
     model: document
     repo: https://github.com/mbdavid/LiteDB
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: mongodb
     model: document
     repo: https://github.com/mongodb/mongo
@@ -203,7 +198,7 @@ projects:
     model: document
     repo: https://github.com/pouchdb/pouchdb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ravendb
     model: document
     repo: https://github.com/ravendb/ravendb
@@ -233,22 +228,17 @@ projects:
     model: embedded
     repo: https://github.com/superfly/litefs
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: lmdb
     model: embedded
     repo: https://github.com/LMDB/lmdb
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
-  - slug: pklite
-    model: embedded
-    repo: https://github.com/nicholasgasior/pklite
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: rqlite
     model: embedded
     repo: https://github.com/rqlite/rqlite
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: age
     model: extension
     repo: https://github.com/apache/age
@@ -293,57 +283,57 @@ projects:
     model: extension
     repo: https://github.com/paradedb/paradedb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pg-cron
     model: extension
     repo: https://github.com/citusdata/pg_cron
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pg-partman
     model: extension
     repo: https://github.com/pgpartman/pg_partman
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pg_duckdb
     model: extension
     repo: https://github.com/duckdb/pg_duckdb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pg_ivm
     model: extension
     repo: https://github.com/sraoss/pg_ivm
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pg_tle
     model: extension
     repo: https://github.com/aws/pg_tle
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pgaudit
     model: extension
     repo: https://github.com/pgaudit/pgaudit
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pglogical
     model: extension
     repo: https://github.com/2ndQuadrant/pglogical
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pgmq
     model: extension
     repo: https://github.com/tembo-io/pgmq
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pgroonga
     model: extension
     repo: https://github.com/pgroonga/pgroonga
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pgsodium
     model: extension
     repo: https://github.com/michelp/pgsodium
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pgvector
     model: extension
     repo: https://github.com/pgvector/pgvector
@@ -353,17 +343,22 @@ projects:
     model: extension
     repo: https://github.com/postgis/postgis
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: sqlite-vec
     model: extension
     repo: https://github.com/asg017/sqlite-vec
+    state: planned
+    next_action: 待源码盘点与机制 wiki 生产
+  - slug: sqlite-vector
+    model: extension
+    repo: https://github.com/sqliteai/sqlite-vector
     state: planned
     next_action: 待源码盘点与机制 wiki 生产
   - slug: vectorchord
     model: extension
     repo: https://github.com/tensorchord/VectorChord
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: velox
     model: extension
     repo: https://github.com/facebookincubator/velox
@@ -408,22 +403,22 @@ projects:
     model: graph
     repo: https://github.com/orientechnologies/orientdb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: terminusdb
     model: graph
     repo: https://github.com/terminusdb/terminusdb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: typedb
     model: graph
     repo: https://github.com/typedb/typedb
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: aerospike
     model: key-value
     repo: https://github.com/aerospike/aerospike-server
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: badger
     model: key-value
     repo: https://github.com/dgraph-io/badger
@@ -448,12 +443,12 @@ projects:
     model: key-value
     repo: https://github.com/microsoft/garnet
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: infinispan
     model: key-value
     repo: https://github.com/infinispan/infinispan
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: leveldb
     model: key-value
     repo: https://github.com/google/leveldb
@@ -463,7 +458,7 @@ projects:
     model: key-value
     repo: https://github.com/memcached/memcached
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pebble
     model: key-value
     repo: https://github.com/cockroachdb/pebble
@@ -483,7 +478,7 @@ projects:
     model: key-value
     repo: https://github.com/tarantool/tarantool
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tikv
     model: key-value
     repo: https://github.com/tikv/tikv
@@ -493,7 +488,7 @@ projects:
     model: relational
     repo: https://github.com/apache/derby
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: firebird
     model: relational
     repo: https://github.com/FirebirdSQL/firebird
@@ -508,12 +503,12 @@ projects:
     model: relational
     repo: https://github.com/apache/ignite
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: libsql
     model: relational
     repo: https://github.com/tursodatabase/libsql
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: mariadb
     model: relational
     repo: https://github.com/MariaDB/server
@@ -541,11 +536,16 @@ projects:
     state: indexed
     next_action: 阶段 0B 入 wiki-rag 后复核引用回源
     aliases: [sqlite3]
+  - slug: tigerbeetle
+    model: relational
+    repo: https://github.com/tigerbeetle/tigerbeetle
+    state: planned
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: bleve
     model: search
     repo: https://github.com/blevesearch/bleve
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: elasticsearch
     model: search
     repo: https://github.com/elastic/elasticsearch
@@ -580,7 +580,7 @@ projects:
     model: search
     repo: https://github.com/valeriansaliou/sonic
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tantivy
     model: search
     repo: https://github.com/quickwit-oss/tantivy
@@ -595,12 +595,12 @@ projects:
     model: stream
     repo: https://github.com/apache/artemis
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: bookkeeper
     model: stream
     repo: https://github.com/apache/bookkeeper
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: flink
     model: stream
     repo: https://github.com/apache/flink
@@ -630,7 +630,7 @@ projects:
     model: stream
     repo: https://github.com/rabbitmq/rabbitmq-server
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: redpanda
     model: stream
     repo: https://github.com/redpanda-data/redpanda
@@ -645,7 +645,7 @@ projects:
     model: stream
     repo: https://github.com/apache/zookeeper
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: greptimedb
     model: time-series
     repo: https://github.com/GreptimeTeam/greptimedb
@@ -665,12 +665,12 @@ projects:
     model: time-series
     repo: https://github.com/m3db/m3
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: openobserve
     model: time-series
     repo: https://github.com/openobserve/openobserve
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: prometheus
     model: time-series
     repo: https://github.com/prometheus/prometheus
@@ -705,7 +705,7 @@ projects:
     model: vector
     repo: https://github.com/microsoft/DiskANN
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: faiss
     model: vector
     repo: https://github.com/facebookresearch/faiss
@@ -720,7 +720,7 @@ projects:
     model: vector
     repo: https://github.com/marqo-ai/marqo
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: milvus
     model: vector
     repo: https://github.com/milvus-io/milvus
@@ -755,17 +755,17 @@ projects:
     model: ai/agent
     repo: https://github.com/ag2ai/ag2
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: agency-swarm
     model: ai/agent
     repo: https://github.com/VRSEN/agency-swarm
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: agentlite
     model: ai/agent
     repo: https://github.com/OSU-NLP-Group/AgentLite
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: agents
     model: ai/agent
     repo: https://github.com/microsoft/agents
@@ -780,7 +780,7 @@ projects:
     model: ai/agent
     repo: https://github.com/antgroup/agentUniverse
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: agentverse
     model: ai/agent
     repo: https://github.com/OpenBMB/AgentVerse
@@ -800,7 +800,7 @@ projects:
     model: ai/agent
     repo: https://github.com/Aider-AI/aider
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: autogen
     model: ai/agent
     repo: https://github.com/microsoft/autogen
@@ -815,7 +815,7 @@ projects:
     model: ai/agent
     repo: https://github.com/i-am-bee/beeai-framework
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: browser-use
     model: ai/agent
     repo: https://github.com/browser-use/browser-use
@@ -825,12 +825,12 @@ projects:
     model: ai/agent
     repo: https://github.com/ServiceNow/BrowserGym
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: burr
     model: ai/agent
     repo: https://github.com/apache/burr
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: camel
     model: ai/agent
     repo: https://github.com/camel-ai/camel
@@ -845,7 +845,7 @@ projects:
     model: ai/agent
     repo: https://github.com/cline/cline
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: crewai
     model: ai/agent
     repo: https://github.com/crewAIInc/crewAI
@@ -855,12 +855,12 @@ projects:
     model: ai/agent
     repo: https://github.com/FlowiseAI/Flowise
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: google-adk
     model: ai/agent
     repo: https://github.com/google/adk-python
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: goose
     model: ai/agent
     repo: https://github.com/aaif-goose/goose
@@ -870,7 +870,7 @@ projects:
     model: ai/agent
     repo: https://github.com/langflow-ai/langflow
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: langgraph
     model: ai/agent
     repo: https://github.com/langchain-ai/langgraph
@@ -880,12 +880,12 @@ projects:
     model: ai/agent
     repo: https://github.com/langroid/langroid
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: lavague
     model: ai/agent
     repo: https://github.com/lavague-ai/LaVague
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: letta
     model: ai/agent
     repo: https://github.com/letta-ai/letta
@@ -895,7 +895,7 @@ projects:
     model: ai/agent
     repo: https://github.com/mark3labs/mcp-go
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: mcp-python-sdk
     model: ai/agent
     repo: https://github.com/modelcontextprotocol/python-sdk
@@ -905,7 +905,7 @@ projects:
     model: ai/agent
     repo: https://github.com/mem0ai/mem0
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: metagpt
     model: ai/agent
     repo: https://github.com/geekan/MetaGPT
@@ -930,7 +930,7 @@ projects:
     model: ai/agent
     repo: https://github.com/MervinPraison/PraisonAI
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: pydantic-ai
     model: ai/agent
     repo: https://github.com/pydantic/pydantic-ai
@@ -940,17 +940,17 @@ projects:
     model: ai/agent
     repo: https://github.com/microsoft/semantic-kernel
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: semantic-router
     model: ai/agent
     repo: https://github.com/aurelio-labs/semantic-router
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: skyvern
     model: ai/agent
     repo: https://github.com/Skyvern-AI/skyvern
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: smolagents
     model: ai/agent
     repo: https://github.com/huggingface/smolagents
@@ -960,7 +960,7 @@ projects:
     model: ai/agent
     repo: https://github.com/browserbase/stagehand
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: swarm
     model: ai/agent
     repo: https://github.com/openai/swarm
@@ -975,32 +975,32 @@ projects:
     model: ai/agent
     repo: https://github.com/SWE-agent/SWE-agent
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: typechat
     model: ai/agent
     repo: https://github.com/microsoft/TypeChat
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: vercel-ai
     model: ai/agent
     repo: https://github.com/vercel/ai
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: candle
     model: ai/llm
     repo: https://github.com/huggingface/candle
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: deepep
     model: ai/llm
     repo: https://github.com/deepseek-ai/DeepEP
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: deepeval
     model: ai/llm
     repo: https://github.com/confident-ai/deepeval
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: deepspeed
     model: ai/llm
     repo: https://github.com/deepspeedai/DeepSpeed
@@ -1010,27 +1010,27 @@ projects:
     model: ai/llm
     repo: https://github.com/stanfordnlp/dspy
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: exllamav2
     model: ai/llm
     repo: https://github.com/turboderp/exllamav2
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: flashinfer
     model: ai/llm
     repo: https://github.com/flashinfer-ai/flashinfer
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: guidance
     model: ai/llm
     repo: https://github.com/guidance-ai/guidance
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: instructor
     model: ai/llm
     repo: https://github.com/instructor-ai/instructor
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: litellm
     model: ai/llm
     repo: https://github.com/BerriAI/litellm
@@ -1050,7 +1050,7 @@ projects:
     model: ai/llm
     repo: https://github.com/LMCache/LMCache
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: lmdeploy
     model: ai/llm
     repo: https://github.com/InternLM/lmdeploy
@@ -1060,7 +1060,7 @@ projects:
     model: ai/llm
     repo: https://github.com/mudler/LocalAI
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: megatron-lm
     model: ai/llm
     repo: https://github.com/NVIDIA/Megatron-LM
@@ -1070,12 +1070,12 @@ projects:
     model: ai/llm
     repo: https://github.com/mlc-ai/mlc-llm
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: mlx
     model: ai/llm
     repo: https://github.com/ml-explore/mlx
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ollama
     model: ai/llm
     repo: https://github.com/ollama/ollama
@@ -1085,22 +1085,22 @@ projects:
     model: ai/llm
     repo: https://github.com/microsoft/onnxruntime-genai
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: outlines
     model: ai/llm
     repo: https://github.com/dottxt-ai/outlines
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: peft
     model: ai/llm
     repo: https://github.com/huggingface/peft
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: promptfoo
     model: ai/llm
     repo: https://github.com/promptfoo/promptfoo
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: sglang
     model: ai/llm
     repo: https://github.com/sgl-project/sglang
@@ -1110,12 +1110,12 @@ projects:
     model: ai/llm
     repo: https://github.com/dphnAI/sonar
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tensorrt-llm
     model: ai/llm
     repo: https://github.com/NVIDIA/TensorRT-LLM
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: tgi
     model: ai/llm
     repo: https://github.com/huggingface/text-generation-inference
@@ -1130,7 +1130,7 @@ projects:
     model: ai/llm
     repo: https://github.com/huggingface/transformers
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: triton-server
     model: ai/llm
     repo: https://github.com/triton-inference-server/server
@@ -1145,7 +1145,7 @@ projects:
     model: ai/llm
     repo: https://github.com/xorbitsai/inference
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: anythingllm
     model: ai/rag
     repo: https://github.com/Mintplex-Labs/anything-llm
@@ -1160,17 +1160,17 @@ projects:
     model: ai/rag
     repo: https://github.com/stanford-futuredata/ColBERT
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: dify
     model: ai/rag
     repo: https://github.com/langgenius/dify
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
+    state: gates-pass
+    next_action: 待阶段 0B 扩展后入 wiki-rag
   - slug: docling
     model: ai/rag
     repo: https://github.com/docling-project/docling
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: embedchain
     model: ai/rag
     repo: https://github.com/embedchain/embedchain
@@ -1185,22 +1185,22 @@ projects:
     model: ai/rag
     repo: https://github.com/RUC-NLPIR/FlashRAG
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: flashrank
     model: ai/rag
     repo: https://github.com/PrithivirajDamodaran/FlashRank
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: giskard
     model: ai/rag
     repo: https://github.com/Giskard-AI/giskard
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: graphiti
     model: ai/rag
     repo: https://github.com/getzep/graphiti
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: graphrag
     model: ai/rag
     repo: https://github.com/microsoft/graphrag
@@ -1216,17 +1216,17 @@ projects:
     model: ai/rag
     repo: https://github.com/OSU-NLP-Group/HippoRAG
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: infinity
     model: ai/rag
     repo: https://github.com/michaelfeil/infinity
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: kag
     model: ai/rag
     repo: https://github.com/OpenSPG/KAG
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: kotaemon
     model: ai/rag
     repo: https://github.com/Cinnamon/kotaemon
@@ -1241,7 +1241,7 @@ projects:
     model: ai/rag
     repo: https://github.com/langfuse/langfuse
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: lightrag
     model: ai/rag
     repo: https://github.com/HKUDS/LightRAG
@@ -1256,12 +1256,12 @@ projects:
     model: ai/rag
     repo: https://github.com/datalab-to/marker
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: mineru
     model: ai/rag
     repo: https://github.com/opendatalab/MinerU
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: onyx
     model: ai/rag
     repo: https://github.com/onyx-dot-app/onyx
@@ -1276,12 +1276,12 @@ projects:
     model: ai/rag
     repo: https://github.com/langflow-ai/openrag
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: phoenix
     model: ai/rag
     repo: https://github.com/Arize-ai/phoenix
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: private-gpt
     model: ai/rag
     repo: https://github.com/zylon-ai/private-gpt
@@ -1291,7 +1291,7 @@ projects:
     model: ai/rag
     repo: https://github.com/castorini/pyserini
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: qanything
     model: ai/rag
     repo: https://github.com/netease-youdao/QAnything
@@ -1311,7 +1311,7 @@ projects:
     model: ai/rag
     repo: https://github.com/HKUDS/RAG-Anything
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ragas
     model: ai/rag
     repo: https://github.com/vibrantlabsai/ragas
@@ -1321,12 +1321,12 @@ projects:
     model: ai/rag
     repo: https://github.com/AnswerDotAI/RAGatouille
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ragchecker
     model: ai/rag
     repo: https://github.com/amazon-science/RAGChecker
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: ragflow
     model: ai/rag
     repo: https://github.com/infiniflow/ragflow
@@ -1341,12 +1341,12 @@ projects:
     model: ai/rag
     repo: https://github.com/Unstructured-IO/unstructured
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: vanna
     model: ai/rag
     repo: https://github.com/vanna-ai/vanna
     state: planned
-    next_action: 待取真实 GitHub metadata 后合并 catalog
+    next_action: 待源码盘点与机制 wiki 生产
   - slug: verba
     model: ai/rag
     repo: https://github.com/weaviate/verba

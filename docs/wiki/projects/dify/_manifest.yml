@@ -1,0 +1,512 @@
+---
+project: dify
+schema_version: 1
+pages:
+  - feature: app-runner
+    feature_group: A-应用形态与编排
+    title: 应用执行器骨架
+    page_file: a01-app-runner.md
+    refs:
+      - path: api/core/app/apps/base_app_runner.py
+        symbols: [AppRunner]
+      - path: api/core/app/apps/execution_coordinator.py
+        symbols: [AppExecutionCoordinator, AppExecutionState]
+      - path: api/core/app/apps/base_app_queue_manager.py
+        symbols: [AppQueueManager]
+  - feature: app-generator
+    feature_group: A-应用形态与编排
+    title: 应用响应生成与流式转换
+    page_file: a02-app-generator.md
+    refs:
+      - path: api/core/app/apps/base_app_generator.py
+        symbols: [BaseAppGenerator]
+      - path: api/core/app/apps/base_app_generate_response_converter.py
+        symbols: [AppGenerateResponseConverter]
+  - feature: workflow-app
+    feature_group: A-应用形态与编排
+    title: 工作流应用形态
+    page_file: a03-workflow-app.md
+    refs:
+      - path: api/core/app/apps/workflow/app_runner.py
+        symbols: [WorkflowAppRunner]
+      - path: api/core/app/apps/workflow/app_generator.py
+        symbols: [WorkflowAppGenerator]
+      - path: api/core/app/apps/workflow/active_workflow_tasks.py
+        symbols: [active_workflow_task]
+  - feature: chat-apps
+    feature_group: A-应用形态与编排
+    title: 对话与补全形态
+    page_file: a04-chat-apps.md
+    refs:
+      - path: api/core/app/apps/chat/app_runner.py
+        symbols: [ChatAppRunner]
+      - path: api/core/app/apps/completion/app_runner.py
+        symbols: [CompletionAppRunner]
+      - path: api/core/app/apps/advanced_chat/generate_task_pipeline.py
+        symbols: [AdvancedChatAppGenerateTaskPipeline, WorkflowSnapshot]
+  - feature: agent-app
+    feature_group: A-应用形态与编排
+    title: Agent 应用形态
+    page_file: a05-agent-app.md
+    refs:
+      - path: api/core/app/apps/agent_app/app_runner.py
+        symbols: [AgentAppRunner, _TextDeltaDebouncer]
+      - path: api/core/app/apps/agent_app/app_generator.py
+        symbols: [AgentAppGenerator]
+  - feature: app-config
+    feature_group: A-应用形态与编排
+    title: 应用配置与模型参数
+    page_file: a06-app-config.md
+    refs:
+      - path: api/core/app/app_config/entities.py
+        symbols: [ModelConfigEntity]
+      - path: api/models/model.py
+        symbols: [EnabledConfig, EmbeddingModelInfo]
+      - path: api/models/model.py
+        symbols: [AnnotationReplyDisabledConfig]
+  - feature: workflow-response
+    feature_group: A-应用形态与编排
+    title: 工作流响应转换
+    page_file: a07-workflow-response.md
+    refs:
+      - path: api/core/app/apps/common/workflow_response_converter.py
+        symbols: [WorkflowResponseConverter]
+  - feature: workflow-entry
+    feature_group: B-工作流图与节点
+    title: 工作流入口与图引擎边界
+    page_file: b01-workflow-entry.md
+    refs:
+      - path: api/core/workflow/workflow_entry.py
+        symbols: [WorkflowEntry, iter_dify_graph_engine_events]
+      - path: api/core/workflow/graph_topology.py
+        symbols: [WorkflowGraphTopology]
+  - feature: node-factory
+    feature_group: B-工作流图与节点
+    title: 节点工厂与类型注册
+    page_file: b02-node-factory.md
+    refs:
+      - path: api/core/workflow/node_factory.py
+        symbols: [DifyNodeFactory, resolve_workflow_node_class, register_nodes]
+      - path: api/core/workflow/node_factory.py
+        symbols: [_LazyNodeTypeClassesMapping, is_start_node_type]
+  - feature: llm-node
+    feature_group: B-工作流图与节点
+    title: LLM 节点与模型环境变量
+    page_file: b03-llm-node.md
+    refs:
+      - path: api/core/workflow/llm_node.py
+        symbols: [DifyLLMNode]
+      - path: api/core/workflow/llm_environment_variable.py
+        symbols: [LLMEnvironmentVariable, LLMModelSelection]
+      - path: api/core/workflow/llm_environment_variable.py
+        symbols: [resolve_llm_model_config]
+  - feature: agent-nodes
+    feature_group: B-工作流图与节点
+    title: 两代 Agent 节点
+    page_file: b04-agent-nodes.md
+    refs:
+      - path: api/core/workflow/nodes/agent/agent_node.py
+        symbols: [AgentNode]
+      - path: api/core/workflow/nodes/agent_v2/agent_node.py
+        symbols: [DifyAgentNode]
+      - path: api/core/workflow/nodes/agent_v2/dify_tools_builder.py
+        symbols: [ProviderToolsLister, MCPProviderIDResolver]
+      - path: api/core/workflow/nodes/agent_v2/output_adapter.py
+        symbols: [WorkflowAgentOutputAdapter, ToolFileRebacker]
+  - feature: knowledge-nodes
+    feature_group: B-工作流图与节点
+    title: 知识检索与知识索引节点
+    page_file: b05-knowledge-nodes.md
+    refs:
+      - path: api/core/workflow/nodes/knowledge_retrieval/knowledge_retrieval_node.py
+        symbols: [KnowledgeRetrievalNode]
+      - path: api/core/workflow/nodes/knowledge_retrieval/retrieval.py
+        symbols: [KnowledgeRetrievalRequest, RAGRetrievalProtocol]
+      - path: api/core/workflow/nodes/knowledge_index/knowledge_index_node.py
+        symbols: [KnowledgeIndexNode]
+  - feature: human-input
+    feature_group: B-工作流图与节点
+    title: 人工介入：两代实现与表单编译
+    page_file: b06-human-input.md
+    refs:
+      - path: api/core/workflow/nodes/human_input/callback.py
+        symbols: [DifyHITLCallback]
+      - path: api/core/workflow/nodes/human_input/entities.py
+        symbols: [ParagraphInputConfig, StringSource]
+      - path: api/core/workflow/nodes/human_input/enums.py
+        symbols: [HumanInputFormStatus, FormInputType]
+      - path: api/core/workflow/nodes/human_input_v2/node.py
+        symbols: [HumanInputNode]
+  - feature: trigger-nodes
+    feature_group: B-工作流图与节点
+    title: 触发器节点
+    page_file: b07-trigger-nodes.md
+    refs:
+      - path: api/core/workflow/nodes/trigger_webhook/node.py
+        symbols: [TriggerWebhookNode]
+      - path: api/core/workflow/nodes/trigger_webhook/entities.py
+        symbols: [WebhookParameter, WebhookBodyParameter]
+      - path: api/core/workflow/nodes/trigger_schedule/trigger_schedule_node.py
+        symbols: [TriggerScheduleNode]
+      - path: api/core/workflow/nodes/trigger_plugin/trigger_event_node.py
+        symbols: [TriggerEventNode]
+  - feature: node-runtime
+    feature_group: B-工作流图与节点
+    title: 节点运行时装配与变量池
+    page_file: b08-node-runtime.md
+    refs:
+      - path: api/core/workflow/node_runtime.py
+        symbols: [DifyPreparedLLM, DifyRetrieverAttachmentLoader]
+      - path: api/core/workflow/system_variables.py
+        symbols: [SystemVariableKey, build_system_variables]
+      - path: api/core/workflow/file_reference.py
+        symbols: [FileReference, build_file_reference]
+      - path: api/core/workflow/nodes/datasource/datasource_node.py
+        symbols: [DatasourceNode]
+  - feature: workflow-generator
+    feature_group: C-工作流生成器
+    title: 工作流自动生成器
+    page_file: c01-workflow-generator.md
+    refs:
+      - path: api/core/workflow/generator/runner.py
+        symbols: [WorkflowGenerator]
+      - path: api/core/workflow/generator/types.py
+        symbols: [WorkflowGenerateErrorCode, PlannerNodeDict]
+  - feature: tool-catalogue
+    feature_group: C-工作流生成器
+    title: 工具候选与能力查询
+    page_file: c02-tool-catalogue.md
+    refs:
+      - path: api/core/workflow/generator/tool_catalogue.py
+        symbols: [ToolCatalogueEntry, ToolCapabilityQuery, ToolCandidateSelection]
+      - path: api/core/workflow/generator/tool_catalogue.py
+        symbols: [LegacyToolFallbackSelection]
+  - feature: app-pipeline
+    feature_group: C-工作流生成器
+    title: 流水线应用与 DSL 校验
+    page_file: c03-app-pipeline.md
+    refs:
+      - path: api/core/app/apps/pipeline/pipeline_generator.py
+        symbols: [PipelineGenerator, PipelineFileAdmission]
+      - path: api/services/workflow/graph_check.py
+        symbols: [GraphIssue, IssueCode, IssueSeverity]
+      - path: api/services/workflow/graph_diff.py
+        symbols: [WorkflowDiff, NodeChange]
+  - feature: extract-processor
+    feature_group: D-RAG 摄取与索引
+    title: 文档抽取分派
+    page_file: d01-extract-processor.md
+    refs:
+      - path: api/core/rag/extractor/extract_processor.py
+        symbols: [ExtractProcessor]
+  - feature: text-splitter
+    feature_group: D-RAG 摄取与索引
+    title: 递归字符切分与增强
+    page_file: d02-text-splitter.md
+    refs:
+      - path: api/core/rag/splitter/fixed_text_splitter.py
+        symbols: [FixedRecursiveCharacterTextSplitter, EnhanceRecursiveCharacterTextSplitter]
+  - feature: index-processor
+    feature_group: D-RAG 摄取与索引
+    title: 索引处理器工厂与基类
+    page_file: d03-index-processor.md
+    refs:
+      - path: api/core/rag/index_processor/index_processor.py
+        symbols: [IndexProcessorFactory, IndexProcessor]
+      - path: api/core/rag/index_processor/index_processor_base.py
+        symbols: [BaseIndexProcessor]
+  - feature: paragraph-index
+    feature_group: D-RAG 摄取与索引
+    title: 段落索引处理器
+    page_file: d04-paragraph-index.md
+    refs:
+      - path: api/core/rag/index_processor/processor/paragraph_index_processor.py
+        symbols: [ParagraphIndexProcessor]
+  - feature: parent-child-index
+    feature_group: D-RAG 摄取与索引
+    title: 父子分块索引处理器
+    page_file: d05-parent-child-index.md
+    refs:
+      - path: api/core/rag/index_processor/processor/parent_child_index_processor.py
+        symbols: [ParentChildIndexProcessor]
+  - feature: qa-index
+    feature_group: D-RAG 摄取与索引
+    title: 问答对索引处理器
+    page_file: d06-qa-index.md
+    refs:
+      - path: api/core/rag/index_processor/processor/qa_index_processor.py
+        symbols: [QAIndexProcessor]
+  - feature: vector-store
+    feature_group: E-RAG 检索与后处理
+    title: 向量库工厂与懒加载
+    page_file: e01-vector-store.md
+    refs:
+      - path: api/core/rag/datasource/vdb/vector_factory.py
+        symbols: [AbstractVectorFactory, Vector]
+      - path: api/core/rag/datasource/vdb/vector_type.py
+        symbols: [VectorType]
+  - feature: embedding-cache
+    feature_group: E-RAG 检索与后处理
+    title: 嵌入缓存
+    page_file: e02-embedding-cache.md
+    refs:
+      - path: api/core/rag/embedding/cached_embedding.py
+        symbols: [CacheEmbedding]
+  - feature: dataset-retrieval
+    feature_group: E-RAG 检索与后处理
+    title: 知识库检索编排
+    page_file: e03-dataset-retrieval.md
+    refs:
+      - path: api/core/rag/retrieval/dataset_retrieval.py
+        symbols: [DatasetRetrieval]
+      - path: api/core/rag/retrieval/retrieval_methods.py
+        symbols: [RetrievalMethod]
+  - feature: retrieval-service
+    feature_group: E-RAG 检索与后处理
+    title: 单库检索服务
+    page_file: e04-retrieval-service.md
+    refs:
+      - path: api/core/rag/datasource/retrieval_service.py
+        symbols: [SegmentRecord, DefaultRetrievalModelDict]
+      - path: api/core/rag/docstore/dataset_docstore.py
+        symbols: [DatasetDocumentStore]
+  - feature: rerank-and-post
+    feature_group: E-RAG 检索与后处理
+    title: 重排与后处理
+    page_file: e05-rerank-and-post.md
+    refs:
+      - path: api/core/rag/rerank/rerank_model.py
+        symbols: [RerankModelRunner]
+      - path: api/core/rag/summary_index/summary_index.py
+        symbols: [SummaryIndex]
+  - feature: plugin-service
+    feature_group: F-插件与工具
+    title: 插件服务与守护进程通信
+    page_file: f01-plugin-service.md
+    refs:
+      - path: api/core/plugin/plugin_service.py
+        symbols: [PluginService, _RedisLock]
+      - path: api/core/plugin/impl/base.py
+        symbols: [BasePluginClient]
+  - feature: plugin-capabilities
+    feature_group: F-插件与工具
+    title: 插件提供的四类能力
+    page_file: f02-plugin-capabilities.md
+    refs:
+      - path: api/core/plugin/impl/model.py
+        symbols: [PluginModelClient]
+      - path: api/core/plugin/impl/tool.py
+        symbols: [PluginToolManager]
+      - path: api/core/plugin/impl/datasource.py
+        symbols: [PluginDatasourceManager]
+      - path: api/core/plugin/impl/agent.py
+        symbols: [PluginAgentClient]
+  - feature: plugin-backwards
+    feature_group: F-插件与工具
+    title: 反向调用
+    page_file: f03-plugin-backwards.md
+    refs:
+      - path: api/core/plugin/backwards_invocation/model.py
+        symbols: [PluginModelBackwardsInvocation]
+      - path: api/core/plugin/backwards_invocation/tool.py
+        symbols: [PluginToolBackwardsInvocation]
+  - feature: tool-manager
+    feature_group: F-插件与工具
+    title: 工具管理器与凭据解析
+    page_file: f04-tool-manager.md
+    refs:
+      - path: api/core/tools/tool_manager.py
+        symbols: [ToolManager, ToolCredentialResolver, WorkflowToolRuntimeSpec]
+      - path: api/core/tools/entities/tool_entities.py
+        symbols: [ToolProviderType, ApiProviderSchemaType]
+  - feature: workflow-as-tool
+    feature_group: F-插件与工具
+    title: 工作流即工具
+    page_file: f05-workflow-as-tool.md
+    refs:
+      - path: api/core/tools/workflow_as_tool/tool.py
+        symbols: [WorkflowTool]
+      - path: api/core/workflow/workflow_tool_node.py
+        symbols: [DifyWorkflowToolNode]
+      - path: api/core/workflow/workflow_tool_container_handler.py
+        symbols: [WorkflowToolContainerHandler]
+  - feature: agent-runners
+    feature_group: G-Agent 与 MCP
+    title: Agent 执行器族
+    page_file: g01-agent-runners.md
+    refs:
+      - path: api/core/agent/base_agent_runner.py
+        symbols: [BaseAgentRunner]
+      - path: api/core/agent/fc_agent_runner.py
+        symbols: [FunctionCallAgentRunner]
+      - path: api/core/agent/cot_agent_runner.py
+        symbols: [CotAgentRunner]
+  - feature: dify-agent-runtime
+    feature_group: G-Agent 与 MCP
+    title: 外部 Agent 运行时
+    page_file: g02-dify-agent-runtime.md
+    refs:
+      - path: dify-agent/src/dify_agent/runtime/runner.py
+        symbols: [AgentRunRunner, AgentRunValidationError]
+      - path: dify-agent/src/dify_agent/protocol/__init__.py
+        symbols: [__all__]
+  - feature: agent-layers
+    feature_group: G-Agent 与 MCP
+    title: Agent 能力分层
+    page_file: g03-agent-layers.md
+    refs:
+      - path: dify-agent/src/dify_agent/layers/__init__.py
+        symbols: [__all__]
+      - path: dify-agent/src/dify_agent/runtime/modules.py
+        symbols: [load_modules, create_modules, REGISTRY]
+  - feature: mcp-client
+    feature_group: G-Agent 与 MCP
+    title: MCP 客户端与传输
+    page_file: g04-mcp-client.md
+    refs:
+      - path: api/core/mcp/mcp_client.py
+        symbols: [MCPClient]
+      - path: api/core/mcp/client/streamable_client.py
+        symbols: [StreamableHTTPTransport, StreamableHTTPError]
+      - path: api/core/mcp/session/client_session.py
+        symbols: [ClientSession]
+  - feature: mcp-auth
+    feature_group: G-Agent 与 MCP
+    title: MCP 授权流程
+    page_file: g05-mcp-auth.md
+    refs:
+      - path: api/core/mcp/auth/auth_flow.py
+        symbols: [generate_pkce_challenge, discover_protected_resource_metadata]
+      - path: api/core/mcp/auth/auth_flow.py
+        symbols: [discover_oauth_authorization_server_metadata]
+  - feature: mcp-server
+    feature_group: G-Agent 与 MCP
+    title: MCP 服务端
+    page_file: g06-mcp-server.md
+    refs:
+      - path: api/core/mcp/server/streamable_http.py
+        symbols: [handle_mcp_request, handle_call_tool, build_parameter_schema]
+      - path: api/core/mcp/types.py
+        symbols: [Request, Notification, Result]
+  - feature: knowledge-service
+    feature_group: H-服务与仓储
+    title: 知识库与文档服务
+    page_file: h01-knowledge-service.md
+    refs:
+      - path: api/services/knowledge/dataset_service.py
+        symbols: [DatasetService, DocumentService]
+  - feature: knowledge-fs
+    feature_group: H-服务与仓储
+    title: 知识文件系统与后台引擎
+    page_file: h02-knowledge-fs.md
+    refs:
+      - path: api/services/knowledge_fs/background_engine.py
+        symbols: [KnowledgeFSBackgroundEngine]
+  - feature: rag-pipeline-service
+    feature_group: H-服务与仓储
+    title: RAG 流水线服务
+    page_file: h03-rag-pipeline-service.md
+    refs:
+      - path: api/services/rag_pipeline/rag_pipeline.py
+        symbols: [RagPipelineService]
+      - path: api/services/rag_pipeline/rag_pipeline_dsl_service.py
+        symbols: [RagPipelineDslService, CURRENT_DSL_VERSION]
+  - feature: rbac-and-tools-service
+    feature_group: H-服务与仓储
+    title: 权限与工具管理服务
+    page_file: h04-rbac-and-tools-service.md
+    refs:
+      - path: api/services/rbac/builtin.py
+        symbols: [builtin_member_roles, builtin_permissions]
+      - path: api/services/rbac/contracts.py
+        symbols: [Paginated, MembersInRole]
+      - path: api/services/tools/builtin_tools_manage_service.py
+        symbols: [BuiltinToolManageService]
+      - path: api/services/tools/mcp_tools_manage_service.py
+        symbols: [ReconnectResult, OAuthDataType]
+  - feature: repositories
+    feature_group: H-服务与仓储
+    title: 仓储工厂与持久化模型
+    page_file: h05-repositories.md
+    refs:
+      - path: api/repositories/factory.py
+        symbols: [DifyAPIRepositoryFactory]
+      - path: api/models/dataset.py
+        symbols: [ProcessRuleDict, build_built_in_field_values]
+  - feature: tracing-and-evaluation
+    feature_group: H-服务与仓储
+    title: 追踪与评测
+    page_file: h06-tracing-and-evaluation.md
+    refs:
+      - path: api/services/tracing/canonical.py
+        symbols: [CanonicalTraceBuilder]
+      - path: api/core/evaluation/evaluation_manager.py
+        symbols: [EvaluationManager]
+      - path: api/core/evaluation/frameworks/ragas/ragas_evaluator.py
+        symbols: [RagasEvaluator]
+      - path: api/core/evaluation/frameworks/deepeval/deepeval_evaluator.py
+        symbols: [DeepEvalEvaluator]
+  - feature: model-provider
+    feature_group: I-运行时支撑与部署
+    title: 模型提供方服务
+    page_file: i01-model-provider.md
+    refs:
+      - path: api/services/model_provider/service.py
+        symbols: [ModelProviderService]
+  - feature: configs
+    feature_group: I-运行时支撑与部署
+    title: 配置装配
+    page_file: i02-configs.md
+    refs:
+      - path: api/configs/middleware/__init__.py
+        symbols: [StorageConfig, VectorStoreConfig, DatabaseConfig]
+      - path: api/configs/feature/__init__.py
+        symbols: [AppExecutionConfig, PluginConfig]
+  - feature: async-tasks
+    feature_group: I-运行时支撑与部署
+    title: 异步任务与工作流执行任务
+    page_file: i03-async-tasks.md
+    refs:
+      - path: api/tasks/app_generate/workflow_execute_task.py
+        symbols: [_publish_failed_workflow_terminal_events, _resolve_user_for_run]
+      - path: api/tasks/async_workflow_tasks.py
+        symbols: [execute_workflow_professional, resume_workflow_execution]
+  - feature: celery-and-blueprints
+    feature_group: I-运行时支撑与部署
+    title: Celery 与蓝图装配
+    page_file: i04-celery-and-blueprints.md
+    refs:
+      - path: api/extensions/ext_celery.py
+        symbols: [CelerySSLOptionsDict]
+      - path: api/extensions/ext_blueprints.py
+        symbols: [init_app]
+  - feature: storage-and-human-input-delivery
+    feature_group: I-运行时支撑与部署
+    title: 存储后端与人工介入投递
+    page_file: i05-storage-and-human-input-delivery.md
+    refs:
+      - path: api/extensions/storage/base_storage.py
+        symbols: [BaseStorage]
+      - path: api/core/human_input_v2/im_integration/__init__.py
+        symbols: [IMSyncRepository, OpaqueProviderPayload]
+  - feature: observability
+    feature_group: I-运行时支撑与部署
+    title: 日志存储与可观测性
+    page_file: i06-observability.md
+    refs:
+      - path: api/extensions/logstore/aliyun_logstore.py
+        symbols: [AliyunLogStore]
+      - path: api/extensions/logstore/sql_escape.py
+        symbols: [escape_logstore_query_value, escape_identifier]
+  - feature: controllers
+    feature_group: I-运行时支撑与部署
+    title: 控制器分层与鉴权包装
+    page_file: i07-controllers.md
+    refs:
+      - path: api/controllers/console/__init__.py
+        symbols: [_register_controllers]
+      - path: api/controllers/openapi/__init__.py
+        symbols: [_OpenApi]
+      - path: api/controllers/service_api/wraps.py
+        symbols: [validate_app_token, FetchUserArg]
+---

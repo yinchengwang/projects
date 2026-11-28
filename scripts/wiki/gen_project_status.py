@@ -15,7 +15,6 @@ HERE = Path(__file__).resolve().parent
 PROJECTS_ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 
-from candidate_slate import parse_review
 from wiki_catalog import parse_catalog
 
 CATALOG_PATH = PROJECTS_ROOT / "docs" / "wiki" / "catalog-projects.yml"
@@ -51,6 +50,7 @@ GATES_PASS_PROJECTS = {
     "graphrag": "待阶段 0B 扩展后入 wiki-rag",
     "ragas": "待阶段 0B 扩展后入 wiki-rag",
     "ragflow": "待阶段 0B 扩展后入 wiki-rag",
+    "dify": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"
@@ -83,7 +83,6 @@ def _wiki_dir_for(name):
 
 def build_entries():
     catalog = parse_catalog(CATALOG_PATH.read_text(encoding="utf-8"))
-    candidates = parse_review(REVIEW_PATH)
 
     entries = []
     for item in catalog:
@@ -105,16 +104,8 @@ def build_entries():
             "_model": item["model"],
         })
 
-    for item in candidates:
-        entries.append({
-            "slug": item["name"],
-            "repo": item["repo"],
-            "state": "planned",
-            "next_action": "待取真实 GitHub metadata 后合并 catalog",
-            "aliases": [],
-            "_model": item["model"],
-        })
-    # 候选里若出现已由 wiki 项目占用的 slug，视为冲突需人工裁定，此处不静默合并。
+    # 候选矩阵已于 2026-11-29 并入 catalog（118 条全部入册），因此账本只按
+    # catalog 逐条生成；再按候选追加会造成 slug/repo 重复。
     return entries
 
 

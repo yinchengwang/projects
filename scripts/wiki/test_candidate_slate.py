@@ -4,7 +4,7 @@
 守住三个语义边界：
 1. 从 review markdown 解析出的候选数必须等于 118（DB 54 + AI 64）；
 2. 每条候选都有 name / model / repo 三个字段，且 repo 是 GitHub URL；
-3. 候选名称与规范化 repo 在整批内唯一，且不与现有 catalog 冲突。
+3. 候选名称与规范化 repo 在整批内唯一，且已全部并入 catalog（同名同 repo）。
 """
 import os
 import sys
@@ -49,13 +49,27 @@ class TestParseReview(unittest.TestCase):
         repos = [normalize_repo(e["repo"]) for e in parse_review(REVIEW_PATH)]
         self.assertEqual(len(repos), len(set(repos)))
 
-    def test_no_conflict_with_catalog(self):
+    def test_candidates_are_merged_into_catalog(self):
+        """候选矩阵已于 2026-11-29 并入 catalog，所以现在是「必须在册」而不是「不得冲突」。
+
+        合并前这个测试守的是「候选与既有 catalog 零 name/repo 冲突」；合并后
+        同一批候选的 repo 必然出现在 catalog 里，于是断言方向必须反过来：
+        每条候选都要能在 catalog 里找到同名同 repo 的条目。
+        """
         catalog = parse_catalog(CATALOG_PATH.read_text(encoding="utf-8"))
-        names = {e["name"].lower() for e in catalog}
-        repos = {normalize_repo(e["repo"]) for e in catalog}
+        names = {e["name"].lower(): e for e in catalog}
+        repos = {normalize_repo(e["repo"]): e for e in catalog}
         for entry in parse_review(REVIEW_PATH):
-            self.assertNotIn(entry["name"].lower(), names, entry)
-            self.assertNotIn(normalize_repo(entry["repo"]), repos, entry)
+            by_name = names.get(entry["name"].lower())
+            self.assertIsNotNone(by_name, entry)
+            self.assertEqual(normalize_repo(by_name["repo"]), normalize_repo(entry["repo"]), entry)
+            self.assertIn(normalize_repo(entry["repo"]), repos, entry)
+
+    def test_catalog_entry_count(self):
+        """catalog 目标 270 项；剔除失效条目后由替补补齐。"""
+        catalog = parse_catalog(CATALOG_PATH.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(catalog), 268)
+        self.assertLessEqual(len(catalog), 270)
 
 
 if __name__ == "__main__":

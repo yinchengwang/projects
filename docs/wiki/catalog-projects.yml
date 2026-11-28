@@ -543,14 +543,6 @@ projects:
     language: Python
     stars: 5752
     stars_as_of: 2026-11-23
-  - name: db-bench
-    model: benchmark
-    tier: T2
-    repo: https://github.com/wagjamin/db-bench
-    license: NOASSERTION
-    language: Python
-    stars: 0
-    stars_as_of: 2026-11-23
   - name: tpcds
     model: benchmark
     tier: T2
@@ -1111,14 +1103,6 @@ projects:
     language: C++
     stars: 27014
     stars_as_of: 2026-11-22
-  - name: pklite
-    model: embedded
-    tier: T3
-    repo: https://github.com/nicholasgasior/pklite
-    license: MIT
-    language: unknown
-    stars: 0
-    stars_as_of: 1970-01-01
   - name: age
     model: extension
     tier: T3
@@ -1215,3 +1199,963 @@ projects:
     language: Go
     stars: 1736
     stars_as_of: 2026-11-23
+  - name: derby
+    model: relational
+    tier: T2
+    repo: https://github.com/apache/derby
+    license: Apache-2.0
+    language: Java
+    stars: 379
+    stars_as_of: 2026-11-29
+  - name: libsql
+    model: relational
+    tier: T2
+    repo: https://github.com/tursodatabase/libsql
+    license: MIT
+    language: C
+    stars: 17402
+    stars_as_of: 2026-11-29
+  - name: ignite
+    model: relational
+    tier: T2
+    repo: https://github.com/apache/ignite
+    license: Apache-2.0
+    language: Java
+    stars: 5088
+    stars_as_of: 2026-11-29
+  - name: aerospike
+    model: key-value
+    tier: T2
+    repo: https://github.com/aerospike/aerospike-server
+    license: NOASSERTION
+    language: C
+    stars: 1395
+    stars_as_of: 2026-11-29
+  - name: garnet
+    model: key-value
+    tier: T2
+    repo: https://github.com/microsoft/garnet
+    license: MIT
+    language: C#
+    stars: 12108
+    stars_as_of: 2026-11-29
+  - name: memcached
+    model: key-value
+    tier: T2
+    repo: https://github.com/memcached/memcached
+    license: BSD-3-Clause
+    language: C
+    stars: 14316
+    stars_as_of: 2026-11-29
+  - name: tarantool
+    model: key-value
+    tier: T2
+    repo: https://github.com/tarantool/tarantool
+    license: NOASSERTION
+    language: Lua
+    stars: 3687
+    stars_as_of: 2026-11-29
+  - name: infinispan
+    model: key-value
+    tier: T2
+    repo: https://github.com/infinispan/infinispan
+    license: Apache-2.0
+    language: Java
+    stars: 1364
+    stars_as_of: 2026-11-29
+  - name: kudu
+    model: columnar
+    tier: T2
+    repo: https://github.com/apache/kudu
+    license: Apache-2.0
+    language: C++
+    stars: 1919
+    stars_as_of: 2026-11-29
+  - name: monetdb
+    model: columnar
+    tier: T2
+    repo: https://github.com/MonetDB/MonetDB
+    license: MPL-2.0
+    language: C
+    stars: 489
+    stars_as_of: 2026-11-29
+  - name: carbondata
+    model: columnar
+    tier: T2
+    repo: https://github.com/apache/carbondata
+    license: Apache-2.0
+    language: Scala
+    stars: 1452
+    stars_as_of: 2026-11-29
+  - name: hyrise
+    model: columnar
+    tier: T2
+    repo: https://github.com/hyrise/hyrise
+    license: MIT
+    language: C++
+    stars: 871
+    stars_as_of: 2026-11-29
+  - name: apache-impala
+    model: columnar
+    tier: T2
+    repo: https://github.com/apache/impala
+    license: Apache-2.0
+    language: C++
+    stars: 1296
+    stars_as_of: 2026-11-29
+  - name: litedb
+    model: document
+    tier: T2
+    repo: https://github.com/mbdavid/LiteDB
+    license: MIT
+    language: C#
+    stars: 9496
+    stars_as_of: 2026-11-29
+  - name: ejdb
+    model: document
+    tier: T2
+    repo: https://github.com/Softmotions/ejdb
+    license: MIT
+    language: C
+    stars: 1485
+    stars_as_of: 2026-11-29
+  - name: pouchdb
+    model: document
+    tier: T2
+    repo: https://github.com/pouchdb/pouchdb
+    license: Apache-2.0
+    language: JavaScript
+    stars: 17635
+    stars_as_of: 2026-11-29
+  - name: typedb
+    model: graph
+    tier: T2
+    repo: https://github.com/typedb/typedb
+    license: MPL-2.0
+    language: Rust
+    stars: 4533
+    stars_as_of: 2026-11-29
+  - name: terminusdb
+    model: graph
+    tier: T2
+    repo: https://github.com/terminusdb/terminusdb
+    license: Apache-2.0
+    language: Prolog
+    stars: 3497
+    stars_as_of: 2026-11-29
+  - name: orientdb
+    model: graph
+    tier: T2
+    repo: https://github.com/orientechnologies/orientdb
+    license: Apache-2.0
+    language: Java
+    stars: 5003
+    stars_as_of: 2026-11-29
+  - name: bleve
+    model: search
+    tier: T2
+    repo: https://github.com/blevesearch/bleve
+    license: Apache-2.0
+    language: Go
+    stars: 11262
+    stars_as_of: 2026-11-29
+  - name: sonic
+    model: search
+    tier: T2
+    repo: https://github.com/valeriansaliou/sonic
+    license: MPL-2.0
+    language: Rust
+    stars: 21397
+    stars_as_of: 2026-11-29
+  - name: rabbitmq-server
+    model: stream
+    tier: T2
+    repo: https://github.com/rabbitmq/rabbitmq-server
+    license: NOASSERTION
+    language: JavaScript
+    stars: 13986
+    stars_as_of: 2026-11-29
+  - name: apache-artemis
+    model: stream
+    tier: T2
+    repo: https://github.com/apache/artemis
+    license: Apache-2.0
+    language: Java
+    stars: 1073
+    stars_as_of: 2026-11-29
+  - name: bookkeeper
+    model: stream
+    tier: T2
+    repo: https://github.com/apache/bookkeeper
+    license: Apache-2.0
+    language: Java
+    stars: 2020
+    stars_as_of: 2026-11-29
+  - name: zookeeper
+    model: stream
+    tier: T2
+    repo: https://github.com/apache/zookeeper
+    license: Apache-2.0
+    language: Java
+    stars: 12837
+    stars_as_of: 2026-11-29
+  - name: m3
+    model: time-series
+    tier: T2
+    repo: https://github.com/m3db/m3
+    license: Apache-2.0
+    language: Go
+    stars: 4910
+    stars_as_of: 2026-11-29
+  - name: openobserve
+    model: time-series
+    tier: T2
+    repo: https://github.com/openobserve/openobserve
+    license: AGPL-3.0
+    language: TypeScript
+    stars: 23201
+    stars_as_of: 2026-11-29
+  - name: diskann
+    model: vector
+    tier: T2
+    repo: https://github.com/microsoft/DiskANN
+    license: MIT
+    language: Rust
+    stars: 1979
+    stars_as_of: 2026-11-29
+  - name: marqo
+    model: vector
+    tier: T2
+    repo: https://github.com/marqo-ai/marqo
+    license: Apache-2.0
+    language: Python
+    stars: 5025
+    stars_as_of: 2026-11-29
+  - name: vitess
+    model: distributed-sql
+    tier: T2
+    repo: https://github.com/vitessio/vitess
+    license: Apache-2.0
+    language: Go
+    stars: 21438
+    stars_as_of: 2026-11-29
+  - name: shardingsphere
+    model: distributed-sql
+    tier: T2
+    repo: https://github.com/apache/shardingsphere
+    license: Apache-2.0
+    language: Java
+    stars: 20841
+    stars_as_of: 2026-11-29
+  - name: ydb
+    model: distributed-sql
+    tier: T2
+    repo: https://github.com/ydb-platform/ydb
+    license: Apache-2.0
+    language: C++
+    stars: 4792
+    stars_as_of: 2026-11-29
+  - name: citus
+    model: distributed-sql
+    tier: T2
+    repo: https://github.com/citusdata/citus
+    license: AGPL-3.0
+    language: C
+    stars: 12875
+    stars_as_of: 2026-11-29
+  - name: rqlite
+    model: embedded
+    tier: T2
+    repo: https://github.com/rqlite/rqlite
+    license: MIT
+    language: Go
+    stars: 17980
+    stars_as_of: 2026-11-29
+  - name: litefs
+    model: embedded
+    tier: T2
+    repo: https://github.com/superfly/litefs
+    license: Apache-2.0
+    language: Go
+    stars: 4925
+    stars_as_of: 2026-11-29
+  - name: postgis
+    model: extension
+    tier: T2
+    repo: https://github.com/postgis/postgis
+    license: GPL-2.0
+    language: PLpgSQL
+    stars: 2276
+    stars_as_of: 2026-11-29
+  - name: paradedb
+    model: extension
+    tier: T2
+    repo: https://github.com/paradedb/paradedb
+    license: AGPL-3.0
+    language: Rust
+    stars: 9571
+    stars_as_of: 2026-11-29
+  - name: pg-partman
+    model: extension
+    tier: T2
+    repo: https://github.com/pgpartman/pg_partman
+    license: NOASSERTION
+    language: PLpgSQL
+    stars: 2857
+    stars_as_of: 2026-11-29
+  - name: pg-cron
+    model: extension
+    tier: T2
+    repo: https://github.com/citusdata/pg_cron
+    license: PostgreSQL
+    language: C
+    stars: 3928
+    stars_as_of: 2026-11-29
+  - name: pgmq
+    model: extension
+    tier: T2
+    repo: https://github.com/tembo-io/pgmq
+    license: PostgreSQL
+    language: PLpgSQL
+    stars: 5420
+    stars_as_of: 2026-11-29
+  - name: vectorchord
+    model: extension
+    tier: T2
+    repo: https://github.com/tensorchord/VectorChord
+    license: NOASSERTION
+    language: Rust
+    stars: 1848
+    stars_as_of: 2026-11-29
+  - name: pgaudit
+    model: extension
+    tier: T2
+    repo: https://github.com/pgaudit/pgaudit
+    license: NOASSERTION
+    language: C
+    stars: 1734
+    stars_as_of: 2026-11-29
+  - name: pgsodium
+    model: extension
+    tier: T2
+    repo: https://github.com/michelp/pgsodium
+    license: NOASSERTION
+    language: C
+    stars: 619
+    stars_as_of: 2026-11-29
+  - name: pg_ivm
+    model: extension
+    tier: T2
+    repo: https://github.com/sraoss/pg_ivm
+    license: NOASSERTION
+    language: C
+    stars: 1515
+    stars_as_of: 2026-11-29
+  - name: pg_duckdb
+    model: extension
+    tier: T2
+    repo: https://github.com/duckdb/pg_duckdb
+    license: MIT
+    language: C++
+    stars: 3320
+    stars_as_of: 2026-11-29
+  - name: pgroonga
+    model: extension
+    tier: T2
+    repo: https://github.com/pgroonga/pgroonga
+    license: NOASSERTION
+    language: C
+    stars: 763
+    stars_as_of: 2026-11-29
+  - name: pg_tle
+    model: extension
+    tier: T2
+    repo: https://github.com/aws/pg_tle
+    license: Apache-2.0
+    language: C
+    stars: 414
+    stars_as_of: 2026-11-29
+  - name: pglogical
+    model: extension
+    tier: T2
+    repo: https://github.com/2ndQuadrant/pglogical
+    license: NOASSERTION
+    language: C
+    stars: 1244
+    stars_as_of: 2026-11-29
+  - name: ycsb
+    model: benchmark
+    tier: T2
+    repo: https://github.com/brianfrankcooper/YCSB
+    license: Apache-2.0
+    language: Java
+    stars: 5238
+    stars_as_of: 2026-11-29
+  - name: sysbench
+    model: benchmark
+    tier: T2
+    repo: https://github.com/akopytov/sysbench
+    license: GPL-2.0
+    language: C
+    stars: 6818
+    stars_as_of: 2026-11-29
+  - name: benchbase
+    model: benchmark
+    tier: T2
+    repo: https://github.com/cmu-db/benchbase
+    license: NOASSERTION
+    language: Java
+    stars: 686
+    stars_as_of: 2026-11-29
+  - name: hammerdb
+    model: benchmark
+    tier: T2
+    repo: https://github.com/TPC-Council/HammerDB
+    license: GPL-3.0
+    language: Tcl
+    stars: 800
+    stars_as_of: 2026-11-29
+  - name: oltpbench
+    model: benchmark
+    tier: T2
+    repo: https://github.com/oltpbenchmark/oltpbench
+    license: NOASSERTION
+    language: Java
+    stars: 415
+    stars_as_of: 2026-11-29
+  - name: clickbench
+    model: benchmark
+    tier: T2
+    repo: https://github.com/ClickHouse/ClickBench
+    license: NOASSERTION
+    language: Shell
+    stars: 1174
+    stars_as_of: 2026-11-29
+  - name: semantic-kernel
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/microsoft/semantic-kernel
+    license: MIT
+    language: C#
+    stars: 28812
+    stars_as_of: 2026-11-29
+  - name: langroid
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/langroid/langroid
+    license: MIT
+    language: Python
+    stars: 4156
+    stars_as_of: 2026-11-29
+  - name: praisonai
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/MervinPraison/PraisonAI
+    license: MIT
+    language: Python
+    stars: 9556
+    stars_as_of: 2026-11-29
+  - name: agency-swarm
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/VRSEN/agency-swarm
+    license: MIT
+    language: Python
+    stars: 4644
+    stars_as_of: 2026-11-29
+  - name: swe-agent
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/SWE-agent/SWE-agent
+    license: MIT
+    language: Python
+    stars: 20885
+    stars_as_of: 2026-11-29
+  - name: browsergym
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/ServiceNow/BrowserGym
+    license: NOASSERTION
+    language: Python
+    stars: 1449
+    stars_as_of: 2026-11-29
+  - name: stagehand
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/browserbase/stagehand
+    license: MIT
+    language: TypeScript
+    stars: 26173
+    stars_as_of: 2026-11-29
+  - name: skyvern
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/Skyvern-AI/skyvern
+    license: AGPL-3.0
+    language: Python
+    stars: 23557
+    stars_as_of: 2026-11-29
+  - name: lavague
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/lavague-ai/LaVague
+    license: Apache-2.0
+    language: Python
+    stars: 6398
+    stars_as_of: 2026-11-29
+  - name: beeai-framework
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/i-am-bee/beeai-framework
+    license: Apache-2.0
+    language: Python
+    stars: 3460
+    stars_as_of: 2026-11-29
+  - name: burr
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/apache/burr
+    license: Apache-2.0
+    language: Python
+    stars: 2611
+    stars_as_of: 2026-11-29
+  - name: google-adk
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/google/adk-python
+    license: Apache-2.0
+    language: Python
+    stars: 22403
+    stars_as_of: 2026-11-29
+  - name: langflow
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/langflow-ai/langflow
+    license: MIT
+    language: Python
+    stars: 156993
+    stars_as_of: 2026-11-29
+  - name: flowise
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/FlowiseAI/Flowise
+    license: NOASSERTION
+    language: TypeScript
+    stars: 55600
+    stars_as_of: 2026-11-29
+  - name: agentuniverse
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/antgroup/agentUniverse
+    license: Apache-2.0
+    language: Python
+    stars: 2436
+    stars_as_of: 2026-11-29
+  - name: agentlite
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/OSU-NLP-Group/AgentLite
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: aider
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/Aider-AI/aider
+    license: Apache-2.0
+    language: Python
+    stars: 50286
+    stars_as_of: 2026-11-29
+  - name: cline
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/cline/cline
+    license: Apache-2.0
+    language: TypeScript
+    stars: 71970
+    stars_as_of: 2026-11-29
+  - name: mem0
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/mem0ai/mem0
+    license: Apache-2.0
+    language: Python
+    stars: 69585
+    stars_as_of: 2026-11-29
+  - name: typechat
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/microsoft/TypeChat
+    license: MIT
+    language: JavaScript
+    stars: 8695
+    stars_as_of: 2026-11-29
+  - name: vercel-ai
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/vercel/ai
+    license: NOASSERTION
+    language: TypeScript
+    stars: 28264
+    stars_as_of: 2026-11-29
+  - name: ag2
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/ag2ai/ag2
+    license: Apache-2.0
+    language: Python
+    stars: 5092
+    stars_as_of: 2026-11-29
+  - name: mcp-go
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/mark3labs/mcp-go
+    license: MIT
+    language: Go
+    stars: 9255
+    stars_as_of: 2026-11-29
+  - name: semantic-router
+    model: ai/agent
+    tier: T2
+    repo: https://github.com/aurelio-labs/semantic-router
+    license: MIT
+    language: Python
+    stars: 4051
+    stars_as_of: 2026-11-29
+  - name: flashrag
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/RUC-NLPIR/FlashRAG
+    license: MIT
+    language: Python
+    stars: 3625
+    stars_as_of: 2026-11-29
+  - name: rag-anything
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/HKUDS/RAG-Anything
+    license: MIT
+    language: Python
+    stars: 24907
+    stars_as_of: 2026-11-29
+  - name: ragatouille
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/AnswerDotAI/RAGatouille
+    license: Apache-2.0
+    language: Python
+    stars: 3977
+    stars_as_of: 2026-11-29
+  - name: infinity
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/michaelfeil/infinity
+    license: MIT
+    language: C++
+    stars: 2993
+    stars_as_of: 2026-11-29
+  - name: openrag
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/langflow-ai/openrag
+    license: Apache-2.0
+    language: Python
+    stars: 4699
+    stars_as_of: 2026-11-29
+  - name: kag
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/OpenSPG/KAG
+    license: Apache-2.0
+    language: Python
+    stars: 9201
+    stars_as_of: 2026-11-29
+  - name: hipporag
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/OSU-NLP-Group/HippoRAG
+    license: MIT
+    language: Python
+    stars: 4145
+    stars_as_of: 2026-11-29
+  - name: graphiti
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/getzep/graphiti
+    license: Apache-2.0
+    language: Python
+    stars: 33167
+    stars_as_of: 2026-11-29
+  - name: unstructured
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/Unstructured-IO/unstructured
+    license: Apache-2.0
+    language: HTML
+    stars: 15803
+    stars_as_of: 2026-11-29
+  - name: docling
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/docling-project/docling
+    license: MIT
+    language: Python
+    stars: 71167
+    stars_as_of: 2026-11-29
+  - name: marker
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/datalab-to/marker
+    license: Apache-2.0
+    language: Python
+    stars: 41109
+    stars_as_of: 2026-11-29
+  - name: mineru
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/opendatalab/MinerU
+    license: NOASSERTION
+    language: Python
+    stars: 84459
+    stars_as_of: 2026-11-29
+  - name: colbert
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/stanford-futuredata/ColBERT
+    license: MIT
+    language: Python
+    stars: 3964
+    stars_as_of: 2026-11-29
+  - name: pyserini
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/castorini/pyserini
+    license: Apache-2.0
+    language: Python
+    stars: 2239
+    stars_as_of: 2026-11-29
+  - name: flashrank
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/PrithivirajDamodaran/FlashRank
+    license: Apache-2.0
+    language: Python
+    stars: 1015
+    stars_as_of: 2026-11-29
+  - name: vanna
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/vanna-ai/vanna
+    license: MIT
+    language: Python
+    stars: 23781
+    stars_as_of: 2026-11-29
+  - name: giskard
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/Giskard-AI/giskard
+    license: Apache-2.0
+    language: Python
+    stars: 5974
+    stars_as_of: 2026-11-29
+  - name: ragchecker
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/amazon-science/RAGChecker
+    license: Apache-2.0
+    language: Python
+    stars: 1137
+    stars_as_of: 2026-11-29
+  - name: phoenix
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/Arize-ai/phoenix
+    license: NOASSERTION
+    language: Python
+    stars: 12466
+    stars_as_of: 2026-11-29
+  - name: langfuse
+    model: ai/rag
+    tier: T2
+    repo: https://github.com/langfuse/langfuse
+    license: NOASSERTION
+    language: TypeScript
+    stars: 37950
+    stars_as_of: 2026-11-29
+  - name: dspy
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/stanfordnlp/dspy
+    license: MIT
+    language: Python
+    stars: 39282
+    stars_as_of: 2026-11-29
+  - name: instructor
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/instructor-ai/instructor
+    license: MIT
+    language: Python
+    stars: 14151
+    stars_as_of: 2026-11-29
+  - name: promptfoo
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/promptfoo/promptfoo
+    license: MIT
+    language: TypeScript
+    stars: 27785
+    stars_as_of: 2026-11-29
+  - name: deepeval
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/confident-ai/deepeval
+    license: Apache-2.0
+    language: Python
+    stars: 19718
+    stars_as_of: 2026-11-29
+  - name: guidance
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/guidance-ai/guidance
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: outlines
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/dottxt-ai/outlines
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: mlx
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/ml-explore/mlx
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: tensorrt-llm
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/NVIDIA/TensorRT-LLM
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: mlc-llm
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/mlc-ai/mlc-llm
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: exllamav2
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/turboderp/exllamav2
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: sonar
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/dphnAI/sonar
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: localai
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/mudler/LocalAI
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: xinference
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/xorbitsai/inference
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: candle
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/huggingface/candle
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: onnxruntime-genai
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/microsoft/onnxruntime-genai
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: transformers
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/huggingface/transformers
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: peft
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/huggingface/peft
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: flashinfer
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/flashinfer-ai/flashinfer
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: deepep
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/deepseek-ai/DeepEP
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: lmcache
+    model: ai/llm
+    tier: T2
+    repo: https://github.com/LMCache/LMCache
+    license: NOASSERTION
+    language: Unknown
+    stars: 0
+    stars_as_of: 1970-01-01
+  - name: tigerbeetle
+    model: relational
+    tier: T1
+    repo: https://github.com/tigerbeetle/tigerbeetle
+    license: Apache-2.0
+    language: Zig
+    stars: 17505
+    stars_as_of: 2026-11-29
+  - name: sqlite-vector
+    model: extension
+    tier: T2
+    repo: https://github.com/sqliteai/sqlite-vector
+    license: Apache-2.0
+    language: C
+    stars: 1230
+    stars_as_of: 2026-11-29
