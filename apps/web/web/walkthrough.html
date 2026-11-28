@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作台 · 真实操作导览</title>
+<style>
+  :root{
+    --bg:#0B1220; --panel:#131C2E; --panel2:#1B2740; --line:rgba(232,237,245,.12);
+    --line-strong:rgba(232,237,245,.22);
+    --fg:#E8EDF5; --dim:#A3B0C2; --muted:#8593A8;
+    --acc:#38BDF8; --acc-soft:rgba(56,189,248,.14);
+    --ok:#34D399; --warn:#FBBF24;
+    --ease:cubic-bezier(.4,0,.2,1); --dur:140ms;
+    --rail-w:320px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);color:var(--fg);overflow:hidden;
+    font:13.5px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  :focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+  /* ---------------- 布局 ---------------- */
+  .layout{display:flex;height:100%}
+
+  /* ---------------- 左栏：步骤 ---------------- */
+  .rail{
+    width:var(--rail-w);flex:0 0 var(--rail-w);background:var(--panel);
+    border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;
+  }
+  .rail-head{padding:16px 18px 12px;border-bottom:1px solid var(--line)}
+  .rail-head h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em}
+  .rail-head p{margin:5px 0 0;font-size:12.5px;color:var(--muted);line-height:1.55}
+
+  .steps{flex:1;overflow-y:auto;padding:8px 0 16px;min-height:0}
+  .group{
+    margin:14px 0 4px;padding:0 18px;font-size:11px;font-weight:650;
+    color:var(--muted);letter-spacing:.06em;
+  }
+  .step{
+    display:flex;gap:10px;align-items:flex-start;width:100%;
+    padding:9px 18px;border:0;background:transparent;color:var(--fg);
+    text-align:left;font:inherit;cursor:pointer;
+    border-left:2px solid transparent;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease);
+  }
+  .step:hover{background:var(--panel2)}
+  .step.on{background:var(--acc-soft);border-left-color:var(--acc)}
+  .step .n{
+    flex:0 0 auto;width:20px;height:20px;border-radius:999px;margin-top:1px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+    font-size:11px;display:flex;align-items:center;justify-content:center;font-weight:600;
+  }
+  .step.on .n{background:var(--acc);border-color:var(--acc);color:#0B1220}
+  .step.done .n{background:rgba(52,211,153,.16);border-color:rgba(52,211,153,.4);color:var(--ok)}
+  .step .t{font-size:13px;line-height:1.45}
+  .step .d{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:2px}
+  .step.on .d{color:var(--dim)}
+
+  /* ---------------- 右侧：真应用 ---------------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .bar{
+    display:flex;align-items:center;gap:10px;padding:10px 14px;
+    border-bottom:1px solid var(--line);background:var(--panel);
+  }
+  .bar .badge{
+    display:inline-flex;align-items:center;gap:6px;font-size:12px;
+    background:rgba(52,211,153,.14);color:var(--ok);
+    border:1px solid rgba(52,211,153,.3);border-radius:999px;padding:3px 10px;font-weight:600;
+  }
+  .bar .badge::before{content:"";width:6px;height:6px;border-radius:999px;background:var(--ok)}
+  .bar .where{
+    font:12px/1 ui-monospace,Menlo,Consolas,monospace;color:var(--muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .bar .sp{flex:1}
+  .bar button{
+    height:30px;padding:0 13px;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel2);color:var(--fg);font:inherit;font-size:12.5px;cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px;
+    transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease),
+      border-color var(--dur) var(--ease),color var(--dur) var(--ease);
+  }
+  .bar button:hover:not(:disabled){border-color:var(--acc);background:var(--acc-soft);color:var(--acc)}
+  .bar button:disabled{opacity:.4;cursor:not-allowed}
+  .bar button.primary{background:var(--acc);border-color:var(--acc);color:#0B1220;font-weight:600}
+  .bar button.primary:hover:not(:disabled){background:#7DD3FC;border-color:#7DD3FC;color:#0B1220}
+
+  .stage{flex:1;min-width:0;position:relative;background:#080D18}
+  #frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;display:block}
+
+  /* 提示条：说清这一步在干什么 */
+  .cue{
+    position:absolute;left:50%;bottom:22px;transform:translateX(-50%);
+    max-width:min(680px,88%);z-index:50;
+    background:rgba(11,18,32,.94);border:1px solid var(--line-strong);
+    border-radius:12px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,.4);
+    display:flex;align-items:center;gap:12px;
+    animation:cue-in .2s var(--ease);
+  }
+  @keyframes cue-in{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+  .cue .badge2{
+    flex:0 0 auto;font-size:11px;font-weight:650;letter-spacing:.04em;
+    background:var(--acc-soft);color:var(--acc);border-radius:999px;padding:3px 9px;
+  }
+  .cue .txt{font-size:13px;line-height:1.55}
+  .cue .txt b{color:var(--acc);font-weight:600}
+  .cue .close{
+    margin-left:auto;flex:0 0 auto;border:0;background:transparent;color:var(--muted);
+    cursor:pointer;font-size:16px;line-height:1;padding:2px 4px;border-radius:6px;
+  }
+  .cue .close:hover{color:var(--fg);background:var(--panel2)}
+
+  /* 服务没起 */
+  .off{
+    position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+    justify-content:center;gap:10px;text-align:center;padding:30px;z-index:60;background:var(--bg);
+  }
+  .off.show{display:flex}
+  .off h2{margin:0;font-size:17px;font-weight:650}
+  .off p{margin:0;color:var(--dim);font-size:13.5px}
+  .off code{
+    background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:9px 14px;font:12px/1 ui-monospace,Menlo,Consolas,monospace;color:var(--acc);
+  }
+  .off .err{color:var(--warn);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <nav class="rail">
+    <div class="rail-head">
+      <h1>真实操作导览</h1>
+      <p>右边是<b>真实运行的应用</b>，不是截图。每一步会替你点一下 —— 你也可以自己随便点。</p>
+    </div>
+    <div class="steps" id="steps"></div>
+  </nav>
+
+  <div class="main">
+    <div class="bar">
+      <span class="badge">真实应用</span>
+      <span class="where" id="where">—</span>
+      <span class="sp"></span>
+      <button id="prev">← 上一步</button>
+      <button id="next" class="primary">下一步 →</button>
+      <button id="reset">重来</button>
+    </div>
+    <div class="stage">
+      <iframe id="frame" title="真实应用" src="about:blank"></iframe>
+      <div class="cue" id="cue" hidden>
+        <span class="badge2" id="cueTag">点击</span>
+        <span class="txt" id="cueText"></span>
+        <button class="close" id="cueClose" title="关掉提示">×</button>
+      </div>
+      <div class="off" id="off">
+        <h2>应用服务没跑起来</h2>
+        <p>导览要驱动真实应用，所以服务得先起着。</p>
+        <code>node apps/web/server/main.js</code>
+        <div class="err" id="offErr"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+;(function () {
+  var frame = document.getElementById("frame")
+  var stepsEl = document.getElementById("steps")
+  var whereEl = document.getElementById("where")
+  var cue = document.getElementById("cue")
+  var cueText = document.getElementById("cueText")
+  var cueTag = document.getElementById("cueTag")
+  var off = document.getElementById("off")
+  var offErr = document.getElementById("offErr")
+
+  var ORIGIN = location.protocol === "file:"
+    ? "http://127.0.0.1:5173"
+    : location.origin
+
+  // file:// 打开的话，导览没法直接操作 iframe 里的 DOM（跨源）。
+  // 但应用服务端也提供这份页面 —— 跳过去就同源了，功能全都在。
+  if (location.protocol === "file:") {
+    location.replace(ORIGIN + "/walkthrough.html")
+    return
+  }
+
+  /* ------------------------------------------------------------- 步骤表
+   *
+   * url      要打开的页面（相对应用根）
+   * pick     在该页里要点的元素选择器
+   * label    这一步点的是什么
+   * say      点完之后会看到什么
+   * go       点完之后跳到哪（模拟导航）
+   */
+  var STEPS = [
+    { group: "一、拉起来第一眼" },
+    { url: "/", pick: ".module-grid", peek: true, label: "应用首页", say: "这是拉起后的第一个界面。上面一行是五个模块，下面是工作台与知识中心两个独立服务。" },
+    { url: "/", pick: ".module-card[href='/workbench/']", label: "点「程序员工作台」", say: "进入工作台。左边是今日 / 技术 / 生活 / 工具 / 我的。" },
+
+    { group: "二、工作台：今天在做什么" },
+    { url: "/workbench/pages/dashboard/index", pick: ".stat-grid", peek: true, label: "今日", say: "首屏：四个统计数字、今日待办、心情、快捷入口。" },
+    { url: "/workbench/pages/dashboard/index", pick: ".wb-check", label: "点待办前面的圆圈", say: "勾掉一条待办 —— 统计数字会跟着变，这行会变灰。" },
+    { url: "/workbench/pages/dashboard/index", pick: ".wb-priority", label: "点「高/中/低」药丸", say: "循环切换优先级，颜色也跟着变。" },
+    { url: "/workbench/pages/dashboard/index", pick: ".wb-mood", label: "点心情", say: "记下此刻心情，标题栏的「此刻心情」会更新。" },
+    { url: "/workbench/pages/dashboard/index", pick: ".btn.primary", label: "点「添加待办」", say: "弹出一个输入框。写点东西确认，会插到待办列表里。" },
+
+    { group: "三、工作台：其它四页" },
+    { url: "/workbench/pages/tech/index", pick: ".wb-module-grid", peek: true, label: "技术", say: "技术笔记、代码片段、面试题 —— 全在这一页里切换。" },
+    { url: "/workbench/pages/life/index", pick: ".wb-module-grid", peek: true, label: "生活", say: "心情记录、阅读清单、运动、行程。" },
+    { url: "/workbench/pages/tools/index", pick: ".wb-tool-grid", peek: true, label: "工具", say: "十个纯前端的离线小工具：编码转换、JSON 格式化、哈希……" },
+    { url: "/workbench/pages/profile/index", pick: ".panel", peek: true, label: "我的", say: "个人资料、主题、主色。主题切「深色」整站跟着变。" },
+
+    { group: "四、知识中心" },
+    { url: "/knowledge/", pick: ".kh-entry-grid", peek: true, label: "知识中心", say: "题库复习、面试追踪、知识图谱、五年计划。" },
+    { url: "/knowledge/pages/learn/quiz/index", pick: ".kh-btn", peek: true, label: "去刷题", say: "题目卡片，选答案、判对错、记进度。" },
+    { url: "/knowledge/pages/knowledge/graph/index", pick: ".kh-canvas", peek: true, label: "知识图谱", say: "把笔记和题目连成一张图 —— 这页是 Canvas 画的。" },
+
+    { group: "五、AI 简报（读磁盘上的真数据）" },
+    { url: "/aitimer/", pick: ".aitimer-item", peek: true, label: "AI 简报", say: "读的是仓库根 ai-timer/ 目录里的定时任务产物，不是假数据。" },
+    { url: "/aitimer/pages/doc?id=briefing%2F2026-11-28", pick: ".aitimer-page", peek: true, label: "点一篇简报", say: "打开正文 —— Markdown 渲染出来的。" },
+
+    { group: "六、足迹与游戏" },
+    { url: "/trip/pages/index", pick: ".panel", peek: true, label: "足迹", say: "走过的地方与照片，照片存在 IndexedDB 里。" },
+    { url: "/games/", pick: ".game-entry", peek: true, label: "游戏", say: "贪吃蛇、2048、数独、消消乐 —— 纯 Canvas，不用联网。" },
+    { url: "/games/pages/game2048", pick: ".game-canvas-wrap", peek: true, label: "玩 2048", say: "方向键合并数字块。" }
+  ]
+
+  /* ------------------------------------------------------------- 状态 */
+  var current = 0
+  var hl = null          // 高亮框
+  var hlTimer = null
+
+  /* ------------------------------------------------------------- 工具 */
+
+  /**
+   * 等 iframe 里的页面把内容渲染出来。
+   * @param {Function} fn
+   */
+  function whenReady (fn) {
+    var tries = 0
+    var tick = function () {
+      var doc = null
+      try { doc = frame.contentDocument } catch (e) { doc = null }
+      if (doc && doc.readyState === "complete" && doc.getElementById("app-main")) {
+        // 再等一拍，让 render 把内容填进去
+        var main = doc.getElementById("app-main")
+        if (main && main.children.length) return fn(doc)
+      }
+      if (++tries > 80) return fn(doc)
+      setTimeout(tick, 60)
+    }
+    tick()
+  }
+
+  /**
+   * 在真应用里画一个高亮框。
+   * @param {object} doc
+   * @param {Element} el
+   */
+  function highlight (doc, el) {
+    clearHighlight(doc)
+    var box = doc.createElement("div")
+    box.setAttribute("data-walkthrough", "1")
+    var s = box.style
+    s.position = "absolute"
+    s.zIndex = "99999"
+    s.pointerEvents = "none"
+    s.border = "3px solid #38BDF8"
+    s.borderRadius = "10px"
+    s.boxShadow = "0 0 0 9999px rgba(11,18,32,.45), 0 0 24px rgba(56,189,248,.8)"
+    s.transition = "all .25s cubic-bezier(.4,0,.2,1)"
+    doc.body.appendChild(box)
+
+    var place = function () {
+      var r = el.getBoundingClientRect()
+      var scrollY = window.pageYOffset || doc.documentElement.scrollTop || 0
+      var scrollX = window.pageXOffset || doc.documentElement.scrollLeft || 0
+      s.left = (r.left + scrollX - 4) + "px"
+      s.top = (r.top + scrollY - 4) + "px"
+      s.width = (r.width + 8) + "px"
+      s.height = (r.height + 8) + "px"
+    }
+    place()
+    // 元素可能还在动（列表重绘），多跟几帧
+    // 注意：requestAnimationFrame 必须绑在 iframe 的 window 上调用，
+    // 摘下来直接调会丢 this —— Chrome 报 "parameter 1 is not of type 'Function'"，
+    // 异常会把后面的真点击一起带没。
+    var win = frame.contentWindow
+    var raf = (win && win.requestAnimationFrame)
+      ? win.requestAnimationFrame.bind(win)
+      : function (fn) { setTimeout(fn, 16) }
+    var n = 0
+    var follow = function () {
+      place()
+      if (++n < 12) raf(follow)
+    }
+    raf(follow)
+    hl = box
+  }
+
+  /** 去掉高亮框 */
+  function clearHighlight (doc) {
+    var d = doc || (frame.contentDocument)
+    if (!d) return
+    var old = d.querySelectorAll("[data-walkthrough]")
+    for (var i = 0; i < old.length; i++) old[i].remove()
+    hl = null
+  }
+
+  /**
+   * 真点一下。
+   * @param {Element} el
+   */
+  function clickForReal (el) {
+    el.scrollIntoView({ block: "center", behavior: "smooth" })
+    setTimeout(function () {
+      el.click()
+    }, 260)
+  }
+
+  /* ------------------------------------------------------------- 渲染步骤条 */
+  function renderSteps () {
+    var html = []
+    var n = 0
+    STEPS.forEach(function (s, i) {
+      if (s.group) {
+        html.push('<div class="group">' + s.group + "</div>")
+        return
+      }
+      n++
+      html.push(
+        '<button class="step" data-i="' + i + '">' +
+        '<span class="n">' + n + "</span>" +
+        "<span><span class=\"t\">" + s.label + "</span>" +
+        '<span class="d">' + (s.say || "") + "</span></span></button>"
+      )
+    })
+    stepsEl.innerHTML = html.join("")
+    Array.prototype.forEach.call(stepsEl.querySelectorAll(".step"), function (b) {
+      b.addEventListener("click", function () {
+        go(Number(b.getAttribute("data-i")))
+      })
+    })
+  }
+
+  /** 步骤条里「有内容」的步骤序号（跳过分组标题） */
+  function contentSteps () {
+    var out = []
+    STEPS.forEach(function (s, i) { if (!s.group) out.push(i) })
+    return out
+  }
+
+  /** 高亮当前步骤 */
+  function markStep () {
+    var list = contentSteps()
+    var pos = list.indexOf(current)
+    Array.prototype.forEach.call(stepsEl.querySelectorAll(".step"), function (b) {
+      var i = Number(b.getAttribute("data-i"))
+      b.classList.toggle("on", i === current)
+      b.classList.toggle("done", pos > 0 && list.indexOf(i) < pos)
+    })
+  }
+
+  /* ------------------------------------------------------------- 走一步 */
+  function go (i) {
+    if (i < 0 || i >= STEPS.length) return
+    var step = STEPS[i]
+    if (step.group) {           // 分组标题不是步骤，跳到下一个
+      var list = contentSteps()
+      var at = list.indexOf(i)
+      return go(list[at < 0 ? 0 : at])
+    }
+    current = i
+    markStep()
+
+    var url = ORIGIN + step.url
+    whereEl.textContent = step.url
+
+    var load = function () {
+      whenReady(function (doc) {
+        try {
+          clearHighlight(doc)
+          if (!doc) {
+            off.classList.add("show")
+            offErr.textContent = "连不上 " + ORIGIN
+            return
+          }
+          off.classList.remove("show")
+
+          if (step.pick) {
+            var el = doc.querySelector(step.pick)
+            if (el) {
+              highlight(doc, el)
+              if (step.peek) {
+                cueTag.textContent = "看这里"
+              } else {
+                cueTag.textContent = "已点击"
+                clickForReal(el)
+              }
+            } else {
+              cueTag.textContent = "提示"
+            }
+          } else {
+            cueTag.textContent = "这一页"
+          }
+          cueText.innerHTML = "<b>" + step.label + "</b> —— " + (step.say || "")
+          cue.hidden = false
+        } catch (err) {
+          // 一步出错不能连累后面的步骤
+          cueTag.textContent = "出错"
+          cueText.textContent = "这一步没走通：" + (err && err.message ? err.message : err)
+          cue.hidden = false
+        }
+        syncButtons()
+      })
+    }
+
+    // 同一页就不用重载，直接操作
+    if (frame.getAttribute("src") === url) load()
+    else {
+      frame.setAttribute("src", url)
+      frame.addEventListener("load", load, { once: true })
+    }
+  }
+
+  function syncButtons () {
+    var list = contentSteps()
+    var pos = list.indexOf(current)
+    document.getElementById("prev").disabled = pos <= 0
+    document.getElementById("next").disabled = pos < 0 || pos >= list.length - 1
+  }
+
+  function next () {
+    var list = contentSteps()
+    var pos = list.indexOf(current)
+    if (pos < 0 || pos >= list.length - 1) return
+    go(list[pos + 1])
+  }
+
+  function prev () {
+    var list = contentSteps()
+    var pos = list.indexOf(current)
+    if (pos <= 0) return
+    go(list[pos - 1])
+  }
+
+  /* ------------------------------------------------------------- 服务探测 */
+  function probe () {
+    fetch(ORIGIN + "/api/health", { mode: "no-cors" }).then(function () {
+      off.classList.remove("show")
+      return true
+    }).catch(function () {
+      off.classList.add("show")
+      offErr.textContent = "连不上 " + ORIGIN + " —— 先把服务起起来"
+      return false
+    })
+  }
+
+  /* ------------------------------------------------------------- 启动 */
+  renderSteps()
+  document.getElementById("next").addEventListener("click", next)
+  document.getElementById("prev").addEventListener("click", prev)
+  document.getElementById("reset").addEventListener("click", function () { go(contentSteps()[0]) })
+  document.getElementById("cueClose").addEventListener("click", function () { cue.hidden = true })
+
+  frame.addEventListener("load", function () {
+    whenReady(function (doc) { clearHighlight(doc) })
+  })
+
+  probe()
+  go(contentSteps()[0])
+})()
+</script>
+</body>
+</html>

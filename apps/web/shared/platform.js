@@ -70,8 +70,10 @@
     host.appendChild(node)
     const duration = o.duration === undefined ? 2000 : o.duration
     setTimeout(function () {
-      const idx = host.children.indexOf(node)
-      if (idx >= 0) host.children.splice(idx, 1)
+      // 不能用 host.children.indexOf —— children 是 HTMLCollection，
+      // 没有 indexOf 也没有 splice（浏览器里会抛，测试桩是数组才侥幸没暴露）。
+      // 结果就是提示条永远消不掉。
+      if (node.parentNode) node.parentNode.removeChild(node)
     }, duration)
     return node
   }
@@ -188,10 +190,10 @@
   }
 
   function closeMask (mask) {
-    if (mask && document.body) {
-      const idx = document.body.children.indexOf(mask)
-      if (idx >= 0) document.body.children.splice(idx, 1)
-    }
+    // 同 showToast：children 是 HTMLCollection，不能 indexOf/splice。
+    // 这里原本会抛异常，把 closeMask 的调用方（对话框的 resolve）一起带没 ——
+    // 遮罩留在页面上，整个应用点不动。
+    if (mask && mask.parentNode) mask.parentNode.removeChild(mask)
     if (activeMask === mask) activeMask = null
   }
 

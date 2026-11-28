@@ -390,6 +390,10 @@ textarea {
 #module-grid .module-card:nth-child(4) { --card-accent: #B45309; }
 #module-grid .module-card:nth-child(5) { --card-accent: #BE185D; }
 
+/* 首页下半部分的两张入口卡 */
+#walk-link { --card-accent: #0F766E; }
+#preview-link { --card-accent: #4F46E5; }
+
 .module-title {
   display: flex;
   align-items: center;
