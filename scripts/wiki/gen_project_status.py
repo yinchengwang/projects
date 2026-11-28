@@ -42,6 +42,7 @@ GATES_PASS_PROJECTS = {
     "mcp-python-sdk": "待阶段 0B 扩展后入 wiki-rag",
     "browser-use": "待阶段 0B 扩展后入 wiki-rag",
     "openhands": "待阶段 0B 扩展后入 wiki-rag",
+    "goose": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

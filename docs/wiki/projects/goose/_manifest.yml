@@ -1,0 +1,314 @@
+---
+project: goose
+schema_version: 1
+pages:
+  - feature: session-manager
+    feature_group: A-会话与运行时
+    title: 会话管理与用量聚合
+    page_file: a01-session-manager.md
+    refs:
+      - path: crates/goose/src/session/session_manager.rs
+        symbols: [SessionManager, Session, SessionType]
+      - path: crates/goose/src/session/session_manager.rs
+        symbols: [SessionUpdateBuilder, SessionUsageTotals, SessionInsights]
+  - feature: session-runtime
+    feature_group: A-会话与运行时
+    title: 会话运行时与附件
+    page_file: a02-session-runtime.md
+    refs:
+      - path: crates/goose/src/agents/session_runtime.rs
+        symbols: [SessionRuntime, Attachment]
+      - path: crates/goose/src/agents/provider_manager.rs
+        symbols: [ProviderManager, SharedProviders, SessionSlot]
+  - feature: session-hooks
+    feature_group: A-会话与运行时
+    title: 会话钩子文件与规则选择
+    page_file: a03-session-hooks.md
+    refs:
+      - path: crates/goose/src/hooks/mod.rs
+        symbols: [HookEvent, HooksFile, RawHookRule, LoadedRule]
+      - path: crates/goose/src/hooks/mod.rs
+        symbols: [select_action, HookDecision, OnFailure, ActionSelection]
+  - feature: state-machine
+    feature_group: B-智能体循环与提示
+    title: 状态机式智能体循环
+    page_file: b01-state-machine.md
+    refs:
+      - path: crates/goose/src/agents/state_machine_builder.rs
+        symbols: [typesafe_provider]
+      - path: crates/goose/src/agents/active_run.rs
+        symbols: [ActiveRun, SessionRunState]
+  - feature: prompt-assembly
+    feature_group: B-智能体循环与提示
+    title: 系统提示组装
+    page_file: b02-prompt-assembly.md
+    refs:
+      - path: crates/goose/src/agents/prompt_manager.rs
+        symbols: [PromptManager, SystemPromptBuilder, SystemPromptParts]
+      - path: crates/goose/src/agents/prompt_manager.rs
+        symbols: [SystemPromptContext]
+  - feature: failure-hooks
+    feature_group: B-智能体循环与提示
+    title: 失败后命令与超时执行
+    page_file: b03-failure-hooks.md
+    refs:
+      - path: crates/goose/src/agents/retry.rs
+        symbols: [execute_success_checks_with_timeout, execute_on_failure_command_with_timeout]
+      - path: crates/goose/src/agents/retry.rs
+        symbols: [execute_shell_command, capture_tail, MAX_COMMAND_STDERR_BYTES]
+  - feature: prompt-template
+    feature_group: B-智能体循环与提示
+    title: 提示模板与转义
+    page_file: b04-prompt-template.md
+    refs:
+      - path: crates/goose/src/prompt_template.rs
+        symbols: [render_template]
+      - path: crates/goose/src/agents/moim.rs
+        symbols: [compose_moim, escape_xml_text, turn_budget_part]
+  - feature: permission-judge
+    feature_group: C-权限
+    title: 权限判定与批量只读跳过
+    page_file: c01-permission-judge.md
+    refs:
+      - path: crates/goose/src/permission/permission_judge.rs
+        symbols: [PermissionJudgeContext, PermissionCheckResult]
+      - path: crates/goose/src/permission/permission_judge.rs
+        symbols: [create_check_messages, extract_read_only_request_ids, create_read_only_tool]
+  - feature: permission-store
+    feature_group: C-权限
+    title: 权限记录与判定缓存
+    page_file: c02-permission-store.md
+    refs:
+      - path: crates/goose/src/permission/permission_store.rs
+        symbols: [ToolPermissionStore, ToolPermissionRecord]
+      - path: crates/goose/src/permission/permission_inspector.rs
+        symbols: [PermissionInspector, cache_non_readonly_decision]
+  - feature: security-inspector
+    feature_group: D-安全审查
+    title: 安全审查统一入口
+    page_file: d01-security-inspector.md
+    refs:
+      - path: crates/goose/src/security/security_inspector.rs
+        symbols: [SecurityInspector]
+      - path: crates/goose/src/security/mod.rs
+        symbols: [SecurityManager, SecurityResult]
+  - feature: injection-scanner
+    feature_group: D-安全审查
+    title: 提示注入扫描
+    page_file: d02-injection-scanner.md
+    refs:
+      - path: crates/goose/src/security/scanner.rs
+        symbols: [PromptInjectionScanner, ScanResult, ClassifierType]
+      - path: crates/goose/src/security/scanner.rs
+        symbols: [is_shell_tool_name, DetailedScanResult]
+  - feature: egress-inspector
+    feature_group: D-安全审查
+    title: 出口方向审查
+    page_file: d03-egress-inspector.md
+    refs:
+      - path: crates/goose/src/security/egress_inspector.rs
+        symbols: [EgressInspector, EgressDirection, EgressDestination]
+      - path: crates/goose/src/security/egress_inspector.rs
+        symbols: [detect_direction, extract_destinations, extract_text_for_inspection]
+  - feature: adversary-inspector
+    feature_group: D-安全审查
+    title: 对手模拟与配置
+    page_file: d04-adversary-inspector.md
+    refs:
+      - path: crates/goose/src/security/adversary_inspector.rs
+        symbols: [AdversaryInspector, AdversaryConfig]
+      - path: crates/goose/src/security/patterns.rs
+        symbols: [ThreatPattern, PatternMatcher]
+  - feature: extension-runtime
+    feature_group: E-扩展与工具
+    title: 扩展运行时与工具可见性
+    page_file: e01-extension-runtime.md
+    refs:
+      - path: crates/goose/src/agents/extension.rs
+        symbols: [ToolInfo]
+      - path: crates/goose/src/agents/extension_config.rs
+        symbols: [ExtensionConfig, CLIENT_SECRET_PREFIX]
+  - feature: plugin-discovery
+    feature_group: E-扩展与工具
+    title: 插件发现与作用域
+    page_file: e02-plugin-discovery.md
+    refs:
+      - path: crates/goose/src/plugins/discovery.rs
+        symbols: [DiscoveredPlugin, PluginScope, PluginSettings]
+      - path: crates/goose/src/plugins/discovery.rs
+        symbols: [discover_enabled_plugins, plugin_scope_rank, filter_by_config]
+  - feature: large-response
+    feature_group: E-扩展与工具
+    title: 大响应的落盘处理
+    page_file: e03-large-response.md
+    refs:
+      - path: crates/goose/src/agents/large_response_handler.rs
+        symbols: [process_tool_response, write_large_text_to_file]
+  - feature: recipe-model
+    feature_group: F-配方与技能
+    title: 配方模型与参数
+    page_file: f01-recipe-model.md
+    refs:
+      - path: crates/goose/src/recipe/mod.rs
+        symbols: [Recipe, RecipeParameter, RecipeBuilder]
+      - path: crates/goose/src/recipe/mod.rs
+        symbols: [SubRecipe, RecipeParameterRequirement, RecipeParameterInputType]
+  - feature: recipe-manifest
+    feature_group: F-配方与技能
+    title: 配方文件清单与加载
+    page_file: f02-recipe-manifest.md
+    refs:
+      - path: crates/goose/src/recipe/manifest.rs
+        symbols: [RecipeFileManifest, list_recipe_file_manifests, load_recipe_by_id]
+      - path: crates/goose/src/recipe/manifest.rs
+        symbols: [resolve_recipe_sub_recipe_paths, short_id_from_path]
+  - feature: recipe-validation
+    feature_group: F-配方与技能
+    title: 配方校验与斜杠命令
+    page_file: f03-recipe-validation.md
+    refs:
+      - path: crates/goose/src/recipe/validate_recipe.rs
+        symbols: [convert_recipe_from_value, RecipeFileFormat]
+      - path: crates/goose/src/slash_commands/recipe_slash_command.rs
+        symbols: [SlashCommandMapping, set_recipe_slash_command]
+  - feature: skills
+    feature_group: F-配方与技能
+    title: 技能与支撑文件
+    page_file: f04-skills.md
+    refs:
+      - path: crates/goose/src/skills/builtin.rs
+        symbols: [get_all]
+      - path: crates/goose/src/skills/supporting_files.rs
+        symbols: [read_supporting_file_with_limit, ReadLimit]
+  - feature: provider-def
+    feature_group: G-提供方与模型
+    title: 提供方定义与两枚编译期常量
+    page_file: g01-provider-def.md
+    refs:
+      - path: crates/goose/src/providers/base.rs
+        symbols: [ProviderDef, ProviderType]
+  - feature: provider-retry
+    feature_group: G-提供方与模型
+    title: 重试判定层次与退避曲线
+    page_file: g05-provider-retry.md
+    refs:
+      - path: crates/oi-kit-provider-types/src/retry.rs
+        symbols: [RetryConfig, ProviderRetry, should_retry]
+      - path: crates/oi-kit-provider-types/src/retry.rs
+        symbols: [is_permanent_request_failure, DEFAULT_MAX_RETRIES, DEFAULT_BACKOFF_MULTIPLIER]
+  - feature: model-fallback
+    feature_group: G-提供方与模型
+    title: 模型配置补全与目录回落
+    page_file: g02-model-fallback.md
+    refs:
+      - path: crates/goose/src/model_catalog.rs
+        symbols: [initialize, CATALOG_URL]
+      - path: crates/goose/src/model_config.rs
+        symbols: [ModelConfig]
+  - feature: canonical-cost
+    feature_group: G-提供方与模型
+    title: 代价解析与来源优先级
+    page_file: g03-canonical-cost.md
+    refs:
+      - path: crates/goose/src/providers/canonical_cost.rs
+        symbols: [estimate_model_cost, merge_pricing, pricing_from_model_info]
+      - path: crates/goose/src/providers/canonical_cost.rs
+        symbols: [is_price_gap, full_pricing_model, bundled_model_info]
+  - feature: declarative-providers
+    feature_group: G-提供方与模型
+    title: 声明式提供方与自定义接入
+    page_file: g04-declarative-providers.md
+    refs:
+      - path: crates/goose/src/config/declarative_providers.rs
+        symbols: [LoadedProvider, expand_env_vars, persist_custom_provider]
+      - path: crates/goose/src/config/declarative_providers.rs
+        symbols: [create_custom_provider, update_custom_provider, remove_custom_provider]
+  - feature: config-experiments
+    feature_group: H-配置与迁移
+    title: 实验开关与目录布局
+    page_file: h01-config-experiments.md
+    refs:
+      - path: crates/goose/src/config/experiments.rs
+        symbols: [ExperimentManager]
+      - path: crates/goose/src/config/paths.rs
+        symbols: [Paths, DirType]
+  - feature: config-migrations
+    feature_group: H-配置与迁移
+    title: 配置迁移与破坏性边界
+    page_file: h02-config-migrations.md
+    refs:
+      - path: crates/goose/src/config/migrations.rs
+        symbols: [run_migrations, migrate_provider_config, cleanup_legacy_provider_keys]
+      - path: crates/goose/src/config/migrations.rs
+        symbols: [migrate_platform_extensions, read_enabled_field]
+  - feature: oauth-persist
+    feature_group: H-配置与迁移
+    title: OAuth 凭据持久化与形状兼容
+    page_file: h03-oauth-persist.md
+    refs:
+      - path: crates/goose/src/oauth/persist.rs
+        symbols: [PersistedCredentials, GooseCredentialStore]
+  - feature: acp-provider
+    feature_group: I-ACP 接入
+    title: ACP 提供方与一次性上下文声明
+    page_file: i01-acp-provider.md
+    refs:
+      - path: crates/goose/src/acp/provider.rs
+        symbols: [AcpProviderConfig, AcpSession, AccumulatedToolCall]
+      - path: crates/goose/src/acp/provider.rs
+        symbols: [provider_error_from_acp, AcpEffortState, HandoffContextClaim]
+  - feature: acp-server
+    feature_group: I-ACP 接入
+    title: ACP 服务端与连接工厂
+    page_file: i02-acp-server.md
+    refs:
+      - path: crates/goose/src/acp/server.rs
+        symbols: [AcpProviderFactory, AcpConnection, AcpConnectionOptions]
+      - path: crates/goose/src/acp/server.rs
+        symbols: [is_acp_visible_session_type, AcpBuiltinSelection]
+  - feature: acp-handoff
+    feature_group: I-ACP 接入
+    title: 交接备忘录的预算装箱
+    page_file: i03-acp-handoff.md
+    refs:
+      - path: crates/goose/src/acp/handoff.rs
+        symbols: [fit_unit, elide_to_budget, unit_cost]
+      - path: crates/goose/src/acp/handoff.rs
+        symbols: [redact_tool_responses, selection_units, FittedUnit]
+  - feature: context-management
+    feature_group: J-上下文、调度与网关
+    title: 上下文压缩
+    page_file: j01-context-management.md
+    refs:
+      - path: crates/goose/src/context_mgmt/mod.rs
+        symbols: [auto_compact_threshold, capped_compaction_threshold, is_compaction_summary]
+      - path: crates/goose/src/context_mgmt/mod.rs
+        symbols: [compute_tool_call_cutoff, tool_ids_to_summarize]
+  - feature: scheduler
+    feature_group: J-上下文、调度与网关
+    title: 调度器与定时配方
+    page_file: j02-scheduler.md
+    refs:
+      - path: crates/goose/src/scheduler/full.rs
+        symbols: [Scheduler, RunningTasksMap, JobsMap]
+      - path: crates/goose/src/scheduler/full.rs
+        symbols: [read_validated_schedule_recipe, clear_running_state]
+  - feature: gateway-pairing
+    feature_group: J-上下文、调度与网关
+    title: 网关配对与白名单
+    page_file: j03-gateway-pairing.md
+    refs:
+      - path: crates/goose/src/gateway/pairing.rs
+        symbols: [PairingStore, StoredPairing, StoredPendingCodes]
+      - path: crates/goose/src/gateway/manager.rs
+        symbols: [GatewayManager, secret_key_for, allowed_user_ids_from_platform_config]
+  - feature: observability
+    feature_group: J-上下文、调度与网关
+    title: 追踪上下文与 OTLP 三层
+    page_file: j04-observability.md
+    refs:
+      - path: crates/goose/src/otel/trace_context.rs
+        symbols: [extract_from_meta, inject_current]
+      - path: crates/goose/src/otel/otlp.rs
+        symbols: [OtlpTracingLayer]
+---
