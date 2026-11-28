@@ -7,7 +7,7 @@ const test = require("node:test")
 const assert = require("node:assert")
 const http = require("node:http")
 
-const { probe, checkBackends } = require("../server/health.js")
+const { probe, checkBackends, STUDY_URL } = require("../server/health.js")
 
 /** 起一个临时 HTTP 服务，用来测「在线」的情况 */
 function startServer (handler) {
@@ -62,4 +62,28 @@ test("checkBackends：返回 study 与 wiki 两项", async function () {
   assert.ok(r.wiki, "应有 wiki 项")
   assert.strictEqual(typeof r.study.ok, "boolean")
   assert.strictEqual(typeof r.wiki.ok, "boolean")
+})
+
+test("probe：目标端口就是本服务时跳过探测（防自己探自己）", async function () {
+  // 本应用跑在 5174 时，探测 study-hub(5174) 就成了自己探自己，
+  // /api/health 会无限递归 —— 实测卡 17 秒、socket 打爆。
+  const s = await startServer(function (req, res) { res.end("ok") })
+  try {
+    const r = await probe("http://127.0.0.1:" + s.port + "/api/health", 500, s.port)
+    assert.strictEqual(r.ok, false)
+    assert.ok(r.error.indexOf("跳过") >= 0,
+      "应说明是跳过了探测，实际：" + r.error)
+  } finally {
+    s.server.close()
+  }
+})
+
+test("checkBackends：selfPort 命中时不会去探自己（不递归）", async function () {
+  const studyPort = Number(new URL(STUDY_URL).port || 80)
+  const started = Date.now()
+  const r = await checkBackends(studyPort)
+  assert.ok(Date.now() - started < 3000, "不该因为探自己而卡住")
+  assert.strictEqual(r.study.ok, false)
+  assert.ok(r.study.error.indexOf("跳过") >= 0,
+    "study 项应说明跳过了探测，实际：" + r.study.error)
 })

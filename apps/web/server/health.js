@@ -18,11 +18,17 @@ const WIKI_URL = process.env.WIKI_RAG_URL || "http://127.0.0.1:8000"
 
 /**
  * 探测一个 URL 是否可达。
+ *
+ * selfPort 是本服务自己监听的端口 —— 探到自己的话就跳过：
+ * 本应用若跑在 5174 上，探测 study-hub(5174) 就变成自己探自己，
+ * /api/health 会无限递归（实测卡 17 秒，socket 也会被打爆）。
+ *
  * @param {string} url
  * @param {number} [timeoutMs] 超时毫秒数，默认 1500
+ * @param {number} [selfPort] 本服务自己的端口
  * @returns {Promise<{ok: boolean, status?: number, error?: string}>}
  */
-function probe (url, timeoutMs) {
+function probe (url, timeoutMs, selfPort) {
   const timeout = timeoutMs === undefined ? 1500 : timeoutMs
   return new Promise(function (resolve) {
     let settled = false
@@ -37,6 +43,11 @@ function probe (url, timeoutMs) {
       parsed = new URL(url)
     } catch (e) {
       done({ ok: false, error: "地址不合法：" + url })
+      return
+    }
+
+    if (selfPort && parsed.port && Number(parsed.port) === Number(selfPort)) {
+      done({ ok: false, error: "目标端口就是本服务，已跳过探测" })
       return
     }
 
@@ -68,12 +79,14 @@ function probe (url, timeoutMs) {
 
 /**
  * 探测两个后端。
+ *
+ * @param {number} [selfPort] 本服务自己的端口 —— 用来跳过探到自己的情况
  * @returns {Promise<{study: object, wiki: object}>}
  */
-function checkBackends () {
+function checkBackends (selfPort) {
   return Promise.all([
-    probe(STUDY_URL + "/api/health"),
-    probe(WIKI_URL + "/api/health")
+    probe(STUDY_URL + "/api/health", undefined, selfPort),
+    probe(WIKI_URL + "/api/health", undefined, selfPort)
   ]).then(function (results) {
     return {
       study: {

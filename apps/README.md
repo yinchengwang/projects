@@ -97,6 +97,7 @@ web/
 │   └── games/       4 个游戏引擎 + 存档层
 ├── web/             各模块前端 + cjs-loader.js（浏览器侧 CommonJS 加载器）+ preview.html（页面预览壳）
 ├── preview/         页面预览工具（一键启动 + 清单同步）
+├── installer/       Windows 安装包（NSIS 脚本 + 构建脚本 + 启动器）
 └── tests/           全部测试，一条命令跑完
 ```
 
@@ -117,6 +118,19 @@ node apps/web/preview/open.js
 
 不是截图 —— 数据真、交互真、Canvas 真在画。零 npm 依赖。
 详见 [`web/preview/README.md`](web/preview/README.md)。
+
+### Windows 安装包
+
+打成一个能双击安装的 `.exe`：自带 Node 运行时、开始菜单与桌面入口、
+「应用和功能」里能卸载，逐用户安装不需要管理员权限。
+
+```bash
+node apps/web/installer/build.js
+# 产物：build/apps-web/工作台-1.0.0-安装包.exe
+```
+
+零 npm 依赖（NSIS 工具链由 `fetch-nsis.js` 现拉现用，不入库）。
+详见 [`web/installer/README.md`](web/installer/README.md)。
 
 ---
 

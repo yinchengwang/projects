@@ -62,7 +62,9 @@ function createApp (opts) {
 
   // 后端在线状态：study-hub 与 wiki-rag 是独立进程，外壳要用它提示「还没启动」
   router.add("GET", "/api/health", function (req, res) {
-    checkBackends().then(function (result) {
+    // 把本服务自己的端口传进去：探到自己的时候要跳过，否则会无限递归
+    const selfPort = (req.socket && req.socket.localPort) || 0
+    checkBackends(selfPort).then(function (result) {
       sendJson(res, 200, { ok: true, study: result.study, wiki: result.wiki })
     }).catch(function (err) {
       sendJson(res, 200, { ok: false, error: (err && err.message) || "探测失败" })
