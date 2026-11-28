@@ -13,6 +13,7 @@ const path = require("node:path")
 const { createRouter, HttpError } = require("./router.js")
 const { createStaticHandler } = require("./static.js")
 const { checkBackends } = require("./health.js")
+const { registerAiTimerRoutes } = require("./aitimer.js")
 
 const ROOT = path.resolve(__dirname, "..")
 const WEB_DIR = path.join(ROOT, "web")
@@ -189,6 +190,23 @@ function createApp (opts) {
   router.add("GET", "/knowledge/", knowledgeEntry)
   // 段数不对的 /knowledge/pages/xxx 也返回壳，由前端提示「页面不存在」。
   router.add("GET", "/knowledge/pages/:a", knowledgeShell)
+
+  /* ------------------------------------------------------------
+   * aitimer 模块：AI 定时任务产物（AI 简报 / 代码仓巡检 / 每日一特性）。
+   * 页面模式与其它模块一致 —— /aitimer/pages/* 返回模块 HTML 壳，
+   * 实际页面由前端 cjs-loader 按路径加载。
+   * ---------------------------------------------------------- */
+  const aitimerShell = makeModuleShell(
+    path.join(WEB_DIR, "aitimer", "shell.html"),
+    "aitimer 模块页面壳读取失败"
+  )
+  router.add("GET", "/aitimer/pages/:a", aitimerShell)
+  const aitimerEntry = makeModuleEntry("/aitimer/pages/index")
+  router.add("GET", "/aitimer", aitimerEntry)
+  router.add("GET", "/aitimer/", aitimerEntry)
+
+  // AI 定时任务产物的三个接口（索引 / 单篇 / 原文）。
+  registerAiTimerRoutes(router, sendJson)
 
   const server = http.createServer(function (req, res) {
     const rawUrl = req.url || "/"

@@ -1,0 +1,241 @@
+/* style.css —— aitimer 模块样式 */
+
+/* 页面容器 */
+.aitimer-page {
+  padding-bottom: 24px;
+}
+
+/* 集合卡片内的条目行 */
+.aitimer-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--border);
+  text-decoration: none;
+  color: inherit;
+}
+
+.aitimer-item:last-child {
+  border-bottom: none;
+}
+
+.aitimer-item:hover .aitimer-item-title {
+  color: var(--brand);
+}
+
+.aitimer-item-date {
+  flex: 0 0 92px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+
+.aitimer-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aitimer-item-title {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aitimer-item-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aitimer-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 领域系列的入口卡（learn 集合） */
+.aitimer-series-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.aitimer-series-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 0.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  text-decoration: none;
+  color: inherit;
+}
+
+.aitimer-series-card:hover {
+  border-color: var(--brand);
+}
+
+.aitimer-series-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aitimer-series-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.aitimer-series-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.aitimer-series-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 顶部说明条 */
+.aitimer-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 文档正文 */
+.aitimer-md {
+  line-height: 1.7;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.aitimer-md h1 {
+  font-size: 18px;
+  margin: 18px 0 8px;
+}
+
+.aitimer-md h2 {
+  font-size: 16px;
+  margin: 16px 0 6px;
+}
+
+.aitimer-md h3 {
+  font-size: 15px;
+  margin: 14px 0 6px;
+}
+
+.aitimer-md h4,
+.aitimer-md h5,
+.aitimer-md h6 {
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+
+.aitimer-md p {
+  margin: 8px 0;
+}
+
+.aitimer-md ul {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.aitimer-md li {
+  margin: 3px 0;
+}
+
+.aitimer-md pre {
+  background: var(--bg-subtle);
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.aitimer-md code {
+  background: var(--bg-subtle);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.aitimer-md pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}
+
+.aitimer-md blockquote {
+  margin: 8px 0;
+  padding: 4px 0 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.aitimer-md a {
+  color: var(--brand);
+}
+
+.aitimer-md img {
+  max-width: 100%;
+}
+
+/* 参考链接列表 */
+.aitimer-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aitimer-link {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+/* 底部导航条 */
+.aitimer-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.aitimer-nav-link {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aitimer-nav-link:hover {
+  color: var(--brand);
+}
+
+.aitimer-nav-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+}

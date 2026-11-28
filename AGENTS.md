@@ -79,8 +79,12 @@ clang-format -i $(git ls-files '*.c' '*.cpp' '*.h' '*.hpp')
 |---|---|---|
 | 程序员工作台 | `/workbench/` | 18 |
 | 知识中心 | `/knowledge/` | 17 |
+| AI 简报 | `/aitimer/` | 3 |
 | 足迹 | `/trip/` | 3 |
 | 游戏 | `/games/` | 5 |
+
+`/aitimer/` 是**唯一「数据在磁盘上」的模块** —— 它读仓库根的 `ai-timer/`（3 个 AI 定时任务的
+产物目录，被 `.gitignore` 忽略）。目录缺失时接口返回 200 + `exists: false`，前端显示空态。
 
 `apps/study-hub/`（学习中枢，5174）与 `apps/wiki-rag/`（Wiki 检索，8000）是**独立进程**，
 保持原地不动 —— 它们的前端硬编码了绝对路径，挂到子路径下会失效。

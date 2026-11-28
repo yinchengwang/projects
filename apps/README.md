@@ -39,6 +39,7 @@ node apps/web/server/main.js
 |---|---|---|---|
 | 程序员工作台 | `/workbench/` | 18 | 待办、技术笔记、代码片段、面试题库、资源、读书、健身、心情、日程、项目集、闪念 + 10 个离线工具 |
 | 知识中心 | `/knowledge/` | 17 | SM-2 间隔复习、题库练习与错题本、面试追踪与模拟面试、知识图谱（Canvas）、技术雷达（Canvas）、五年计划 |
+| AI 简报 | `/aitimer/` | 3 | 浏览 AI 定时任务产物：每日简报、代码仓巡检、每日一特性深度系列 |
 | 足迹 | `/trip/` | 3 | 记录走过的地方与照片（照片存 IndexedDB） |
 | 游戏 | `/games/` | 5 | 贪吃蛇、2048、数独、消消乐 |
 
@@ -52,11 +53,38 @@ node apps/web/server/main.js
 
 全部数据只在本机，不上传任何服务器。
 
+### AI 简报模块（`/aitimer/`）
+
+**唯一一个「数据在磁盘上、不在浏览器里」的模块。** 它读取仓库根的 `ai-timer/` 目录 ——
+那是 3 个 AI 定时任务的产物目录（详见 [`../ai-timer/README.md`](../ai-timer/README.md)）。
+
+`ai-timer/` 被 `.gitignore` 忽略，所以**新克隆的仓可能没有这个目录**。
+模块对此做了兜底：目录不存在时接口返回 200 + `exists: false`，前端显示空态而不是报错。
+
+| 集合 | 目录 | 内容 |
+|---|---|---|
+| AI 简报 | `ai-timer/AI简报/` | 每日数据库+AI 简报，按日期倒序 |
+| 代码仓巡检 | `ai-timer/代码仓巡检/` | 每日只读巡检报告，按日期倒序 |
+| 每日一特性 | `ai-timer/每日一特性/learn_deep/<领域>/` | 各领域系列，系列内含 README 索引页与专题文章 |
+
+服务端接口（`apps/web/server/aitimer.js`）：
+
+| 接口 | 返回 |
+|---|---|
+| `GET /api/aitimer/index` | 完整索引：三个集合 + 每个文档的元信息 |
+| `GET /api/aitimer/doc?id=<docId>` | 单篇文档（正文已去掉 frontmatter） |
+| `GET /api/aitimer/raw?id=<docId>` | 原始 Markdown 全文（含 frontmatter） |
+
+文档 id 形如 `briefing/2026-11-28`、`inspection/2026-11-28`、`learn/db/pg-hot-update`。
+id 含斜杠，所以走 query 参数而非路由参数。
+
+可用 `AI_TIMER_ROOT` 环境变量覆盖 `ai-timer` 根目录（测试用）。
+
 ### 目录
 
 ```
 web/
-├── server/          组合根：main / app / router / static / health
+├── server/          组合根：main / app / router / static / health / aitimer
 ├── shared/
 │   ├── core/        通用层：storage / store / id / date / format / md / constants / theme
 │   ├── ui.js        构件层（页头 / 主卡 / 数字块 / 药丸 / 进度条 / 空态）

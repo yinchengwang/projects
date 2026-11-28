@@ -257,10 +257,13 @@ L4 modalities/                  模态之间禁互相 include
 
 前端已从微信小程序重写为**本机 Web 应用**（2026-11-26 完成合并）。
 
-`apps/web/` 是合并应用：组合根（`server/`）+ 共用层（`shared/`）+ 4 个模块前端（`web/`），
-共 43 个页面（workbench 18 / knowledge 17 / trip 3 / games 5）。
+`apps/web/` 是合并应用：组合根（`server/`）+ 共用层（`shared/`）+ 5 个模块前端（`web/`），
+共 46 个页面（workbench 18 / knowledge 17 / aitimer 3 / trip 3 / games 5）。
 零 npm 依赖、零构建（原生 ES2020 + DOM + Canvas），浏览器侧用 `web/cjs-loader.js` 加载
 CommonJS 模块 —— 测试与浏览器跑的是同一份源码。
+
+`aitimer` 模块是**唯一「数据在磁盘上」的模块** —— 读仓库根的 `ai-timer/`（AI 定时任务产物，
+被 `.gitignore` 忽略）。目录缺失时接口返回 200 + `exists: false`，前端显示空态。
 
 `apps/study-hub/`（5174）与 `apps/wiki-rag/`（8000）是**独立进程**，原地保留。
 
