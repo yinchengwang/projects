@@ -152,6 +152,13 @@ def lint_page(page_path):
         if not _LIST_LINK_RE.match(line):
             errors.append("参考章节第 %d 行不是完整的 [标题](url) 链接: %s" % (line_no, stripped[:60]))
 
+    # 代码围栏必须成对：单个游离的 ``` 会把后面的正文吞进代码块，
+    # 既破坏渲染、也会让 RAG 切块把整段当代码。门禁此前不查这一项
+    # （已由 llama-index e02 抓到一次：一处多余围栏两个门禁全放过）。
+    fences = [i for i, line in enumerate(body.splitlines(), 1) if line.strip().startswith("```")]
+    if len(fences) % 2 != 0:
+        errors.append("代码围栏数量为奇数（%d 个），有未闭合的 ```" % len(fences))
+
     return errors
 
 
