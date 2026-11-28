@@ -310,7 +310,7 @@ refs:
 ## 参考
 
 - [SQLite Atomic Commit In SQLite（sqlite.org 官方文档）](https://sqlite.org/atomiccommit.html)
-- [SQLite Write-Ahead Logging（sqlite.org 官方文档）](https://sqlite.org/wal.html）
+- [SQLite Write-Ahead Logging（sqlite.org 官方文档）](https://sqlite.org/wal.html)
 - [SQLite PRAGMA journal_mode（sqlite.org 官方文档）](https://sqlite.org/pragma.html#pragma_journal_mode)
 - [SQLite Temp File Storage（sqlite.org 官方文档）](https://sqlite.org/tempfiles.html)
 - [SQLite 源码浏览：src/pager.c（官方 Fossil 仓库）](https://sqlite.org/src/file/src/pager.c)

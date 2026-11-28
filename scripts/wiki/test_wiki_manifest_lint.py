@@ -10,7 +10,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wiki_manifest_lint import lint_manifest, main
+from wiki_manifest import load_manifest
+from wiki_manifest_lint import lint_manifest, lint_page_refs, main
 
 GOOD = {
     "project": "postgres",
@@ -180,6 +181,107 @@ class TestMainCliDirectory(unittest.TestCase):
             code = main([self.dir])
         self.assertEqual(code, 0)
         self.assertEqual(out.getvalue().count("PASS"), 2)
+
+
+class TestPageRefsMustMatchManifest(unittest.TestCase):
+    """页面写出来后必须兑现 manifest 的 refs 承诺。
+
+    wiki_refs 只校验「写出的符号存在」，不看「是否少写」；少写一条 ref、或某条
+    ref 漏了 symbols，它都判 PASS。这条门禁补的就是那个缺口。
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.manifest_path = os.path.join(self.dir, "_manifest.yml")
+        with io.open(self.manifest_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(GOOD_TEXT)
+
+    def _write_page(self, refs_block):
+        path = os.path.join(self.dir, "a04-buffer-pool.md")
+        text = (
+            "---\n"
+            "project: postgres\n"
+            "feature: buffer-pool\n"
+            "title: Buffer Pool 主体\n"
+            "page_type: feature\n"
+            "schema_version: 1\n"
+            "refs:\n"
+            "%s"
+            "---\n\n"
+            "## 一句话职责\n\nx\n\n"
+            "## 机制是什么\n\nx\n\n"
+            "## 怎么实现的\n\nx\n\n"
+            "## 关键取舍\n\nx\n\n"
+            "## 源码落点\n\n| 路径 | 符号 | 作用 |\n|---|---|---|\n\n"
+            "## 参考\n\n- [文档](https://example.com/a)\n- [源码](https://example.com/b)\n\n"
+            "## 与主核 / AI 的关系\n\nx\n"
+        ) % refs_block
+        with io.open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        return path
+
+    GOOD_BLOCK = (
+        "  - path: src/backend/storage/buffer/bufmgr.c\n"
+        "    symbols: [ReadBufferExtended]\n"
+    )
+
+    def _load(self):
+        return load_manifest(self.manifest_path)
+
+    def test_matching_page_passes(self):
+        self._write_page(self.GOOD_BLOCK)
+        self.assertEqual(lint_page_refs(self._load(), self.dir), [])
+
+    def test_page_without_refs_reported(self):
+        """页面 refs 为空：条数不匹配即报错（空 frontmatter refs 被解析成 0 条）。"""
+        self._write_page("")
+        errors = lint_page_refs(self._load(), self.dir)
+        self.assertTrue(any("页面 refs 0 条" in e for e in errors), errors)
+
+    def test_missing_ref_entry_reported(self):
+        """少写一条 ref：wiki_refs 会 PASS，这条门禁必须拦住。"""
+        m = self._load()
+        m["pages"][0]["refs"].append(
+            {"path": "src/backend/storage/buffer/bufmgr.h", "symbols": ["BufferTag"]}
+        )
+        self._write_page(self.GOOD_BLOCK)  # 页面只写了一条
+        errors = lint_page_refs(m, self.dir)
+        self.assertTrue(any("页面 refs 1 条" in e for e in errors), errors)
+
+    def test_symbols_omitted_reported(self):
+        """某条 ref 漏了 symbols：同样只有这条门禁能发现。"""
+        self._write_page("  - path: src/backend/storage/buffer/bufmgr.c\n")
+        errors = lint_page_refs(self._load(), self.dir)
+        self.assertTrue(any("symbols" in e for e in errors), errors)
+
+    def test_wrong_path_reported(self):
+        self._write_page(
+            "  - path: src/backend/storage/buffer/other.c\n"
+            "    symbols: [ReadBufferExtended]\n"
+        )
+        errors = lint_page_refs(self._load(), self.dir)
+        self.assertTrue(any("path" in e for e in errors), errors)
+
+    def test_wrong_symbols_reported(self):
+        self._write_page(
+            "  - path: src/backend/storage/buffer/bufmgr.c\n"
+            "    symbols: [NotTheSymbol]\n"
+        )
+        errors = lint_page_refs(self._load(), self.dir)
+        self.assertTrue(any("symbols" in e for e in errors), errors)
+
+    def test_missing_page_is_skipped(self):
+        """Phase 1 只有 manifest、页面还没写：不该报错。"""
+        self.assertEqual(lint_page_refs(self._load(), self.dir), [])
+
+    def test_cli_reports_page_refs_failure(self):
+        self._write_page("  - path: src/backend/storage/buffer/bufmgr.c\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = main([self.manifest_path])
+        self.assertEqual(code, 1)
+        self.assertIn("symbols", out.getvalue())
 
 
 if __name__ == "__main__":

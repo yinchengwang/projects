@@ -21,6 +21,12 @@ _LINE_REF_RE = re.compile(
 )
 # 参考章节的外部链接计数。只认 http(s)，不认相对路径。
 _LINK_RE = re.compile(r"https?://")
+# 参考章节的条目形态：`- [标题](url)`，允许链接后面跟一句说明。
+# 用来发现「链接被截断」这类书写事故——只看 https 出现次数会漏掉 `- [规范](` 这种
+# 半截链接（已由 goose f01 抓到一次）。标题里允许出现方括号（例如 `#[default]`），
+# 所以方括号部分用贪婪匹配；URL 部分不允许空白与圆括号，全角括号因此也会被拦下
+# （全角 `）` 收尾的链接在浏览器里是坏链）。
+_LIST_LINK_RE = re.compile(r"^\s*[-*]\s+.*\]\(([^()\s]+)\)")
 # 章节标题必须独占一行且以 `## ` 开头：`### 参考` 不算数。
 _SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 # 特性页文件名形如 a04-buffer-pool.md，取「首字母+编号+横线」之后的尾段。
@@ -123,6 +129,15 @@ def lint_page(page_path):
     n_links = len(_LINK_RE.findall(ref_body))
     if n_links < _MIN_REFERENCES:
         errors.append("参考章节外部链接 %d 个，至少需要 %d 个" % (n_links, _MIN_REFERENCES))
+
+    # 逐条核对列表项：任何以 `- [` 开头的行都必须是一条完整的 `- [标题](url)`。
+    # 只数 https 不会发现「括号没闭合」或「链接被截断」，那类页面仍是残缺的。
+    for line_no, line in enumerate(ref_body.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped.startswith(("- [", "* [")):
+            continue
+        if not _LIST_LINK_RE.match(line):
+            errors.append("参考章节第 %d 行不是完整的 [标题](url) 链接: %s" % (line_no, stripped[:60]))
 
     return errors
 

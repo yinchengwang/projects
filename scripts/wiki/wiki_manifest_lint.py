@@ -107,6 +107,71 @@ def lint_manifest(manifest, project_dir=None):
     return errors
 
 
+def lint_page_refs(manifest, project_dir):
+    """页面对已写出的页面，核对它的 refs 是否与 manifest 完全一致。
+
+    为什么单列一条门禁：`wiki_refs.py` 只校验「页面里写出的符号在该文件里存在」，
+    它不要求页面把 manifest 承诺的符号全部写出——少写一条 ref、或某条 ref 漏了
+    symbols，`wiki_refs` 都会判 PASS（已由 open-interpreter b02 抓到一次）。
+    契约是 manifest，页面必须兑现它，所以条数、path 与 symbols 都要逐条相等。
+
+    页面尚未写出时跳过：Phase 1 只产 manifest，此时页面本就不存在。
+    """
+    errors = []
+    pages = manifest.get("pages")
+    if not isinstance(pages, list):
+        return errors
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        page_file = page.get("page_file")
+        if not isinstance(page_file, str):
+            continue
+        path = os.path.join(project_dir, page_file)
+        if not os.path.exists(path):
+            continue
+
+        # 延迟导入：本模块在 Phase 1 也可能被用到，那里没有 wiki_frontmatter 的负担。
+        from wiki_frontmatter import FrontmatterError, parse_frontmatter
+
+        label = page_file
+        try:
+            with open(path, encoding="utf-8") as handle:
+                meta, _ = parse_frontmatter(handle.read())
+        except FrontmatterError as exc:
+            errors.append("%s: front-matter 解析失败: %s" % (label, exc))
+            continue
+
+        actual = meta.get("refs")
+        expected = page.get("refs")
+        if not isinstance(actual, list):
+            errors.append("%s: front-matter 里没有 refs 或不是列表" % label)
+            continue
+        if not isinstance(expected, list):
+            continue
+        if len(actual) != len(expected):
+            errors.append(
+                "%s: 页面 refs %d 条，manifest 承诺 %d 条" % (label, len(actual), len(expected))
+            )
+            continue
+        for index, (got, want) in enumerate(zip(actual, expected)):
+            if not isinstance(got, dict) or not isinstance(want, dict):
+                errors.append("%s: refs[%d] 不是映射" % (label, index))
+                continue
+            if got.get("path") != want.get("path"):
+                errors.append(
+                    "%s: refs[%d].path 为 %r，manifest 是 %r"
+                    % (label, index, got.get("path"), want.get("path"))
+                )
+            if list(got.get("symbols") or []) != list(want.get("symbols") or []):
+                errors.append(
+                    "%s: refs[%d].symbols 为 %r，manifest 是 %r"
+                    % (label, index, got.get("symbols"), want.get("symbols"))
+                )
+    return errors
+
+
 def _iter_manifests(target):
     """目录递归收集 manifest，跳隐藏目录；单文件原样返回。"""
     if not os.path.isdir(target):
@@ -146,8 +211,17 @@ def main(argv=None):
                 print("FAIL %s" % path)
                 for error in errors:
                     print("     - %s" % error)
-            elif not args.quiet:
-                print("PASS %s" % path)
+            else:
+                # manifest 自洽只算一半：已写出的页面还必须兑现 manifest 的 refs。
+                project_dir = os.path.dirname(os.path.abspath(path))
+                page_errors = lint_page_refs(manifest, project_dir)
+                if page_errors:
+                    failed += 1
+                    print("FAIL %s" % path)
+                    for error in page_errors:
+                        print("     - %s" % error)
+                elif not args.quiet:
+                    print("PASS %s" % path)
 
     print("-- 检查 %d 个 manifest，失败 %d 个" % (checked, failed))
     return 1 if failed else 0
