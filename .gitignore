@@ -163,3 +163,6 @@ docs/agent-wiki/
 
 # ---- wiki 源码浅克隆缓存（scripts/wiki/repo_cache.py 生成，不入库） ----
 .cache/
+
+# ---- 前端页面预览产物（apps/web/preview/generate.js 生成，不入库） ----
+apps/web/preview/out/
