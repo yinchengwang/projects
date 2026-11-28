@@ -1,0 +1,382 @@
+---
+project: open-interpreter
+schema_version: 1
+pages:
+  - feature: harness-model
+    feature_group: A-Harness 与入口
+    title: Harness 模型与名称解析
+    page_file: a01-harness-model.md
+    refs:
+      - path: codex-rs/tools/src/harness.rs
+        symbols: [Harness, from_config_name]
+      - path: codex-rs/tools/src/harness.rs
+        symbols: [is_claude_code, is_kimi_code, is_minimal, is_swe_agent]
+  - feature: codex-compat
+    feature_group: A-Harness 与入口
+    title: Codex 协议与 SDK 兼容
+    page_file: a02-codex-compat.md
+    refs:
+      - path: codex-rs/chat-wire-compat/src/lib.rs
+        symbols: [ChatCompletionsCompatClient]
+      - path: codex-rs/chat-wire-compat/src/request.rs
+        symbols: [ToolKinds, ToolOutputKind]
+      - path: codex-rs/acp-server/src/lib.rs
+        symbols: [AppServerAcpAgent, CONFIG_ID_HARNESS]
+  - feature: cli-entry
+    feature_group: A-Harness 与入口
+    title: 命令行入口与子命令分派
+    page_file: a03-cli-entry.md
+    refs:
+      - path: codex-rs/cli/src/main.rs
+        symbols: [MultitoolCli, Subcommand, DebugSubcommand]
+      - path: codex-rs/cli/src/main.rs
+        symbols: [ALLOCATOR, CompletionCommand]
+  - feature: harness-emulation
+    feature_group: A-Harness 与入口
+    title: Harness 请求模拟与路由
+    page_file: a04-harness-emulation.md
+    refs:
+      - path: codex-rs/core/src/harness/request.rs
+        symbols: [ChatHarnessRequest, build_chat_harness_request, apply_chat_harness_postprocess]
+      - path: codex-rs/core/src/harness/routing.rs
+        symbols: [resolve_stream_transport_route, harness_config_name, ClaudeCodeProfileRoute]
+      - path: codex-rs/core/src/harness/guidance.rs
+        symbols: [guidance_for_harness]
+  - feature: minimal-harness
+    feature_group: A-Harness 与入口
+    title: 最小 harness 与消息转换
+    page_file: a05-minimal-harness.md
+    refs:
+      - path: codex-rs/core/src/harness/minimal.rs
+        symbols: [MINIMAL_SYSTEM_PROMPT, build_request, build_tools]
+      - path: codex-rs/core/src/harness/minimal.rs
+        symbols: [flush_pending_tool_calls, convert_message_content, minimal_tool_output_content]
+  - feature: exec-policy-rules
+    feature_group: B-执行策略与审批
+    title: 执行策略规则与匹配
+    page_file: b01-exec-policy-rules.md
+    refs:
+      - path: codex-rs/execpolicy/src/rule.rs
+        symbols: [PrefixRule, NetworkRule, Decision]
+      - path: codex-rs/execpolicy/src/rule.rs
+        symbols: [PrefixPattern, PatternToken, normalize_network_rule_host]
+  - feature: exec-policy-parser
+    feature_group: B-执行策略与审批
+    title: 策略文件解析与校验
+    page_file: b02-exec-policy-parser.md
+    refs:
+      - path: codex-rs/execpolicy/src/parser.rs
+        symbols: [PolicyParser, PolicyBuilder, PendingExampleValidation]
+      - path: codex-rs/execpolicy/src/parser.rs
+        symbols: [parse_pattern, parse_pattern_token, parse_network_rule_decision]
+  - feature: policy-evaluation
+    feature_group: B-执行策略与审批
+    title: 策略求值与规则修订
+    page_file: b03-policy-evaluation.md
+    refs:
+      - path: codex-rs/execpolicy/src/policy.rs
+        symbols: [Policy, Evaluation, MatchOptions, HeuristicsFallback]
+      - path: codex-rs/execpolicy/src/amend.rs
+        symbols: [blocking_append_allow_prefix_rule, blocking_append_network_rule]
+  - feature: approvals
+    feature_group: B-执行策略与审批
+    title: 审批档案与风险判定
+    page_file: b04-approvals.md
+    refs:
+      - path: codex-rs/protocol/src/approvals.rs
+        symbols: [ResolvedPermissionProfile, EscalationPermissions, ExecPolicyAmendment]
+      - path: codex-rs/protocol/src/approvals.rs
+        symbols: [GuardianRiskLevel, NetworkApprovalContext, NetworkPolicyRuleAction]
+  - feature: sandbox-manager
+    feature_group: C-沙箱
+    title: 沙箱管理器与平台选择
+    page_file: c01-sandbox-manager.md
+    refs:
+      - path: codex-rs/sandboxing/src/manager.rs
+        symbols: [SandboxablePreference, get_platform_sandbox, SandboxCommand]
+      - path: codex-rs/sandboxing/src/manager.rs
+        symbols: [SandboxExecRequest, SandboxTransformError, with_managed_mitm_ca_readable_root]
+  - feature: macos-seatbelt
+    feature_group: C-沙箱
+    title: macOS Seatbelt 沙箱
+    page_file: c02-macos-seatbelt.md
+    refs:
+      - path: codex-rs/sandboxing/src/seatbelt.rs
+        symbols: [MacosSeatbeltProfile, MACOS_SEATBELT_BASE_POLICY, MACOS_SEATBELT_NETWORK_POLICY]
+      - path: codex-rs/sandboxing/src/seatbelt.rs
+        symbols: [is_loopback_host, proxy_loopback_ports_from_env, SeatbeltPreparationError]
+  - feature: linux-sandbox
+    feature_group: C-沙箱
+    title: Linux Landlock 与 bwrap 沙箱
+    page_file: c03-linux-sandbox.md
+    refs:
+      - path: codex-rs/linux-sandbox/src/bwrap.rs
+        symbols: [BwrapOptions, BwrapArgs, BwrapNetworkMode]
+      - path: codex-rs/linux-sandbox/src/bwrap.rs
+        symbols: [LINUX_PLATFORM_DEFAULT_READ_ROOTS, SyntheticMountTarget, FileIdentity]
+  - feature: windows-sandbox
+    feature_group: C-沙箱
+    title: Windows 受限令牌沙箱
+    page_file: c04-windows-sandbox.md
+    refs:
+      - path: codex-rs/sandboxing/src/windows.rs
+        symbols: [WindowsSandboxFilesystemOverrides, windows_sandbox_uses_elevated_backend, resolve_windows_restricted_token_filesystem_overrides]
+      - path: codex-rs/sandboxing/src/windows.rs
+        symbols: [permission_profile_supports_windows_restricted_token_sandbox, has_reopened_writable_descendant]
+  - feature: tool-call
+    feature_group: D-工具系统
+    title: 工具调用与环境抽象
+    page_file: d01-tool-call.md
+    refs:
+      - path: codex-rs/tools/src/tool_call.rs
+        symbols: [ToolCall, ToolCallSource, ToolEnvironment]
+      - path: codex-rs/tools/src/tool_call.rs
+        symbols: [TurnItemEmitter, ExtensionTurnItem, HistoryLoader]
+  - feature: json-schema
+    feature_group: D-工具系统
+    title: 工具输入 schema 的清洗
+    page_file: d02-json-schema.md
+    refs:
+      - path: codex-rs/tools/src/json_schema.rs
+        symbols: [parse_tool_input_schema, sanitize_json_schema, prepare_tool_input_schema]
+      - path: codex-rs/tools/src/json_schema.rs
+        symbols: [DEFINITION_TABLE_KEYS, has_composition_keyword, sanitize_schema_table]
+  - feature: code-mode
+    feature_group: D-工具系统
+    title: 代码模式下的工具定义
+    page_file: d03-code-mode.md
+    refs:
+      - path: codex-rs/tools/src/code_mode.rs
+        symbols: [augment_tool_spec_for_code_mode, collect_code_mode_tool_definitions, code_mode_name_for_tool_name]
+      - path: codex-rs/tools/src/code_mode.rs
+        symbols: [tool_spec_to_code_mode_tool_definition, augmented_description_for_spec]
+  - feature: mcp-tool
+    feature_group: D-工具系统
+    title: MCP 工具的转换与上限
+    page_file: d04-mcp-tool.md
+    refs:
+      - path: codex-rs/tools/src/mcp_tool.rs
+        symbols: [MAX_MCP_TOOL_DESCRIPTION_BYTES, parse_mcp_tool, parse_mcp_tool_with_description_limit]
+      - path: codex-rs/tools/src/mcp_tool.rs
+        symbols: [parse_agent_plugin_mcp_tool, mcp_call_tool_result_output_schema]
+  - feature: output-schema
+    feature_group: D-工具系统
+    title: 工具输出 schema 与存储
+    page_file: d05-output-schema.md
+    refs:
+      - path: codex-rs/tools/src/output_schema.rs
+        symbols: [ToolOutputSchema, OutputSchemaStorage]
+      - path: codex-rs/tools/src/tool_definition.rs
+        symbols: [ToolDefinition]
+  - feature: apply-patch
+    feature_group: D-工具系统
+    title: 补丁解析与应用
+    page_file: d06-apply-patch.md
+    refs:
+      - path: codex-rs/apply-patch/src/lib.rs
+        symbols: [ApplyPatchArgs, ApplyPatchFileChange, apply_patch_file_update_mode_from_env]
+      - path: codex-rs/apply-patch/src/lib.rs
+        symbols: [ApplyPatchOptions, ApplyPatchError, CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR]
+  - feature: turn-items
+    feature_group: E-协议条目与动态工具
+    title: 回合条目模型
+    page_file: e01-turn-items.md
+    refs:
+      - path: codex-rs/protocol/src/items.rs
+        symbols: [TurnItem, UserMessageItem, FunctionCallOutputItem]
+      - path: codex-rs/protocol/src/items.rs
+        symbols: [HookPromptItem, AgentMessageItem, AsyncUserInputQuestion]
+  - feature: dynamic-tools
+    feature_group: E-协议条目与动态工具
+    title: 动态工具规格
+    page_file: e02-dynamic-tools.md
+    refs:
+      - path: codex-rs/protocol/src/dynamic_tools.rs
+        symbols: [DynamicToolSpec, DynamicToolNamespaceSpec, normalize_dynamic_tool_specs]
+      - path: codex-rs/protocol/src/dynamic_tools.rs
+        symbols: [DynamicToolCallRequest, DynamicToolResponse, LegacyDynamicToolSpec]
+  - feature: hooks-registry
+    feature_group: F-钩子与技能
+    title: 钩子注册与触发
+    page_file: f01-hooks-registry.md
+    refs:
+      - path: codex-rs/hooks/src/registry.rs
+        symbols: [Hooks, HooksConfig, list_hooks]
+      - path: codex-rs/hooks/src/types.rs
+        symbols: [Hook, HookPayload, HookEvent, HookResult]
+  - feature: hook-output-spill
+    feature_group: F-钩子与技能
+    title: 钩子输出溢写
+    page_file: f02-hook-output-spill.md
+    refs:
+      - path: codex-rs/hooks/src/output_spill.rs
+        symbols: [HookOutputSpiller, DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT, spilled_hook_output_preview]
+      - path: codex-rs/hooks/src/output_spill.rs
+        symbols: [AdditionalContextLimit, AdditionalContext, HOOK_OUTPUTS_DIR]
+  - feature: skills-loading
+    feature_group: F-钩子与技能
+    title: 技能加载与 frontmatter 解析
+    page_file: f03-skills-loading.md
+    refs:
+      - path: codex-rs/skills/src/loading.rs
+        symbols: [SkillRootLoader, LoadedSkills, SkillRootSnapshotCache]
+      - path: codex-rs/skills/src/parser.rs
+        symbols: [parse_skill_frontmatter_metadata, MAX_NAME_LEN, SkillParseError]
+  - feature: skill-selection
+    feature_group: F-钩子与技能
+    title: 技能提及与隐式调用识别
+    page_file: f04-skill-selection.md
+    refs:
+      - path: codex-rs/skills/src/mentions.rs
+        symbols: [ToolMentions, tool_kind_for_path, SKILL_PATH_PREFIX]
+      - path: codex-rs/skills/src/invocation.rs
+        symbols: [detect_implicit_skill_invocation_for_command, tokenize_command, detect_skill_script_run]
+      - path: codex-rs/skills/src/selection.rs
+        symbols: [collect_explicit_skill_mentions, select_skills_from_mentions]
+  - feature: rollout-recorder
+    feature_group: G-会话持久化与上下文
+    title: 会话滚动记录
+    page_file: g01-rollout-recorder.md
+    refs:
+      - path: codex-rs/rollout/src/recorder.rs
+        symbols: [RolloutRecorder, RolloutRecorderParams, RolloutWriterTask]
+      - path: codex-rs/rollout/src/recorder.rs
+        symbols: [RolloutCmd, ThreadListArchiveFilter, ThreadListRepairMode]
+  - feature: rollout-compression
+    feature_group: G-会话持久化与上下文
+    title: 会话文件压缩
+    page_file: g02-rollout-compression.md
+    refs:
+      - path: codex-rs/rollout/src/compression.rs
+        symbols: [RolloutCompressionTrigger, spawn_rollout_compression_worker, materialize_rollout_for_append_blocking]
+      - path: codex-rs/rollout/src/compression.rs
+        symbols: [compressed_rollout_path, COMPRESSED_SUFFIX, MAX_NOT_FOUND_RETRIES]
+  - feature: session-index
+    feature_group: G-会话持久化与上下文
+    title: 会话索引与倒序扫描
+    page_file: g03-session-index.md
+    refs:
+      - path: codex-rs/rollout/src/session_index.rs
+        symbols: [SessionIndexEntry, scan_index_from_end, SESSION_INDEX_FILE]
+      - path: codex-rs/rollout/src/reverse_jsonl_scanner.rs
+        symbols: [ReverseJsonlScanner, ScanOutcome, READ_CHUNK_SIZE]
+  - feature: compaction
+    feature_group: G-会话持久化与上下文
+    title: 上下文压缩
+    page_file: g04-compaction.md
+    refs:
+      - path: codex-rs/core/src/compact.rs
+        symbols: [COMPACT_USER_MESSAGE_MAX_TOKENS, CompactedHistoryMetadata, InitialContextInjection]
+      - path: codex-rs/core/src/compact.rs
+        symbols: [CompactionAnalyticsAttempt, compaction_status_from_result, CompactedUserMessage]
+  - feature: agents-md
+    feature_group: G-会话持久化与上下文
+    title: AGENTS.md 指令加载
+    page_file: g05-agents-md.md
+    refs:
+      - path: codex-rs/core/src/agents_md.rs
+        symbols: [DEFAULT_AGENTS_MD_FILENAME, LoadedAgentsMd, InstructionProvenance]
+      - path: codex-rs/core/src/agents_md_manager.rs
+        symbols: [AgentsMdManager, MAX_THREAD_INSTRUCTIONS_TOKENS, validate_thread_instruction_size]
+  - feature: context-fragments
+    feature_group: G-会话持久化与上下文
+    title: 上下文片段与附加信息
+    page_file: g06-context-fragments.md
+    refs:
+      - path: codex-rs/context-fragments/src/fragment.rs
+        symbols: [RenderedFragment, ContextualUserFragment, matches_marked_text]
+      - path: codex-rs/context-fragments/src/additional_context.rs
+        symbols: [MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS, AdditionalContextUserFragment, additional_context_body]
+  - feature: provider-caps
+    feature_group: H-模型与提供方
+    title: 提供方能力与账号状态
+    page_file: h01-provider-caps.md
+    refs:
+      - path: codex-rs/model-provider/src/provider.rs
+        symbols: [ProviderCapabilities, ProviderAccountState, ProviderUnauthorizedRecovery]
+      - path: codex-rs/model-provider/src/provider.rs
+        symbols: [RemoteCompactionSupport, enforce_managed_residency, ProviderAuthRecoveryMessages]
+  - feature: provider-auth
+    feature_group: H-模型与提供方
+    title: 提供方认证与工作区路由
+    page_file: h02-provider-auth.md
+    refs:
+      - path: codex-rs/model-provider/src/auth.rs
+        symbols: [ResolvedProviderAuth, ProviderAuthScope, AuthManagerAuthProvider]
+      - path: codex-rs/model-provider/src/workspace_routing.rs
+        symbols: [WorkspaceRoutingContext, ACCOUNT_ROUTING_HEADER, apply_workspace_routing]
+  - feature: models-manager
+    feature_group: H-模型与提供方
+    title: 模型目录与缓存
+    page_file: h03-models-manager.md
+    refs:
+      - path: codex-rs/models-manager/src/manager.rs
+        symbols: [ModelsManager, RefreshStrategy, DEFAULT_MODEL_CACHE_TTL]
+      - path: codex-rs/models-manager/src/cache.rs
+        symbols: [ModelsCache, FileModelsCache, ModelsCacheEntry]
+  - feature: model-info
+    feature_group: H-模型与提供方
+    title: 模型信息与基础指令
+    page_file: h04-model-info.md
+    refs:
+      - path: codex-rs/models-manager/src/model_info.rs
+        symbols: [BASE_INSTRUCTIONS, model_info_from_slug, strip_personality_section]
+      - path: codex-rs/models-manager/src/model_info.rs
+        symbols: [with_config_overrides, PERSONALITY_SECTION_HEADER]
+  - feature: acp-server
+    feature_group: I-接入面
+    title: ACP 服务端与配置项
+    page_file: i01-acp-server.md
+    refs:
+      - path: codex-rs/acp-server/src/lib.rs
+        symbols: [AppServerAcpAgent, SessionState, AcpSessionMode]
+      - path: codex-rs/acp-server/src/lib.rs
+        symbols: [CONFIG_ID_MODEL, CONFIG_ID_REASONING_EFFORT, handle_notification]
+  - feature: mcp-server
+    feature_group: I-接入面
+    title: MCP 服务端与进行中回合
+    page_file: i02-mcp-server.md
+    refs:
+      - path: codex-rs/mcp-server/src/codex_tool_runner.rs
+        symbols: [create_call_tool_result_with_thread_id, prompt_request]
+      - path: codex-rs/mcp-server/src/active_turn_registry.rs
+        symbols: [ActiveTurnRegistry, ActiveTurnState, ActiveTurn]
+  - feature: rmcp-stdio
+    feature_group: I-接入面
+    title: MCP 客户端 stdio 传输
+    page_file: i03-rmcp-stdio.md
+    refs:
+      - path: codex-rs/rmcp-client/src/local_stdio_transport.rs
+        symbols: [LocalStdioTransport, StdioTransport]
+      - path: codex-rs/rmcp-client/src/bounded_stdio_transport.rs
+        symbols: [BoundedStdioTransport, MAX_MCP_STDIO_LINE_BYTES]
+  - feature: worktree
+    feature_group: J-工作区与可观测
+    title: 工作树管理与归属记录
+    page_file: j01-worktree.md
+    refs:
+      - path: codex-rs/worktree/src/lib.rs
+        symbols: [WorktreeManager, CreateWorktree, is_safe_worktree_cwd]
+      - path: codex-rs/worktree/src/metadata.rs
+        symbols: [OwnerRecord, OWNER_FILENAME, bind_thread]
+  - feature: file-search
+    feature_group: J-工作区与可观测
+    title: 文件搜索与索引
+    page_file: j02-file-search.md
+    refs:
+      - path: codex-rs/file-search/src/lib.rs
+        symbols: [FileSearchSession, FileSearchResults, FileMatch]
+      - path: codex-rs/file-search/src/lib.rs
+        symbols: [FileSearchOptions, IndexedEntry, MatchType]
+  - feature: otel-tracing
+    feature_group: J-工作区与可观测
+    title: 追踪上下文与遥测目标
+    page_file: j03-otel-tracing.md
+    refs:
+      - path: codex-rs/otel/src/trace_context.rs
+        symbols: [inject_span_w3c_trace_headers, current_span_w3c_trace_context, TRACEPARENT_ENV_VAR]
+      - path: codex-rs/otel/src/targets.rs
+        symbols: [is_trace_safe_target, OTEL_TARGET_PREFIX]
+      - path: codex-rs/otel/src/provider.rs
+        symbols: [OtelProvider, resource_attributes, ResourceKind]
+---
