@@ -556,7 +556,7 @@ func errDatasetStructureUnsupported() error {
 | `internal/service/dataset_artifact_service.go` | `ListWikiPagesWithSourceAccess` | 按批次回调做权限过滤；无源文档则隐藏 |
 | `internal/service/dataset_artifact_service.go` | `searchCompiled` / `searchCompiledWithMatch` | 统一查询入口（拷 filter 再钉 `kb_id`、nil 接收者安全） |
 | `internal/service/dataset_artifact_service.go` | `GetWikiGraph` / `GetWikiAlteration` | wiki 图与变更日志读取（`topN` 默认 512 / 上限 1024） |
-| `internal/service/dataset_artifact_service.go` | `CompileKwd*` 常量组 | 产物种类的关键字（产物与原文共用索引的区分依据） |
+| `internal/service/dataset_artifact_service.go` | `CompileKwdWikiPage` 等常量组 | 产物种类的关键字（产物与原文共用索引的区分依据） |
 | `internal/service/skill_search.go` | `SkillSearchService` / `Search` | 技能检索（三分支策略 + 逐支降级，`SearchType` 如实上报） |
 | `internal/service/skill_search.go` | `SearchRequest` / `SearchResponse` | 请求（`TenantID` 来自上下文，非请求体）与响应（`search_type` 说明实际策略） |
 | `internal/service/skill_search.go` | `SkillIndexName` / `normalizeSpaceID` | 独立索引命名（确定性 sha256 后缀 + 超长截断补 hash） |

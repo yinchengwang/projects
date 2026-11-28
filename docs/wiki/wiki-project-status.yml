@@ -1330,8 +1330,8 @@ projects:
   - slug: ragflow
     model: ai/rag
     repo: https://github.com/infiniflow/ragflow
-    state: planned
-    next_action: 待源码盘点与机制 wiki 生产
+    state: gates-pass
+    next_action: 待阶段 0B 扩展后入 wiki-rag
   - slug: txtai
     model: ai/rag
     repo: https://github.com/neuml/txtai

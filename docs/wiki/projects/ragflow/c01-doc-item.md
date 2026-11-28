@@ -564,7 +564,7 @@ func ItemsToMaps(items []DocItem) []map[string]any {
 | `internal/parser/parser/doc_item.go` | `SpreadsheetPositions` | 生产者侧的显式词汇选择 |
 | `internal/parser/parser/doc_item.go` | `hasSheetIndex` | 词汇判别（与下游 `isSpreadsheetChunk` 完全一致） |
 | `internal/parser/parser/doc_item.go` | `wireToPositions` / `positionsToWire` | inbound / outbound 两个缝 |
-| `internal/parser/parser/doc_item.go` | `absoluteBoxesFrom*` / `rowColumnBoxesFrom*` | 四种「整体失败」的转换 |
+| `internal/parser/parser/doc_item.go` | `absoluteBoxesFrom` / `rowColumnBoxesFrom` | 四种「整体失败」的转换 |
 | `internal/parser/parser/doc_item.go` | `positionFloat` / `toInt` | 数值宽松转换 |
 | `internal/parser/parser/parse_result.go` | `ParseResult` | 解析结果（`File` / `JSON` / `Err` / `Warnings`） |
 | `internal/parser/parser/parse_result.go` | `Produced` | 成功判据（替代 `OutputFormat != ""`） |

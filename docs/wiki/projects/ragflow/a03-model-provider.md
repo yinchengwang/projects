@@ -593,7 +593,7 @@ if verifyErr != nil {
 | `internal/service/model_factory.go` | `ModelFactory` | 解析模型引用、校验权限、构造强类型模型（四 DAO） |
 | `internal/service/model_factory.go` | `resolveModelIdentity` | 全部分层解析与校验（分组 / 单行 / 复合名 / 目录兜底） |
 | `internal/service/model_factory.go` | `ResolvedModelTarget` | 暴露 driver/凭据的内部逃生舱口（供外部系统使用） |
-| `internal/service/model_factory.go` | `resolveChatTarget`（`ResolveChatTarget` / `ResolveDefaultChatTarget`） | 把引用解析成 provider 细节而不构造模型 |
+| `internal/service/model_factory.go` | `ResolveChatTarget` / `ResolveDefaultChatTarget` | 把引用解析成 provider 细节而不构造模型 |
 | `internal/service/model_factory.go` | `NewChatModel` | 解析 → 附 usage 模板 → 构造 `ChatModel` |
 | `internal/service/model_factory.go` | `NewEmbeddingModel` | 同上，额外传入 `inputTokenLimit(target)` 作为输入上限 |
 | `internal/service/model_factory.go` | `modelInfoWithTenantExtra` | 目录元数据 + 租户行覆盖的深拷贝合并（含 `doc_parse` 抢救） |
