@@ -1,0 +1,356 @@
+---
+project: graphrag
+schema_version: 1
+pages:
+  - feature: graph-rag-config
+    feature_group: A-配置与数据模型
+    title: 总配置结构
+    page_file: a01-graph-rag-config.md
+    refs:
+      - path: packages/graphrag/graphrag/config/models/graph_rag_config.py
+        symbols: [GraphRagConfig]
+      - path: packages/graphrag/graphrag/config/defaults.py
+        symbols: [ChunkingDefaults, ExtractGraphDefaults, ClusterGraphDefaults]
+      - path: packages/graphrag/graphrag/config/load_config.py
+        symbols: [load_config]
+  - feature: config-enums
+    feature_group: A-配置与数据模型
+    title: 枚举与索引方法
+    page_file: a02-config-enums.md
+    refs:
+      - path: packages/graphrag/graphrag/config/enums.py
+        symbols: [SearchMethod, IndexingMethod, AsyncType, ModularityMetric]
+      - path: packages/graphrag/graphrag/config/enums.py
+        symbols: [NounPhraseExtractorType, ReportingType]
+  - feature: data-model
+    feature_group: A-配置与数据模型
+    title: 索引产物数据模型
+    page_file: a03-data-model.md
+    refs:
+      - path: packages/graphrag/graphrag/data_model/entity.py
+        symbols: [Entity]
+      - path: packages/graphrag/graphrag/data_model/relationship.py
+        symbols: [Relationship]
+      - path: packages/graphrag/graphrag/data_model/community_report.py
+        symbols: [CommunityReport]
+      - path: packages/graphrag/graphrag/data_model/text_unit.py
+        symbols: [TextUnit]
+  - feature: row-transformers
+    feature_group: A-配置与数据模型
+    title: DataFrame 行转换与强类型视图
+    page_file: a04-row-transformers.md
+    refs:
+      - path: packages/graphrag/graphrag/data_model/row_transformers.py
+        symbols: [transform_entity_row, transform_relationship_row, transform_community_report_row]
+      - path: packages/graphrag/graphrag/data_model/dfs.py
+        symbols: [entities_typed, relationships_typed, community_reports_typed]
+      - path: packages/graphrag/graphrag/data_model/dfs.py
+        symbols: [split_list_column]
+  - feature: chunking-workflow
+    feature_group: B-索引工作流
+    title: 文档分块工作流
+    page_file: b01-chunking-workflow.md
+    refs:
+      - path: packages/graphrag/graphrag/index/workflows/create_base_text_units.py
+        symbols: [create_base_text_units, chunk_document]
+      - path: packages/graphrag/graphrag/index/text_splitting/text_splitting.py
+        symbols: [TokenTextSplitter, split_single_text_on_tokens]
+      - path: packages/graphrag/graphrag/index/workflows/load_input_documents.py
+        symbols: [load_input_documents]
+  - feature: graph-extraction
+    feature_group: B-索引工作流
+    title: 实体关系抽取工作流
+    page_file: b02-graph-extraction.md
+    refs:
+      - path: packages/graphrag/graphrag/index/workflows/extract_graph.py
+        symbols: [extract_graph, get_summarized_entities_relationships]
+      - path: packages/graphrag/graphrag/index/workflows/extract_graph_nlp.py
+        symbols: [extract_graph_nlp]
+      - path: packages/graphrag/graphrag/prompts/index/extract_graph.py
+        symbols: [GRAPH_EXTRACTION_PROMPT, CONTINUE_PROMPT, LOOP_PROMPT]
+  - feature: graph-finalize
+    feature_group: B-索引工作流
+    title: 图收尾与度数计算
+    page_file: b03-graph-finalize.md
+    refs:
+      - path: packages/graphrag/graphrag/index/workflows/finalize_graph.py
+        symbols: [finalize_graph, _build_degree_map]
+      - path: packages/graphrag/graphrag/index/operations/finalize_entities.py
+        symbols: [finalize_entities]
+      - path: packages/graphrag/graphrag/index/operations/compute_edge_combined_degree.py
+        symbols: [compute_edge_combined_degree]
+      - path: packages/graphrag/graphrag/graphs/edge_weights.py
+        symbols: [calculate_pmi_edge_weights, calculate_rrf_edge_weights]
+  - feature: communities-workflow
+    feature_group: B-索引工作流
+    title: 社区划分与报告生成
+    page_file: b04-communities-workflow.md
+    refs:
+      - path: packages/graphrag/graphrag/index/workflows/create_communities.py
+        symbols: [create_communities]
+      - path: packages/graphrag/graphrag/index/workflows/create_community_reports.py
+        symbols: [create_community_reports, _prep_nodes, _prep_edges]
+      - path: packages/graphrag/graphrag/index/operations/finalize_community_reports.py
+        symbols: [finalize_community_reports]
+  - feature: embeddings-and-final
+    feature_group: B-索引工作流
+    title: 文本嵌入与最终产物
+    page_file: b05-embeddings-and-final.md
+    refs:
+      - path: packages/graphrag/graphrag/index/workflows/generate_text_embeddings.py
+        symbols: [generate_text_embeddings, EmbeddingFieldConfig]
+      - path: packages/graphrag/graphrag/index/workflows/create_final_text_units.py
+        symbols: [create_final_text_units]
+      - path: packages/graphrag/graphrag/index/workflows/create_final_documents.py
+        symbols: [create_final_documents]
+  - feature: pipeline-run
+    feature_group: B-索引工作流
+    title: 流水线执行与增量更新
+    page_file: b06-pipeline-run.md
+    refs:
+      - path: packages/graphrag/graphrag/index/run/run_pipeline.py
+        symbols: [run_pipeline, _run_pipeline]
+      - path: packages/graphrag/graphrag/index/workflows/factory.py
+        symbols: [create_pipeline]
+      - path: packages/graphrag/graphrag/index/workflows/update_entities_relationships.py
+        symbols: [update_entities_relationships]
+      - path: packages/graphrag/graphrag/index/workflows/update_text_units.py
+        symbols: [update_text_units]
+  - feature: hierarchical-leiden
+    feature_group: C-图算法与社区
+    title: 层次 Leiden 社区划分
+    page_file: c01-hierarchical-leiden.md
+    refs:
+      - path: packages/graphrag/graphrag/graphs/hierarchical_leiden.py
+        symbols: [hierarchical_leiden, first_level_hierarchical_clustering]
+      - path: packages/graphrag/graphrag/graphs/hierarchical_leiden.py
+        symbols: [final_level_hierarchical_clustering]
+  - feature: modularity
+    feature_group: C-图算法与社区
+    title: 模块度计算
+    page_file: c02-modularity.md
+    refs:
+      - path: packages/graphrag/graphrag/graphs/modularity.py
+        symbols: [modularity, calculate_graph_modularity, calculate_root_modularity]
+      - path: packages/graphrag/graphrag/graphs/modularity.py
+        symbols: [calculate_leaf_modularity, calculate_lcc_modularity]
+  - feature: graph-pruning
+    feature_group: C-图算法与社区
+    title: 图剪枝与稳定大组件
+    page_file: c03-graph-pruning.md
+    refs:
+      - path: packages/graphrag/graphrag/index/operations/prune_graph.py
+        symbols: [prune_graph, _get_upper_threshold_by_std]
+      - path: packages/graphrag/graphrag/graphs/stable_lcc.py
+        symbols: [stable_lcc]
+      - path: packages/graphrag/graphrag/graphs/connected_components.py
+        symbols: [connected_components, largest_connected_component]
+  - feature: query-base
+    feature_group: D-查询
+    title: 查询引擎契约与适配
+    page_file: d01-query-base.md
+    refs:
+      - path: packages/graphrag/graphrag/query/structured_search/base.py
+        symbols: [BaseSearch, SearchResult]
+      - path: packages/graphrag/graphrag/query/factory.py
+        symbols: [get_local_search_engine, get_global_search_engine]
+      - path: packages/graphrag/graphrag/query/indexer_adapters.py
+        symbols: [read_indexer_entities, read_indexer_reports, read_indexer_text_units]
+  - feature: local-search
+    feature_group: D-查询
+    title: 局部检索
+    page_file: d02-local-search.md
+    refs:
+      - path: packages/graphrag/graphrag/query/structured_search/local_search/search.py
+        symbols: [LocalSearch]
+      - path: packages/graphrag/graphrag/query/structured_search/local_search/mixed_context.py
+        symbols: [LocalSearchMixedContext]
+      - path: packages/graphrag/graphrag/prompts/query/local_search_system_prompt.py
+        symbols: [LOCAL_SEARCH_SYSTEM_PROMPT]
+  - feature: global-search
+    feature_group: D-查询
+    title: 全局检索与社区报告
+    page_file: d03-global-search.md
+    refs:
+      - path: packages/graphrag/graphrag/query/structured_search/global_search/search.py
+        symbols: [GlobalSearch, GlobalSearchResult]
+      - path: packages/graphrag/graphrag/query/structured_search/global_search/community_context.py
+        symbols: [GlobalCommunityContext]
+      - path: packages/graphrag/graphrag/prompts/query/global_search_map_system_prompt.py
+        symbols: [MAP_SYSTEM_PROMPT]
+  - feature: drift-search
+    feature_group: D-查询
+    title: DRIFT 检索
+    page_file: d04-drift-search.md
+    refs:
+      - path: packages/graphrag/graphrag/query/structured_search/drift_search/search.py
+        symbols: [DRIFTSearch]
+      - path: packages/graphrag/graphrag/query/structured_search/drift_search/primer.py
+        symbols: [DRIFTPrimer, PrimerResponse]
+      - path: packages/graphrag/graphrag/query/structured_search/drift_search/state.py
+        symbols: [QueryState]
+      - path: packages/graphrag/graphrag/query/structured_search/drift_search/action.py
+        symbols: [DriftAction]
+  - feature: basic-search
+    feature_group: D-查询
+    title: 朴素向量检索
+    page_file: d05-basic-search.md
+    refs:
+      - path: packages/graphrag/graphrag/query/structured_search/basic_search/search.py
+        symbols: [BasicSearch]
+      - path: packages/graphrag/graphrag/query/structured_search/basic_search/basic_context.py
+        symbols: [BasicSearchContext]
+      - path: packages/graphrag/graphrag/prompts/query/basic_search_system_prompt.py
+        symbols: [BASIC_SEARCH_SYSTEM_PROMPT]
+  - feature: context-building
+    feature_group: D-查询
+    title: 上下文构建与动态社区选择
+    page_file: d06-context-building.md
+    refs:
+      - path: packages/graphrag/graphrag/query/context_builder/dynamic_community_selection.py
+        symbols: [DynamicCommunitySelection]
+      - path: packages/graphrag/graphrag/query/context_builder/community_context.py
+        symbols: [build_community_context]
+      - path: packages/graphrag/graphrag/query/context_builder/local_context.py
+        symbols: [build_entity_context, build_relationship_context]
+      - path: packages/graphrag/graphrag/query/context_builder/source_context.py
+        symbols: [build_text_unit_context]
+  - feature: conversation-history
+    feature_group: D-查询
+    title: 对话历史与问题生成
+    page_file: d07-conversation-history.md
+    refs:
+      - path: packages/graphrag/graphrag/query/context_builder/conversation_history.py
+        symbols: [ConversationHistory]
+      - path: packages/graphrag/graphrag/query/context_builder/rate_relevancy.py
+        symbols: [rate_relevancy]
+      - path: packages/graphrag/graphrag/query/question_gen/local_gen.py
+        symbols: [LocalQuestionGen]
+  - feature: llm-completion
+    feature_group: E-LLM 层
+    title: 补全抽象与工厂
+    page_file: e01-llm-completion.md
+    refs:
+      - path: packages/graphrag-llm/graphrag_llm/completion/completion.py
+        symbols: [LLMCompletion]
+      - path: packages/graphrag-llm/graphrag_llm/completion/completion_factory.py
+        symbols: [CompletionFactory, register_completion, create_completion]
+      - path: packages/graphrag-llm/graphrag_llm/embedding/embedding.py
+        symbols: [LLMEmbedding]
+      - path: packages/graphrag-llm/graphrag_llm/utils/completion_messages_builder.py
+        symbols: [CompletionMessagesBuilder]
+  - feature: middleware
+    feature_group: E-LLM 层
+    title: 中间件管道
+    page_file: e02-middleware.md
+    refs:
+      - path: packages/graphrag-llm/graphrag_llm/middleware/with_middleware_pipeline.py
+        symbols: [with_middleware_pipeline]
+      - path: packages/graphrag-llm/graphrag_llm/middleware/with_cache.py
+        symbols: [with_cache]
+      - path: packages/graphrag-llm/graphrag_llm/middleware/with_request_count.py
+        symbols: [with_request_count]
+      - path: packages/graphrag-llm/graphrag_llm/middleware/with_metrics.py
+        symbols: [with_metrics]
+  - feature: rate-limit-and-retry
+    feature_group: E-LLM 层
+    title: 限流与重试
+    page_file: e03-rate-limit-and-retry.md
+    refs:
+      - path: packages/graphrag-llm/graphrag_llm/rate_limit/sliding_window_rate_limiter.py
+        symbols: [SlidingWindowRateLimiter]
+      - path: packages/graphrag-llm/graphrag_llm/rate_limit/rate_limit_factory.py
+        symbols: [RateLimitFactory, create_rate_limiter]
+      - path: packages/graphrag-llm/graphrag_llm/retry/exponential_retry.py
+        symbols: [ExponentialRetry]
+      - path: packages/graphrag-llm/graphrag_llm/retry/retry_factory.py
+        symbols: [RetryFactory, create_retry]
+  - feature: cache-key-and-templating
+    feature_group: E-LLM 层
+    title: 缓存键与模板引擎
+    page_file: e04-cache-key-and-templating.md
+    refs:
+      - path: packages/graphrag-llm/graphrag_llm/cache/create_cache_key.py
+        symbols: [create_cache_key]
+      - path: packages/graphrag-llm/graphrag_llm/templating/template_engine.py
+        symbols: [TemplateEngine]
+      - path: packages/graphrag-llm/graphrag_llm/templating/file_template_manager.py
+        symbols: [FileTemplateManager]
+  - feature: threading-and-metrics
+    feature_group: E-LLM 层
+    title: 线程化执行与指标聚合
+    page_file: e05-threading-and-metrics.md
+    refs:
+      - path: packages/graphrag-llm/graphrag_llm/threading/completion_thread_runner.py
+        symbols: [completion_thread_runner, ThreadedLLMCompletionResponseHandler]
+      - path: packages/graphrag-llm/graphrag_llm/metrics/metrics_aggregator.py
+        symbols: [MetricsAggregator]
+      - path: packages/graphrag-llm/graphrag_llm/metrics/metrics_processor.py
+        symbols: [MetricsProcessor]
+      - path: packages/graphrag-llm/graphrag_llm/model_cost_registry/model_cost_registry.py
+        symbols: [ModelCostRegistry, ModelCosts]
+  - feature: cache-storage
+    feature_group: F-独立子包
+    title: 缓存实现与键
+    page_file: f01-cache-storage.md
+    refs:
+      - path: packages/graphrag-cache/graphrag_cache/cache.py
+        symbols: [Cache]
+      - path: packages/graphrag-cache/graphrag_cache/cache_key.py
+        symbols: [CacheKeyCreator]
+      - path: packages/graphrag-cache/graphrag_cache/sqlite_cache.py
+        symbols: [SQLiteCache]
+      - path: packages/graphrag-cache/graphrag_cache/noop_cache.py
+        symbols: [NoopCache]
+  - feature: storage-abstraction
+    feature_group: F-独立子包
+    title: 存储抽象与表提供方
+    page_file: f02-storage-abstraction.md
+    refs:
+      - path: packages/graphrag-storage/graphrag_storage/storage.py
+        symbols: [Storage]
+      - path: packages/graphrag-storage/graphrag_storage/storage.py
+        symbols: [get_timestamp_formatted_with_local_tz]
+  - feature: vector-store
+    feature_group: F-独立子包
+    title: 向量存储抽象
+    page_file: f03-vector-store.md
+    refs:
+      - path: packages/graphrag-vectors/graphrag_vectors/vector_store.py
+        symbols: [VectorStore, VectorStoreDocument, VectorStoreSearchResult]
+  - feature: input-and-chunking
+    feature_group: F-独立子包
+    title: 输入读取与分块器
+    page_file: f04-input-and-chunking.md
+    refs:
+      - path: packages/graphrag-input/graphrag_input/csv.py
+        symbols: [CSVFileReader]
+      - path: packages/graphrag-chunking/graphrag_chunking/chunker.py
+        symbols: [Chunker]
+  - feature: api-and-cli
+    feature_group: G-调用面与回调
+    title: API 与命令行调用面
+    page_file: g01-api-and-cli.md
+    refs:
+      - path: packages/graphrag/graphrag/api/index.py
+        symbols: [build_index, _get_method]
+      - path: packages/graphrag/graphrag/api/query.py
+        symbols: [local_search, global_search, drift_search, basic_search]
+      - path: packages/graphrag/graphrag/cli/index.py
+        symbols: [index_cli, update_cli]
+      - path: packages/graphrag/graphrag/cli/query.py
+        symbols: [run_local_search, run_global_search, run_drift_search]
+  - feature: callbacks-and-profiling
+    feature_group: G-调用面与回调
+    title: 回调与性能剖析
+    page_file: g02-callbacks-and-profiling.md
+    refs:
+      - path: packages/graphrag/graphrag/callbacks/workflow_callbacks.py
+        symbols: [WorkflowCallbacks]
+      - path: packages/graphrag/graphrag/callbacks/workflow_callbacks_manager.py
+        symbols: [WorkflowCallbacksManager]
+      - path: packages/graphrag/graphrag/index/run/profiling.py
+        symbols: [WorkflowProfiler]
+      - path: packages/graphrag/graphrag/index/utils/derive_from_rows.py
+        symbols: [derive_from_rows, derive_from_rows_asyncio, ParallelizationError]
+---
