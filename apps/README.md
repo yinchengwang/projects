@@ -95,8 +95,8 @@ web/
 │   ├── knowledge/   knowledge-hub 数据层（14 个数据域 + 图谱/雷达布局）
 │   ├── trip/        trip 数据层 + 导出导入
 │   └── games/       4 个游戏引擎 + 存档层
-├── web/             各模块前端 + cjs-loader.js（浏览器侧 CommonJS 加载器）
-├── preview/         页面预览工具（headless Chrome 实拍，产物不入库）
+├── web/             各模块前端 + cjs-loader.js（浏览器侧 CommonJS 加载器）+ preview.html（页面预览壳）
+├── preview/         页面预览工具（一键启动 + 清单同步）
 └── tests/           全部测试，一条命令跑完
 ```
 
@@ -108,14 +108,15 @@ cd apps/web && node tests/run-all.js
 
 ### 页面预览
 
-把 46 个页面 + 外壳实拍成截图，生成可点击的 HTML 画廊：
+把 46 个页面 + 外壳放进一个可点击的预览壳：左边是完整目录树，右边是**真实运行的应用**。
 
 ```bash
-node apps/web/preview/generate.js
-# 打开 apps/web/preview/out/index.html
+node apps/web/preview/open.js
+# 打开 http://127.0.0.1:5173/preview.html
 ```
 
-需要 Chrome 或 Edge（自动探测）。零 npm 依赖。详见 [`web/preview/README.md`](web/preview/README.md)。
+不是截图 —— 数据真、交互真、Canvas 真在画。零 npm 依赖。
+详见 [`web/preview/README.md`](web/preview/README.md)。
 
 ---
 
