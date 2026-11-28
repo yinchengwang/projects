@@ -1,0 +1,364 @@
+---
+project: haystack
+schema_version: 1
+pages:
+  - feature: component-contract
+    feature_group: A-组件与管道骨架
+    title: 组件契约与元类校验
+    page_file: a01-component-contract.md
+    refs:
+      - path: haystack/core/component/component.py
+        symbols: [Component, ComponentMeta, _Component]
+      - path: haystack/core/component/component.py
+        symbols: [_compare_run_methods_signatures, _hook_component_init]
+  - feature: pipeline-run
+    feature_group: A-组件与管道骨架
+    title: 管道调度与流式运行
+    page_file: a02-pipeline-run.md
+    refs:
+      - path: haystack/core/pipeline/base.py
+        symbols: [PipelineBase, ComponentPriority]
+      - path: haystack/core/pipeline/pipeline.py
+        symbols: [Pipeline, PipelineStreamHandle]
+  - feature: component-checks
+    feature_group: A-组件与管道骨架
+    title: 组件就绪判定
+    page_file: a03-component-checks.md
+    refs:
+      - path: haystack/core/pipeline/component_checks.py
+        symbols: [can_component_run, are_all_sockets_ready, has_any_trigger]
+      - path: haystack/core/pipeline/component_checks.py
+        symbols: [has_lazy_variadic_socket_received_all_inputs, can_not_receive_inputs_from_pipeline, has_user_input]
+  - feature: sockets
+    feature_group: A-组件与管道骨架
+    title: 输入输出 socket
+    page_file: a04-sockets.md
+    refs:
+      - path: haystack/core/component/sockets.py
+        symbols: [Sockets]
+      - path: haystack/core/component/types.py
+        symbols: [InputSocket, OutputSocket, InputSocketTypeDescriptor]
+  - feature: super-component
+    feature_group: A-组件与管道骨架
+    title: 超级组件与映射包装
+    page_file: a05-super-component.md
+    refs:
+      - path: haystack/core/super_component/super_component.py
+        symbols: [SuperComponent, super_component, _SuperComponent]
+      - path: haystack/core/super_component/utils.py
+        symbols: [_types_are_compatible, _is_compatible, _unwrap_variadics]
+  - feature: breakpoints
+    feature_group: A-组件与管道骨架
+    title: 断点与管道快照
+    page_file: a06-breakpoints.md
+    refs:
+      - path: haystack/dataclasses/breakpoints.py
+        symbols: [Breakpoint, PipelineState, PipelineSnapshot]
+      - path: haystack/core/pipeline/breakpoint.py
+        symbols: [_create_pipeline_snapshot, load_pipeline_snapshot]
+  - feature: type-compatibility
+    feature_group: B-类型与序列化
+    title: 类型兼容与自动转换
+    page_file: b01-type-compatibility.md
+    refs:
+      - path: haystack/core/type_utils.py
+        symbols: [ConversionStrategy, _types_are_compatible, _strict_types_are_compatible]
+      - path: haystack/core/type_utils.py
+        symbols: [_get_conversion_strategy, _convert_value, _chat_message_to_str]
+  - feature: serialization
+    feature_group: B-类型与序列化
+    title: 组件序列化
+    page_file: b02-serialization.md
+    refs:
+      - path: haystack/core/serialization.py
+        symbols: [component_to_dict, component_from_dict, default_to_dict, default_from_dict]
+      - path: haystack/core/serialization.py
+        symbols: [generate_qualified_class_name, import_class_by_name]
+  - feature: deserialization-security
+    feature_group: B-类型与序列化
+    title: 反序列化的模块白名单
+    page_file: b03-deserialization-security.md
+    refs:
+      - path: haystack/core/serialization_security.py
+        symbols: [allow_deserialization_module, _is_module_allowed, _check_resolved_module_allowed]
+      - path: haystack/core/serialization_security.py
+        symbols: [_is_unsafe_deserialization, _check_traversable_attribute, _is_deserialization_internal]
+  - feature: marshal
+    feature_group: B-类型与序列化
+    title: YAML 编组与可调用对象序列化
+    page_file: b04-marshal.md
+    refs:
+      - path: haystack/marshal/protocol.py
+        symbols: [Marshaller]
+      - path: haystack/marshal/yaml.py
+        symbols: [YamlMarshaller, YamlDumper, YamlLoader]
+      - path: haystack/utils/callable_serialization.py
+        symbols: [serialize_callable, deserialize_callable]
+  - feature: document
+    feature_group: C-数据模型
+    title: 文档模型与字段约束
+    page_file: c01-document.md
+    refs:
+      - path: haystack/dataclasses/document.py
+        symbols: [Document, _RemoveLegacyFields]
+      - path: haystack/dataclasses/file_content.py
+        symbols: [FileContent]
+      - path: haystack/dataclasses/image_content.py
+        symbols: [ImageContent]
+  - feature: chat-message
+    feature_group: C-数据模型
+    title: 聊天消息与内容块
+    page_file: c02-chat-message.md
+    refs:
+      - path: haystack/dataclasses/chat_message.py
+        symbols: [ChatMessage, ChatRole, TextContent, ToolCall]
+      - path: haystack/dataclasses/chat_message.py
+        symbols: [_haystack_content_part_to_openai_dict, _openai_dict_to_haystack_content_part, _parse_openai_base64_data_url]
+  - feature: streaming-and-answer
+    feature_group: C-数据模型
+    title: 流式块与回答构建
+    page_file: c03-streaming-and-answer.md
+    refs:
+      - path: haystack/dataclasses/streaming_chunk.py
+        symbols: [StreamingChunk, ToolCallDelta, select_streaming_callback]
+      - path: haystack/dataclasses/answer.py
+        symbols: [GeneratedAnswer, ExtractedAnswer]
+      - path: haystack/components/builders/answer_builder.py
+        symbols: [AnswerBuilder]
+  - feature: document-store-contract
+    feature_group: D-文档存储与过滤
+    title: 文档存储契约与写入策略
+    page_file: d01-document-store-contract.md
+    refs:
+      - path: haystack/document_stores/types/protocol.py
+        symbols: [DocumentStore]
+      - path: haystack/document_stores/types/policy.py
+        symbols: [DuplicatePolicy]
+  - feature: filter-policy
+    feature_group: D-文档存储与过滤
+    title: 过滤表达式与策略合并
+    page_file: d02-filter-policy.md
+    refs:
+      - path: haystack/document_stores/types/filter_policy.py
+        symbols: [FilterPolicy, apply_filter_policy, is_comparison_filter]
+      - path: haystack/document_stores/types/filter_policy.py
+        symbols: [combine_init_comparison_and_runtime_logical_filters, combine_two_logical_filters]
+      - path: haystack/utils/filters.py
+        symbols: [document_matches_filter]
+  - feature: in-memory-store
+    feature_group: D-文档存储与过滤
+    title: 内存文档存储与 BM25
+    page_file: d03-in-memory-store.md
+    refs:
+      - path: haystack/document_stores/in_memory/document_store.py
+        symbols: [InMemoryDocumentStore, BM25DocumentStats]
+      - path: haystack/document_stores/in_memory/document_store.py
+        symbols: [_synchronized]
+  - feature: document-splitter
+    feature_group: E-预处理与转换
+    title: 文档切分器
+    page_file: e01-document-splitter.md
+    refs:
+      - path: haystack/components/preprocessors/document_splitter.py
+        symbols: [DocumentSplitter]
+      - path: haystack/components/preprocessors/document_preprocessor.py
+        symbols: [DocumentPreprocessor]
+  - feature: structured-splitters
+    feature_group: E-预处理与转换
+    title: 结构化与层级切分
+    page_file: e02-structured-splitters.md
+    refs:
+      - path: haystack/components/preprocessors/markdown_header_splitter.py
+        symbols: [MarkdownHeaderSplitter]
+      - path: haystack/components/preprocessors/recursive_splitter.py
+        symbols: [RecursiveDocumentSplitter]
+      - path: haystack/components/preprocessors/hierarchical_document_splitter.py
+        symbols: [HierarchicalDocumentSplitter]
+  - feature: semantic-splitter
+    feature_group: E-预处理与转换
+    title: 基于嵌入的语义切分
+    page_file: e03-semantic-splitter.md
+    refs:
+      - path: haystack/components/preprocessors/embedding_based_document_splitter.py
+        symbols: [EmbeddingBasedDocumentSplitter]
+      - path: haystack/components/preprocessors/document_splitter.py
+        symbols: [DocumentSplitter]
+  - feature: converters
+    feature_group: E-预处理与转换
+    title: 格式转换器
+    page_file: e04-converters.md
+    refs:
+      - path: haystack/components/converters/markdown.py
+        symbols: [MarkdownToDocument]
+      - path: haystack/components/converters/html.py
+        symbols: [HTMLToDocument]
+      - path: haystack/components/converters/docx.py
+        symbols: [DOCXToDocument, DOCXTableFormat]
+  - feature: embedding-retrievers
+    feature_group: F-检索与重排
+    title: 嵌入检索器
+    page_file: f01-embedding-retrievers.md
+    refs:
+      - path: haystack/components/retrievers/text_embedding_retriever.py
+        symbols: [TextEmbeddingRetriever]
+      - path: haystack/components/retrievers/multi_query_embedding_retriever.py
+        symbols: [MultiQueryEmbeddingRetriever]
+      - path: haystack/components/retrievers/multi_retriever.py
+        symbols: [MultiRetriever]
+  - feature: hierarchical-retrievers
+    feature_group: F-检索与重排
+    title: 自动合并与句子窗口检索
+    page_file: f02-hierarchical-retrievers.md
+    refs:
+      - path: haystack/components/retrievers/auto_merging_retriever.py
+        symbols: [AutoMergingRetriever]
+      - path: haystack/components/retrievers/sentence_window_retriever.py
+        symbols: [SentenceWindowRetriever]
+  - feature: rankers
+    feature_group: F-检索与重排
+    title: 重排器
+    page_file: f03-rankers.md
+    refs:
+      - path: haystack/components/rankers/llm_ranker.py
+        symbols: [LLMRanker]
+      - path: haystack/components/rankers/meta_field.py
+        symbols: [MetaFieldRanker]
+      - path: haystack/components/rankers/lost_in_the_middle.py
+        symbols: [LostInTheMiddleRanker]
+      - path: haystack/components/rankers/max_sim.py
+        symbols: [MaxSimRanker]
+  - feature: joiners
+    feature_group: F-检索与重排
+    title: 结果合并与分支汇合
+    page_file: f04-joiners.md
+    refs:
+      - path: haystack/components/joiners/document_joiner.py
+        symbols: [DocumentJoiner, JoinMode, _finite_score]
+      - path: haystack/components/joiners/branch.py
+        symbols: [BranchJoiner]
+      - path: haystack/components/joiners/answer_joiner.py
+        symbols: [AnswerJoiner]
+  - feature: conditional-router
+    feature_group: G-路由
+    title: 条件路由
+    page_file: g01-conditional-router.md
+    refs:
+      - path: haystack/components/routers/conditional_router.py
+        symbols: [ConditionalRouter, Route, RouteConditionException]
+      - path: haystack/components/routers/conditional_router.py
+        symbols: [NoRouteSelectedException]
+  - feature: metadata-routers
+    feature_group: G-路由
+    title: 元数据与文件类型路由
+    page_file: g02-metadata-routers.md
+    refs:
+      - path: haystack/components/routers/metadata_router.py
+        symbols: [MetadataRouter]
+      - path: haystack/components/routers/file_type_router.py
+        symbols: [FileTypeRouter]
+      - path: haystack/components/routers/document_length_router.py
+        symbols: [DocumentLengthRouter]
+      - path: haystack/components/routers/document_type_router.py
+        symbols: [DocumentTypeRouter]
+  - feature: llm-routers
+    feature_group: G-路由
+    title: LLM 决策路由
+    page_file: g03-llm-routers.md
+    refs:
+      - path: haystack/components/routers/llm_messages_router.py
+        symbols: [LLMMessagesRouter]
+      - path: haystack/components/routers/openai_decisions_text_router.py
+        symbols: [OpenAIDecisionsTextRouter]
+      - path: haystack/components/routers/openai_decisions_image_router.py
+        symbols: [OpenAIDecisionsImageRouter]
+  - feature: agent
+    feature_group: H-Agent 与工具
+    title: 智能体组件与状态
+    page_file: h01-agent.md
+    refs:
+      - path: haystack/components/agents/agent.py
+        symbols: [Agent]
+      - path: haystack/components/agents/agent.py
+        symbols: [_get_model_exit_reason, _pending_tool_call_messages_from_state, _consume_continue_run]
+  - feature: tool-calling
+    feature_group: H-Agent 与工具
+    title: 工具调用执行
+    page_file: h02-tool-calling.md
+    refs:
+      - path: haystack/components/agents/tool_calling.py
+        symbols: [ToolNotFoundException, _validate_and_prepare_tools, _merge_tool_outputs_into_state]
+      - path: haystack/components/agents/tool_calling.py
+        symbols: [_process_tool_output, _build_tool_result_message, _create_tool_result_streaming_chunk]
+  - feature: tools
+    feature_group: H-Agent 与工具
+    title: 工具定义与工具集
+    page_file: h03-tools.md
+    refs:
+      - path: haystack/tools/tool.py
+        symbols: [Tool]
+      - path: haystack/tools/from_function.py
+        symbols: [create_tool_from_function]
+      - path: haystack/tools/toolset.py
+        symbols: [Toolset]
+  - feature: llm-evaluators
+    feature_group: I-评测与可观测
+    title: LLM 评测器
+    page_file: i01-llm-evaluators.md
+    refs:
+      - path: haystack/components/evaluators/llm_evaluator.py
+        symbols: [LLMEvaluator]
+      - path: haystack/components/evaluators/context_relevance.py
+        symbols: [ContextRelevanceEvaluator]
+      - path: haystack/components/evaluators/faithfulness.py
+        symbols: [FaithfulnessEvaluator]
+  - feature: retrieval-metrics
+    feature_group: I-评测与可观测
+    title: 检索指标
+    page_file: i02-retrieval-metrics.md
+    refs:
+      - path: haystack/components/evaluators/document_recall.py
+        symbols: [DocumentRecallEvaluator, RecallMode]
+      - path: haystack/components/evaluators/document_mrr.py
+        symbols: [DocumentMRREvaluator]
+      - path: haystack/components/evaluators/document_map.py
+        symbols: [DocumentMAPEvaluator]
+      - path: haystack/components/evaluators/answer_exact_match.py
+        symbols: [AnswerExactMatchEvaluator]
+  - feature: hooks
+    feature_group: I-评测与可观测
+    title: 钩子
+    page_file: i03-hooks.md
+    refs:
+      - path: haystack/hooks/protocol.py
+        symbols: [Hook]
+      - path: haystack/hooks/from_function.py
+        symbols: [hook, FunctionHook]
+      - path: haystack/hooks/invocation.py
+        symbols: [_run_hooks, _create_hook_span]
+      - path: haystack/hooks/utils.py
+        symbols: [warm_up_hooks, close_hooks]
+  - feature: tracing-telemetry
+    feature_group: I-评测与可观测
+    title: 追踪与遥测
+    page_file: i04-tracing-telemetry.md
+    refs:
+      - path: haystack/tracing/tracer.py
+        symbols: [Tracer, Span, enable_tracing, disable_tracing]
+      - path: haystack/tracing/logging_tracer.py
+        symbols: [LoggingTracer, LoggingSpan]
+      - path: haystack/telemetry/_telemetry.py
+        symbols: [Telemetry, pipeline_running]
+  - feature: token-counters
+    feature_group: I-评测与可观测
+    title: token 计数与评测结果聚合
+    page_file: i05-token-counters.md
+    refs:
+      - path: haystack/token_counters/tiktoken_counter.py
+        symbols: [TiktokenCounter]
+      - path: haystack/token_counters/approximate_counter.py
+        symbols: [ApproximateTokenCounter]
+      - path: haystack/token_counters/utils.py
+        symbols: [_rendered_conversation, _rendered_tools]
+      - path: haystack/evaluation/eval_run_result.py
+        symbols: [EvaluationRunResult]
+---

@@ -46,6 +46,7 @@ GATES_PASS_PROJECTS = {
     "open-interpreter": "待阶段 0B 扩展后入 wiki-rag",
     "langchain": "待阶段 0B 扩展后入 wiki-rag",
     "llama-index": "待阶段 0B 扩展后入 wiki-rag",
+    "haystack": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"
@@ -59,6 +60,7 @@ def _aliases_for(name, slug):
 WIKI_DIR_ALIASES = {
     "sqlite3": "sqlite",
     "mysql": "mysql-server",
+    "haystack-ai": "haystack",
 }
 
 
