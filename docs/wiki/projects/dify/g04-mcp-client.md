@@ -227,7 +227,7 @@ def list_tools(self, cursor: str | None = None) -> types.ListToolsResult:
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/mcp/client/streamable_client.py](https://github.com/langgenius/dify/blob/main/api/core/mcp/client/streamable_client.py)
 - [MCP 规范：Streamable HTTP 传输](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
-- [MCP 协议总览](https://modelcontextprotocol.io/docs/concepts/architecture)
+- [MCP 协议总览](https://modelcontextprotocol.io/specification/2025-06-18/architecture)
 
 ## 与主核 / AI 的关系
 

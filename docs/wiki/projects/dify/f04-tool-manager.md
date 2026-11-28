@@ -221,7 +221,7 @@ if parameter.type in {SYSTEM_FILES, FILE, FILES} and parameter.required and typ 
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/tools/tool_manager.py](https://github.com/langgenius/dify/blob/main/api/core/tools/tool_manager.py)
 - [dify 源码：core/tools/entities/tool_entities.py](https://github.com/langgenius/dify/blob/main/api/core/tools/entities/tool_entities.py)
-- [dify 文档：工具接入](https://docs.dify.ai/guides/tools)
+- [dify 文档：工具接入](https://github.com/langgenius/dify/tree/main/api/core/tools)
 
 ## 与主核 / AI 的关系
 

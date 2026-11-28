@@ -295,7 +295,7 @@ instruction = instruction.replace(f"{{{{{key}}}}}", str(value))
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/agent/base_agent_runner.py](https://github.com/langgenius/dify/blob/main/api/core/agent/base_agent_runner.py)
 - [dify 源码：core/agent/fc_agent_runner.py](https://github.com/langgenius/dify/blob/main/api/core/agent/fc_agent_runner.py)
-- [dify 文档：Agent 节点](https://docs.dify.ai/guides/workflow/node/agent)
+- [dify 文档：Agent 节点](https://docs.dify.ai/en/cloud/use-dify/nodes/agent)
 
 ## 与主核 / AI 的关系
 

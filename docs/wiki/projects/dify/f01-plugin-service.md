@@ -157,7 +157,7 @@ dify 的插件架构与「同进程 import 一个包」有本质区别：
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/plugin/impl/base.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/impl/base.py)
 - [dify 源码：core/plugin/plugin_service.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/plugin_service.py)
-- [dify 文档：插件开发](https://docs.dify.ai/plugins/introduction)
+- [dify 文档：插件开发](https://docs.dify.ai/en/develop-plugin/getting-started/getting-started-dify-plugin)
 
 ## 与主核 / AI 的关系
 

@@ -2,7 +2,7 @@
 
 > **本文件是 wiki 收集任务的唯一持续进度入口。** 每次结束一个批次，先更新本文件的「当前状态」「批次台账」与「下一步」，再开始下一批；不要另开一份互不关联的进度记录。
 >
-> **本轮状态（2026-11-28）：** 24/270 项目的机制 wiki 已完成（postgres、redis、sqlite、mysql-server、langchain、llama-index、haystack、lightrag、graphrag、ragflow、ragas、dify、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents、mcp-python-sdk、browser-use、openhands、goose、open-interpreter），共 1094 篇机制页（DB 四项目 368 + AI 类 726）。**阶段 2A（Agent 图执行与状态机）已收官**（六个框架共 227 篇）；**阶段 2B（工具使用与软件工程 Agent）已收官**（六个项目共 184 篇）；**阶段 2C（RAG / 索引编排框架）进行中**：langchain 37、llama-index 33、haystack 35、lightrag 42、graphrag 31、ragas 35、ragflow 49、dify 53。全部逐篇 lint + refs 全 PASS，但 RAG 未入库，账本状态为 `gates-pass`。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 26 条已有真实 GitHub API 事实，其余尚未核验。项目状态账本 `wiki-project-status.yml` 已建立：270 条在册，4 项 `indexed`、20 项 `gates-pass`、246 项 `planned`。
+> **本轮状态（2026-11-28）：** 25/270 项目的机制 wiki 已完成（postgres、redis、sqlite、mysql-server、langchain、llama-index、haystack、lightrag、graphrag、ragflow、ragas、dify、vllm、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents、mcp-python-sdk、browser-use、openhands、goose、open-interpreter），共 1117 篇机制页（DB 四项目 368 + AI 类 749）。**阶段 2A（Agent 图执行与状态机）已收官**（六个框架共 227 篇）；**阶段 2B（工具使用与软件工程 Agent）已收官**（六个项目共 184 篇）；**阶段 2C（RAG / 索引编排框架）进行中**：langchain 37、llama-index 33、haystack 35、lightrag 42、graphrag 31、ragas 35、ragflow 49、dify 53、vllm 22。全部逐篇 lint + refs 全 PASS，但 RAG 未入库，账本状态为 `gates-pass`。候选矩阵已按用户确认的“广义基础设施范围”冻结为 118 个唯一 canonical repo：数据库 54、Agent 24、RAG 20、LLM 20，与现有 152 项 catalog 静态零 name/repo 冲突；约 26 条已有真实 GitHub API 事实，其余尚未核验。项目状态账本 `wiki-project-status.yml` 已建立：270 条在册，4 项 `indexed`、21 项 `gates-pass`、245 项 `planned`。
 >
 > **下次从这里开始：** 阶段 2C 已收官（八个 RAG 项目共 356 篇）。下一步进入阶段 2D（LLM runtime / serving / kernel 基础设施）。catalog 已达 270 条（候选 118 条全部并入，另补 tigerbeetle / sqlite-vector 两条替补，剔除 db-bench / pklite 两条失效项）；18 条待补真实 metadata（GitHub API 限流未恢复）。项目收集的终点是 270 项全部通过 wiki 验收。
 
@@ -27,11 +27,11 @@
 | 项目 catalog | 152 项 | 270 项；还需评审、核实并补入 118 项 |
 | 数据库与数据基础设施分类 | 96 项 | 150 项；缺 54 项 |
 | AI / Agent / RAG / LLM 分类 | 56 项 | 120 项；缺 64 项 |
-| 已完成机制 wiki 的项目 | 24 个：postgres、redis、sqlite、mysql-server、langchain、llama-index、haystack、lightrag、graphrag、ragflow、ragas、dify、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents、mcp-python-sdk、browser-use、openhands、goose、open-interpreter | 24/270 项目收集完成 |
+| 已完成机制 wiki 的项目 | 25 个：postgres、redis、sqlite、mysql-server、langchain、llama-index、haystack、lightrag、graphrag、ragflow、ragas、dify、vllm、langgraph、autogen、crewai、metagpt、openai-agents、pydantic-ai、smolagents、mcp-python-sdk、browser-use、openhands、goose、open-interpreter | 25/270 项目收集完成 |
 | 已完成机制页 | 1094 篇（368 + langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39 + smolagents 30 + mcp-python-sdk 29 + browser-use 25 + openhands 23 + goose 36 + open-interpreter 41 + langchain 37 + llama-index 33 + haystack 35 + lightrag 42 + graphrag 31 + ragas 35 + ragflow 49 + dify 53） | 逐项目盘点后汇总，不设外推总量 |
-| 已完成概览页 | 24 篇 | 每个完成项目 1 篇 |
+| 已完成概览页 | 25 篇 | 每个完成项目 1 篇 |
 | wiki-rag 已入库 | 仅 postgres | 现有八库全部入库，然后每批新项目增量入库 |
-| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 726 页（langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39 + smolagents 30 + mcp-python-sdk 29 + browser-use 25 + openhands 23 + goose 36 + open-interpreter 41 + langchain 37 + llama-index 33 + haystack 35 + lightrag 42 + graphrag 31 + ragas 35 + ragflow 49 + dify 53） | 全类别纳入，按阶段门槛推进 |
+| `ai/agent` / `ai/rag` / `ai/llm` 机制语料 | 749 页（langgraph 40 + autogen 39 + crewai 43 + metagpt 31 + openai-agents 35 + pydantic-ai 39 + smolagents 30 + mcp-python-sdk 29 + browser-use 25 + openhands 23 + goose 36 + open-interpreter 41 + langchain 37 + llama-index 33 + haystack 35 + lightrag 42 + graphrag 31 + ragas 35 + ragflow 49 + dify 53 + vllm 22） | 全类别纳入，按阶段门槛推进 |
 
 当前 152 项按 `model` 分类的分布：
 

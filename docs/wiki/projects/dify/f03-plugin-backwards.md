@@ -171,7 +171,7 @@ return ModelManager.for_tenant(
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/plugin/backwards_invocation/model.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/backwards_invocation/model.py)
 - [dify 源码：core/plugin/backwards_invocation/base.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/backwards_invocation/base.py)
-- [dify 文档：插件开发](https://docs.dify.ai/plugins/introduction)
+- [dify 文档：插件开发](https://docs.dify.ai/en/develop-plugin/getting-started/getting-started-dify-plugin)
 
 ## 与主核 / AI 的关系
 

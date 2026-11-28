@@ -286,7 +286,7 @@ docstring 解释得很清楚：「Pydantic AI records interruption on the in-pro
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：dify_agent/runtime/modules.py](https://github.com/langgenius/dify/blob/main/dify-agent/src/dify_agent/runtime/modules.py)
 - [Pydantic AI 文档：Capabilities](https://ai.pydantic.dev/)
-- [dify 文档：Agent 节点](https://docs.dify.ai/guides/workflow/node/agent)
+- [dify 文档：Agent 节点](https://docs.dify.ai/en/cloud/use-dify/nodes/agent)
 
 ## 与主核 / AI 的关系
 

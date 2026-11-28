@@ -218,7 +218,7 @@ if self.node_data.version != "1" or self.node_data.tool_node_version is not None
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/tools/workflow_as_tool/tool.py](https://github.com/langgenius/dify/blob/main/api/core/tools/workflow_as_tool/tool.py)
 - [dify 源码：core/workflow/workflow_tool_container_handler.py](https://github.com/langgenius/dify/blob/main/api/core/workflow/workflow_tool_container_handler.py)
-- [dify 文档：工作流节点](https://docs.dify.ai/guides/workflow/node)
+- [dify 文档：工作流节点](https://docs.dify.ai/en/cloud/use-dify/nodes/start)
 
 ## 与主核 / AI 的关系
 

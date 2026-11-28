@@ -180,7 +180,7 @@ for tool in provider.declaration.datasources:
 - [dify 源码仓库](https://github.com/langgenius/dify)
 - [dify 源码：core/plugin/impl/model.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/impl/model.py)
 - [dify 源码：core/plugin/impl/tool.py](https://github.com/langgenius/dify/blob/main/api/core/plugin/impl/tool.py)
-- [dify 文档：插件开发](https://docs.dify.ai/plugins/introduction)
+- [dify 文档：插件开发](https://docs.dify.ai/en/develop-plugin/getting-started/getting-started-dify-plugin)
 
 ## 与主核 / AI 的关系
 

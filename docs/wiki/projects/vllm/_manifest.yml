@@ -1,0 +1,207 @@
+---
+project: vllm
+schema_version: 1
+pages:
+  - feature: engine-core
+    feature_group: A-引擎核心与进程模型
+    title: 引擎核心与调度循环
+    page_file: a01-engine-core.md
+    refs:
+      - path: vllm/v1/engine/core.py
+        symbols: [EngineCore, EngineCoreOutput, EngineCoreProc]
+      - path: vllm/v1/engine/core.py
+        symbols: [EngineShutdownState, DPEngineCoreProc]
+  - feature: core-client
+    feature_group: A-引擎核心与进程模型
+    title: 核心客户端与进程传输
+    page_file: a02-core-client.md
+    refs:
+      - path: vllm/v1/engine/core_client.py
+        symbols: [EngineCoreClient, InprocClient, MPClient]
+      - path: vllm/v1/engine/core_client.py
+        symbols: [SyncMPClient, AsyncMPClient, DPAsyncMPClient]
+  - feature: input-output-processor
+    feature_group: A-引擎核心与进程模型
+    title: 输入输出加工
+    page_file: a03-input-output-processor.md
+    refs:
+      - path: vllm/v1/engine/input_processor.py
+        symbols: [InputProcessor]
+      - path: vllm/v1/engine/output_processor.py
+        symbols: [OutputProcessor, RequestState, StreamingUpdate]
+      - path: vllm/v1/engine/detokenizer.py
+        symbols: [IncrementalDetokenizer, FastIncrementalDetokenizer, SlowIncrementalDetokenizer]
+  - feature: block-pool
+    feature_group: B-KV cache 管理
+    title: 块池与前缀哈希
+    page_file: b01-block-pool.md
+    refs:
+      - path: vllm/v1/core/block_pool.py
+        symbols: [BlockPool, BlockHashToBlockMap]
+      - path: vllm/v1/core/kv_cache_utils.py
+        symbols: [KVCacheBlock, BlockHashListWithBlockSize, get_block_hash]
+  - feature: kv-cache-manager
+    feature_group: B-KV cache 管理
+    title: 单类型 KV cache 管理器
+    page_file: b02-kv-cache-manager.md
+    refs:
+      - path: vllm/v1/core/single_type_kv_cache_manager.py
+        symbols: [SingleTypeKVCacheManager, FullAttentionManager, SlidingWindowManager]
+      - path: vllm/v1/core/single_type_kv_cache_manager.py
+        symbols: [RSWAManager, MambaManager, CircularBufferManager]
+  - feature: kv-offload
+    feature_group: B-KV cache 管理
+    title: KV cache 落盘与分层
+    page_file: b03-kv-offload.md
+    refs:
+      - path: vllm/v1/kv_offload/base.py
+        symbols: [RequestOffloadingContext, OffloadPolicy, LookupResult]
+      - path: vllm/v1/kv_offload/config.py
+        symbols: [OffloadingConfig, OffloadingModelConfig, OffloadingGroupConfig]
+      - path: vllm/v1/kv_offload/factory.py
+        symbols: [OffloadingSpecFactory]
+  - feature: kv-cache-planning
+    feature_group: B-KV cache 管理
+    title: KV cache 容量规划
+    page_file: b04-kv-cache-planning.md
+    refs:
+      - path: vllm/v1/core/kv_cache_planning.py
+        symbols: [DefaultKVCacheConfigBuilder, unify_kv_cache_spec_page_size]
+      - path: vllm/v1/core/kv_cache_coordinator.py
+        symbols: [KVCacheCoordinator]
+  - feature: attention-contract
+    feature_group: C-注意力后端
+    title: 注意力后端契约
+    page_file: c01-attention-contract.md
+    refs:
+      - path: vllm/v1/attention/backend.py
+        symbols: [AttentionBackend, AttentionImpl, AttentionMetadataBuilder]
+      - path: vllm/v1/attention/backend.py
+        symbols: [AttentionMetadata, AttentionLayer, CommonAttentionMetadata]
+  - feature: attention-selector
+    feature_group: C-注意力后端
+    title: 后端选择
+    page_file: c02-attention-selector.md
+    refs:
+      - path: vllm/v1/attention/selector.py
+        symbols: [AttentionSelectorConfig, get_attn_backend]
+      - path: vllm/v1/attention/selector.py
+        symbols: [get_mamba_attn_backend, get_attn_spec_kind]
+  - feature: flash-attn-backend
+    feature_group: C-注意力后端
+    title: FlashAttention 后端
+    page_file: c03-flash-attn-backend.md
+    refs:
+      - path: vllm/v1/attention/backends/flash_attn.py
+        symbols: [FlashAttentionBackend, FlashAttentionMetadata]
+  - feature: mla-backend
+    feature_group: C-注意力后端
+    title: MLA 与多头潜在注意力
+    page_file: c04-mla-backend.md
+    refs:
+      - path: vllm/model_executor/layers/mla.py
+        symbols: [MLAAttention]
+      - path: vllm/v1/attention/backends/flashinfer.py
+        symbols: [FlashInferImpl]
+  - feature: model-registry
+    feature_group: D-模型与算子层
+    title: 模型注册与配置
+    page_file: d01-model-registry.md
+    refs:
+      - path: vllm/config/model.py
+        symbols: [ModelConfig]
+      - path: vllm/config/scheduler.py
+        symbols: [SchedulerConfig]
+      - path: vllm/config/cache.py
+        symbols: [CacheConfig]
+  - feature: llama-model
+    feature_group: D-模型与算子层
+    title: Llama 模型实现
+    page_file: d02-llama-model.md
+    refs:
+      - path: vllm/model_executor/models/llama.py
+        symbols: [LlamaForCausalLM, LlamaModel]
+      - path: vllm/model_executor/models/llama.py
+        symbols: [LlamaDecoderLayer]
+  - feature: parallel-layers
+    feature_group: D-模型与算子层
+    title: 张量并行算子
+    page_file: d03-parallel-layers.md
+    refs:
+      - path: vllm/model_executor/layers/linear.py
+        symbols: [RowParallelLinear, QKVParallelLinear, MergedColumnParallelLinear]
+      - path: vllm/model_executor/layers/vocab_parallel_embedding.py
+        symbols: [VocabParallelEmbedding, ParallelLMHead]
+      - path: vllm/model_executor/layers/rotary_embedding/__init__.py
+        symbols: [get_rope]
+  - feature: parallel-state
+    feature_group: E-分布式与执行器
+    title: 并行组与通信
+    page_file: e01-parallel-state.md
+    refs:
+      - path: vllm/distributed/parallel_state.py
+        symbols: [GroupCoordinator, init_distributed_environment]
+      - path: vllm/distributed/parallel_state.py
+        symbols: [all_reduce, reduce_scatter, suspend_device_comms]
+  - feature: executor
+    feature_group: E-分布式与执行器
+    title: 执行器抽象
+    page_file: e02-executor.md
+    refs:
+      - path: vllm/v1/executor/abstract.py
+        symbols: [Executor]
+  - feature: worker
+    feature_group: E-分布式与执行器
+    title: Worker 与模型执行器
+    page_file: e03-worker.md
+    refs:
+      - path: vllm/v1/worker/worker_base.py
+        symbols: [WorkerBase, WorkerWrapperBase]
+      - path: vllm/v1/worker/gpu_worker.py
+        symbols: [Worker]
+  - feature: api-server
+    feature_group: F-服务入口与 API
+    title: HTTP 服务与路由
+    page_file: f01-api-server.md
+    refs:
+      - path: vllm/entrypoints/launchers/app.py
+        symbols: [build_app]
+      - path: vllm/entrypoints/launchers/api_server/app_state.py
+        symbols: [init_app_state]
+      - path: vllm/entrypoints/launchers/api_server/routers.py
+        symbols: [register_api_routers]
+  - feature: serve-routers
+    feature_group: F-服务入口与 API
+    title: 服务路由分层
+    page_file: f02-serve-routers.md
+    refs:
+      - path: vllm/entrypoints/launchers/api_server/entry.py
+        symbols: [build_and_serve, run_server]
+  - feature: sampling
+    feature_group: G-采样、工具与可观测
+    title: 采样与结构化输出
+    page_file: g01-sampling.md
+    refs:
+      - path: vllm/v1/sample/ops/topk_topp_sampler.py
+        symbols: [apply_top_k_top_p, flashinfer_sample]
+      - path: vllm/v1/structured_output/backend_types.py
+        symbols: [StructuredOutputBackend, StructuredOutputOptions]
+  - feature: tool-parsers
+    feature_group: G-采样、工具与可观测
+    title: 工具调用解析
+    page_file: g02-tool-parsers.md
+    refs:
+      - path: vllm/tool_parsers/__init__.py
+        symbols: [ToolParser, ToolParserManager, register_lazy_tool_parsers]
+      - path: vllm/tool_parsers/abstract_tool_parser.py
+        symbols: [ToolParser, ToolParserManager]
+  - feature: metrics
+    feature_group: G-采样、工具与可观测
+    title: 指标与日志
+    page_file: g03-metrics.md
+    refs:
+      - path: vllm/v1/metrics/loggers.py
+        symbols: [LoggingStatLogger]
+      - path: vllm/v1/metrics/stats.py
+        symbols: [SchedulerStats, PrefixCacheStats, RequestStateStats]
+---
