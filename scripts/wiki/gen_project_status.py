@@ -49,6 +49,7 @@ GATES_PASS_PROJECTS = {
     "haystack": "待阶段 0B 扩展后入 wiki-rag",
     "lightrag": "待阶段 0B 扩展后入 wiki-rag",
     "graphrag": "待阶段 0B 扩展后入 wiki-rag",
+    "ragas": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

@@ -1,0 +1,338 @@
+---
+project: ragas
+schema_version: 1
+pages:
+  - feature: legacy-metric
+    feature_group: A-指标抽象
+    title: 旧式指标契约
+    page_file: a01-legacy-metric.md
+    refs:
+      - path: src/ragas/metrics/base.py
+        symbols: [Metric, MetricType, MetricOutputType]
+      - path: src/ragas/metrics/base.py
+        symbols: [MetricWithLLM, MetricWithEmbeddings]
+      - path: src/ragas/metrics/base.py
+        symbols: [SingleTurnMetric, MultiTurnMetric]
+  - feature: modern-metric
+    feature_group: A-指标抽象
+    title: 新式组件指标
+    page_file: a02-modern-metric.md
+    refs:
+      - path: src/ragas/metrics/collections/base.py
+        symbols: [BaseMetric]
+      - path: src/ragas/metrics/collections/__init__.py
+        symbols: [Faithfulness, AnswerRelevancy]
+      - path: src/ragas/metrics/collections/summary_score/metric.py
+        symbols: [SummaryScore]
+  - feature: metric-decorator
+    feature_group: A-指标抽象
+    title: 装饰器式自定义指标
+    page_file: a03-metric-decorator.md
+    refs:
+      - path: src/ragas/metrics/decorator.py
+        symbols: [create_metric_decorator, NumericMetricProtocol, DiscreteMetricProtocol]
+      - path: src/ragas/metrics/numeric.py
+        symbols: [NumericMetric, numeric_metric]
+      - path: src/ragas/metrics/discrete.py
+        symbols: [DiscreteMetric, discrete_metric]
+      - path: src/ragas/metrics/ranking.py
+        symbols: [RankingMetric, ranking_metric]
+  - feature: metric-result
+    feature_group: A-指标抽象
+    title: 结果结构与输出校验
+    page_file: a04-metric-result.md
+    refs:
+      - path: src/ragas/metrics/result.py
+        symbols: [MetricResult]
+      - path: src/ragas/metrics/validators.py
+        symbols: [BaseValidator, get_validator_for_allowed_values, get_metric_type_name]
+      - path: src/ragas/metrics/validators.py
+        symbols: [NumericValidator]
+  - feature: faithfulness
+    feature_group: B-LLM 判定类指标
+    title: 忠实度：陈述级判据
+    page_file: b01-faithfulness.md
+    refs:
+      - path: src/ragas/metrics/collections/faithfulness/metric.py
+        symbols: [Faithfulness]
+      - path: src/ragas/metrics/_faithfulness.py
+        symbols: [Faithfulness, StatementGeneratorPrompt, NLIStatementPrompt]
+  - feature: answer-relevance
+    feature_group: B-LLM 判定类指标
+    title: 答案相关性与正确性
+    page_file: b02-answer-relevance.md
+    refs:
+      - path: src/ragas/metrics/collections/answer_relevancy/metric.py
+        symbols: [AnswerRelevancy]
+      - path: src/ragas/metrics/collections/answer_correctness/metric.py
+        symbols: [AnswerCorrectness]
+      - path: src/ragas/metrics/_answer_relevance.py
+        symbols: [ResponseRelevancePrompt, ResponseRelevancy]
+  - feature: context-quality
+    feature_group: B-LLM 判定类指标
+    title: 上下文精确率与召回率
+    page_file: b03-context-quality.md
+    refs:
+      - path: src/ragas/metrics/collections/context_precision/metric.py
+        symbols: [ContextPrecisionWithReference, ContextPrecisionWithoutReference, ContextUtilization]
+      - path: src/ragas/metrics/collections/context_recall/metric.py
+        symbols: [ContextRecall]
+      - path: src/ragas/metrics/collections/context_relevance/metric.py
+        symbols: [ContextRelevance]
+  - feature: factual-correctness
+    feature_group: B-LLM 判定类指标
+    title: 事实正确性与声索分解
+    page_file: b04-factual-correctness.md
+    refs:
+      - path: src/ragas/metrics/collections/factual_correctness/metric.py
+        symbols: [FactualCorrectness]
+      - path: src/ragas/metrics/_factual_correctness.py
+        symbols: [ClaimDecompositionPrompt, DecompositionType]
+  - feature: topic-and-summary
+    feature_group: B-LLM 判定类指标
+    title: 主题一致性与摘要质量
+    page_file: b05-topic-and-summary.md
+    refs:
+      - path: src/ragas/metrics/collections/topic_adherence/metric.py
+        symbols: [TopicAdherence]
+      - path: src/ragas/metrics/collections/summary_score/metric.py
+        symbols: [SummaryScore]
+  - feature: agent-metrics
+    feature_group: B-LLM 判定类指标
+    title: Agent 与会话指标
+    page_file: b06-agent-metrics.md
+    refs:
+      - path: src/ragas/metrics/collections/agent_goal_accuracy/metric.py
+        symbols: [AgentGoalAccuracyWithReference, AgentGoalAccuracyWithoutReference]
+      - path: src/ragas/metrics/collections/tool_call_accuracy/metric.py
+        symbols: [ToolCallAccuracy]
+  - feature: rubrics
+    feature_group: B-LLM 判定类指标
+    title: 评分规则类指标
+    page_file: b07-rubrics.md
+    refs:
+      - path: src/ragas/metrics/collections/domain_specific_rubrics/metric.py
+        symbols: [DomainSpecificRubrics]
+      - path: src/ragas/metrics/collections/instance_specific_rubrics/metric.py
+        symbols: [InstanceSpecificRubrics]
+      - path: src/ragas/metrics/_simple_criteria.py
+        symbols: [SimpleCriteriaScore, SingleTurnSimpleCriteriaPrompt]
+  - feature: multimodal-metrics
+    feature_group: B-LLM 判定类指标
+    title: 多模态指标
+    page_file: b08-multimodal-metrics.md
+    refs:
+      - path: src/ragas/metrics/collections/multi_modal_faithfulness/metric.py
+        symbols: [MultiModalFaithfulness]
+      - path: src/ragas/metrics/collections/multi_modal_relevance/metric.py
+        symbols: [MultiModalRelevance]
+  - feature: noise-sensitive
+    feature_group: B-LLM 判定类指标
+    title: 噪声敏感度与引用片段
+    page_file: b09-noise-sensitive.md
+    refs:
+      - path: src/ragas/metrics/collections/noise_sensitivity/metric.py
+        symbols: [NoiseSensitivity]
+      - path: src/ragas/metrics/collections/quoted_spans/metric.py
+        symbols: [QuotedSpansAlignment]
+  - feature: string-metrics
+    feature_group: C-非 LLM 指标
+    title: 字符串类指标
+    page_file: c01-string-metrics.md
+    refs:
+      - path: src/ragas/metrics/collections/_string.py
+        symbols: [DistanceMeasure, ExactMatch, NonLLMStringSimilarity]
+      - path: src/ragas/metrics/collections/_bleu_score.py
+        symbols: [BleuScore]
+      - path: src/ragas/metrics/collections/_rouge_score.py
+        symbols: [RougeScore]
+      - path: src/ragas/metrics/collections/chrf_score/metric.py
+        symbols: [CHRFScore]
+  - feature: semantic-metrics
+    feature_group: C-非 LLM 指标
+    title: 语义相似与结构化比对
+    page_file: c02-semantic-metrics.md
+    refs:
+      - path: src/ragas/metrics/collections/_semantic_similarity.py
+        symbols: [SemanticSimilarity]
+      - path: src/ragas/metrics/collections/datacompy_score/metric.py
+        symbols: [DataCompyScore]
+      - path: src/ragas/metrics/collections/sql_semantic_equivalence/metric.py
+        symbols: [SQLSemanticEquivalence]
+  - feature: dataset-schema
+    feature_group: D-数据集与执行
+    title: 样本与数据集结构
+    page_file: d01-dataset-schema.md
+    refs:
+      - path: src/ragas/dataset_schema.py
+        symbols: [BaseSample, SingleTurnSample, MultiTurnSample]
+      - path: src/ragas/dataset_schema.py
+        symbols: [RagasDataset, EvaluationDataset, EvaluationResult]
+  - feature: evaluation-run
+    feature_group: D-数据集与执行
+    title: 评测执行与并发
+    page_file: d02-evaluation-run.md
+    refs:
+      - path: src/ragas/evaluation.py
+        symbols: [evaluate, aevaluate]
+      - path: src/ragas/executor.py
+        symbols: [Executor, run_async_batch]
+  - feature: run-config
+    feature_group: D-数据集与执行
+    title: 运行配置与重试
+    page_file: d03-run-config.md
+    refs:
+      - path: src/ragas/run_config.py
+        symbols: [RunConfig, add_retry]
+      - path: src/ragas/run_config.py
+        symbols: [add_async_retry]
+  - feature: experiment
+    feature_group: D-数据集与执行
+    title: 实验与表格容器
+    page_file: d04-experiment.md
+    refs:
+      - path: src/ragas/experiment.py
+        symbols: [Experiment, version_experiment, experiment]
+      - path: src/ragas/dataset.py
+        symbols: [DataTable, Dataset]
+  - feature: prompt-base
+    feature_group: E-提示层
+    title: 提示契约
+    page_file: e01-prompt-base.md
+    refs:
+      - path: src/ragas/prompt/base.py
+        symbols: [BasePrompt, StringPrompt, StringIO, BoolIO]
+  - feature: pydantic-prompt
+    feature_group: E-提示层
+    title: 结构化输出提示
+    page_file: e02-pydantic-prompt.md
+    refs:
+      - path: src/ragas/prompt/pydantic_prompt.py
+        symbols: [PydanticPrompt, RagasOutputParser, FixOutputFormat]
+      - path: src/ragas/prompt/pydantic_prompt.py
+        symbols: [OutputStringAndPrompt]
+  - feature: dynamic-few-shot
+    feature_group: E-提示层
+    title: 动态少样本
+    page_file: e03-dynamic-few-shot.md
+    refs:
+      - path: src/ragas/prompt/dynamic_few_shot.py
+        symbols: [DynamicFewShotPrompt, SimpleExampleStore]
+      - path: src/ragas/prompt/dynamic_few_shot.py
+        symbols: [SimpleInMemoryExampleStore]
+  - feature: llm-wrappers
+    feature_group: F-模型接入
+    title: 模型包装与工厂
+    page_file: f01-llm-wrappers.md
+    refs:
+      - path: src/ragas/llms/base.py
+        symbols: [BaseRagasLLM, LangchainLLMWrapper, LlamaIndexLLMWrapper]
+      - path: src/ragas/llms/base.py
+        symbols: [llm_factory]
+  - feature: embedding-wrappers
+    feature_group: F-模型接入
+    title: 嵌入包装与工厂
+    page_file: f02-embedding-wrappers.md
+    refs:
+      - path: src/ragas/embeddings/base.py
+        symbols: [BaseRagasEmbeddings, LangchainEmbeddingsWrapper, HuggingfaceEmbeddings]
+      - path: src/ragas/embeddings/base.py
+        symbols: [embedding_factory]
+  - feature: knowledge-graph
+    feature_group: G-测试集合成
+    title: 文档知识图谱
+    page_file: g01-knowledge-graph.md
+    refs:
+      - path: src/ragas/testset/graph.py
+        symbols: [KnowledgeGraph, Node, Relationship, NodeType]
+  - feature: persona
+    feature_group: G-测试集合成
+    title: 问题角色生成
+    page_file: g02-persona.md
+    refs:
+      - path: src/ragas/testset/persona.py
+        symbols: [generate_personas_from_kg, Persona, PersonaList]
+  - feature: synthesizer-base
+    feature_group: G-测试集合成
+    title: 合成器契约与场景
+    page_file: g03-synthesizer-base.md
+    refs:
+      - path: src/ragas/testset/synthesizers/base.py
+        symbols: [BaseSynthesizer, BaseScenario, QueryLength, QueryStyle]
+      - path: src/ragas/testset/synthesizers/single_hop/base.py
+        symbols: [SingleHopScenario, SingleHopQuerySynthesizer]
+      - path: src/ragas/testset/synthesizers/multi_hop/base.py
+        symbols: [MultiHopScenario, MultiHopQuerySynthesizer]
+  - feature: testset-generator
+    feature_group: G-测试集合成
+    title: 测试集总装
+    page_file: g04-testset-generator.md
+    refs:
+      - path: src/ragas/testset/synthesizers/generate.py
+        symbols: [TestsetGenerator]
+      - path: src/ragas/testset/synthesizers/testset_schema.py
+        symbols: [TestsetSample, Testset]
+  - feature: genetic-optimizer
+    feature_group: H-优化器
+    title: 提示遗传优化
+    page_file: h01-genetic-optimizer.md
+    refs:
+      - path: src/ragas/optimizers/genetic.py
+        symbols: [GeneticOptimizer]
+      - path: src/ragas/optimizers/genetic.py
+        symbols: [CrossOverPrompt, FeedbackMutationPrompt]
+  - feature: dspy-optimizer
+    feature_group: H-优化器
+    title: DSPy 编译优化
+    page_file: h02-dspy-optimizer.md
+    refs:
+      - path: src/ragas/optimizers/base.py
+        symbols: [Optimizer]
+      - path: src/ragas/optimizers/dspy_optimizer.py
+        symbols: [DSPyOptimizer]
+  - feature: cache
+    feature_group: I-运行时支撑
+    title: 结果缓存
+    page_file: i01-cache.md
+    refs:
+      - path: src/ragas/cache.py
+        symbols: [CacheInterface, DiskCacheBackend, cacher]
+      - path: src/ragas/cache.py
+        symbols: [_make_pydantic_picklable]
+  - feature: cost
+    feature_group: I-运行时支撑
+    title: token 用量与成本回调
+    page_file: i02-cost.md
+    refs:
+      - path: src/ragas/cost.py
+        symbols: [TokenUsage, CostCallbackHandler]
+      - path: src/ragas/cost.py
+        symbols: [get_token_usage_for_openai]
+  - feature: tokenizers
+    feature_group: I-运行时支撑
+    title: 分词器适配
+    page_file: i03-tokenizers.md
+    refs:
+      - path: src/ragas/tokenizers.py
+        symbols: [BaseTokenizer, TiktokenWrapper, HuggingFaceTokenizer]
+      - path: src/ragas/tokenizers.py
+        symbols: [get_tokenizer]
+  - feature: async-utils
+    feature_group: I-运行时支撑
+    title: 异步工具与追踪
+    page_file: i04-async-utils.md
+    refs:
+      - path: src/ragas/async_utils.py
+        symbols: [is_event_loop_running, run_async_tasks, as_completed]
+      - path: src/ragas/callbacks.py
+        symbols: [RagasTracer, MetricTrace, parse_run_traces]
+  - feature: backends
+    feature_group: I-运行时支撑
+    title: 数据集后端
+    page_file: i05-backends.md
+    refs:
+      - path: src/ragas/backends/base.py
+        symbols: [BaseBackend]
+      - path: src/ragas/backends/registry.py
+        symbols: [BackendRegistry, get_registry, register_backend]
+---
