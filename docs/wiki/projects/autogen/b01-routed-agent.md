@@ -2,7 +2,6 @@
 project: autogen
 feature: routed-agent
 title: 按消息类型分发的 RoutedAgent
-page_file: b01-routed-agent.md
 page_type: feature
 schema_version: 1
 refs:

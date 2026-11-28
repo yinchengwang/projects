@@ -44,6 +44,7 @@ GATES_PASS_PROJECTS = {
     "openhands": "待阶段 0B 扩展后入 wiki-rag",
     "goose": "待阶段 0B 扩展后入 wiki-rag",
     "open-interpreter": "待阶段 0B 扩展后入 wiki-rag",
+    "langchain": "待阶段 0B 扩展后入 wiki-rag",
 }
 
 WIKI_ROOT = PROJECTS_ROOT / "docs" / "wiki" / "projects"

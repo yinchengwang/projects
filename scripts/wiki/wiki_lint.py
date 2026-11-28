@@ -84,6 +84,19 @@ def lint_page(page_path):
         if field not in meta:
             errors.append("缺必填字段: %s" % field)
 
+    # 未知键一律报错：frontmatter 是契约面，多一个键通常意味着抄错了字段名
+    # （已发生过两次：`page_file:` 与 `page_page:` 都靠人工核对才发现，
+    # 结构门禁当时全放过）。允许清单按 page_type 取并集，再加一个可选 `title`
+    # （特性页普遍用它给页面起中文标题，契约里没有强制但全库在用）。
+    allowed_keys = (
+        set(wiki_schema.INDEX_REQUIRED_FIELDS)
+        | set(wiki_schema.REQUIRED_FIELDS)
+        | {"title"}
+    )
+    for key in meta:
+        if key not in allowed_keys:
+            errors.append("frontmatter 出现未定义字段: %s" % key)
+
     if "schema_version" in meta and meta["schema_version"] != wiki_schema.SCHEMA_VERSION:
         errors.append(
             "schema_version=%r，当前契约版本为 %d" % (meta["schema_version"], wiki_schema.SCHEMA_VERSION)

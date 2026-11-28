@@ -1,0 +1,362 @@
+---
+project: langchain
+schema_version: 1
+pages:
+  - feature: runnable-core
+    feature_group: A-表达式语言
+    title: Runnable 契约与序列组合
+    page_file: a01-runnable-core.md
+    refs:
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [Runnable, RunnableSerializable, RunnableSequence]
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [RunnableLambda, RunnableGenerator, _ChunkAccumulator]
+  - feature: parallel-and-each
+    feature_group: A-表达式语言
+    title: 并行组合与逐项映射
+    page_file: a02-parallel-and-each.md
+    refs:
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [RunnableParallel, RunnableEach, RunnableEachBase]
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [RunnableBinding, RunnableBindingBase]
+  - feature: branch-and-router
+    feature_group: A-表达式语言
+    title: 分支、路由与回退
+    page_file: a03-branch-and-router.md
+    refs:
+      - path: libs/core/langchain_core/runnables/branch.py
+        symbols: [RunnableBranch]
+      - path: libs/core/langchain_core/runnables/router.py
+        symbols: [RouterRunnable, RouterInput]
+      - path: libs/core/langchain_core/runnables/fallbacks.py
+        symbols: [RunnableWithFallbacks]
+  - feature: retry
+    feature_group: A-表达式语言
+    title: 重试与退避
+    page_file: a04-retry.md
+    refs:
+      - path: libs/core/langchain_core/runnables/retry.py
+        symbols: [RunnableRetry, ExponentialJitterParams]
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [RunnableRetry]
+  - feature: config-and-context
+    feature_group: A-表达式语言
+    title: 运行配置与上下文传播
+    page_file: a05-config-and-context.md
+    refs:
+      - path: libs/core/langchain_core/runnables/config.py
+        symbols: [RunnableConfig, ContextThreadPoolExecutor]
+      - path: libs/core/langchain_core/runnables/configurable.py
+        symbols: [DynamicRunnable, RunnableConfigurableFields, RunnableConfigurableAlternatives]
+  - feature: passthrough-and-assign
+    feature_group: A-表达式语言
+    title: 透传、赋值与字段选取
+    page_file: a06-passthrough-and-assign.md
+    refs:
+      - path: libs/core/langchain_core/runnables/passthrough.py
+        symbols: [RunnablePassthrough, RunnableAssign, RunnablePick]
+      - path: libs/core/langchain_core/runnables/base.py
+        symbols: [_RunnableCallableSync]
+  - feature: message-history
+    feature_group: A-表达式语言
+    title: 会话历史绑定
+    page_file: a07-message-history.md
+    refs:
+      - path: libs/core/langchain_core/runnables/history.py
+        symbols: [RunnableWithMessageHistory]
+      - path: libs/core/langchain_core/messages/base.py
+        symbols: [BaseMessage, BaseMessageChunk]
+  - feature: runnable-graph
+    feature_group: A-表达式语言
+    title: 组合图与可视化
+    page_file: a08-runnable-graph.md
+    refs:
+      - path: libs/core/langchain_core/runnables/graph.py
+        symbols: [Graph, Node, Edge, Branch]
+      - path: libs/core/langchain_core/runnables/graph_mermaid.py
+        symbols: [MermaidDrawMethod]
+      - path: libs/core/langchain_core/runnables/graph_ascii.py
+        symbols: [Graph]
+  - feature: message-model
+    feature_group: B-消息与内容
+    title: 消息模型与角色
+    page_file: b01-message-model.md
+    refs:
+      - path: libs/core/langchain_core/messages/base.py
+        symbols: [BaseMessage, BaseMessageChunk, TextAccessor]
+      - path: libs/core/langchain_core/messages/ai.py
+        symbols: [AIMessage, AIMessageChunk]
+      - path: libs/core/langchain_core/messages/human.py
+        symbols: [HumanMessage]
+  - feature: content-blocks
+    feature_group: B-消息与内容
+    title: 内容块与工具调用块
+    page_file: b02-content-blocks.md
+    refs:
+      - path: libs/core/langchain_core/messages/content.py
+        symbols: [TextContentBlock, ToolCall, ToolCallChunk]
+      - path: libs/core/langchain_core/messages/content.py
+        symbols: [InvalidToolCall, ReasoningContentBlock, ServerToolCall]
+  - feature: usage-metadata
+    feature_group: B-消息与内容
+    title: 用量元数据
+    page_file: b03-usage-metadata.md
+    refs:
+      - path: libs/core/langchain_core/messages/ai.py
+        symbols: [UsageMetadata, InputTokenDetails, OutputTokenDetails]
+      - path: libs/core/langchain_core/callbacks/usage.py
+        symbols: [UsageMetadataCallbackHandler]
+  - feature: prompt-template
+    feature_group: C-提示与解析
+    title: 提示模板与消息占位
+    page_file: c01-prompt-template.md
+    refs:
+      - path: libs/core/langchain_core/prompts/chat.py
+        symbols: [ChatPromptTemplate, MessagesPlaceholder, BaseStringMessagePromptTemplate]
+      - path: libs/core/langchain_core/prompts/few_shot.py
+        symbols: [FewShotPromptTemplate, FewShotChatMessagePromptTemplate]
+  - feature: output-parsing
+    feature_group: C-提示与解析
+    title: 输出解析
+    page_file: c02-output-parsing.md
+    refs:
+      - path: libs/core/langchain_core/output_parsers/base.py
+        symbols: [BaseOutputParser, BaseLLMOutputParser, BaseGenerationOutputParser]
+      - path: libs/core/langchain_core/output_parsers/pydantic.py
+        symbols: [PydanticOutputParser]
+      - path: libs/core/langchain_core/output_parsers/json.py
+        symbols: [JsonOutputParser]
+  - feature: example-selector
+    feature_group: C-提示与解析
+    title: 示例选择
+    page_file: c03-example-selector.md
+    refs:
+      - path: libs/core/langchain_core/example_selectors/length_based.py
+        symbols: [LengthBasedExampleSelector]
+      - path: libs/core/langchain_core/example_selectors/semantic_similarity.py
+        symbols: [SemanticSimilarityExampleSelector, MaxMarginalRelevanceExampleSelector]
+  - feature: tool-contract
+    feature_group: D-工具与函数调用
+    title: 工具契约与参数注入
+    page_file: d01-tool-contract.md
+    refs:
+      - path: libs/core/langchain_core/tools/base.py
+        symbols: [BaseTool, BaseToolkit, ToolException]
+      - path: libs/core/langchain_core/tools/base.py
+        symbols: [InjectedToolArg, InjectedToolCallId, SchemaAnnotationError]
+  - feature: tool-conversion
+    feature_group: D-工具与函数调用
+    title: 函数转工具与 schema 生成
+    page_file: d02-tool-conversion.md
+    refs:
+      - path: libs/core/langchain_core/tools/convert.py
+        symbols: [tool, convert_runnable_to_tool]
+      - path: libs/core/langchain_core/utils/function_calling.py
+        symbols: [FunctionDescription, ToolDescription]
+  - feature: structured-tool
+    feature_group: D-工具与函数调用
+    title: 结构化工具与结果
+    page_file: d03-structured-tool.md
+    refs:
+      - path: libs/core/langchain_core/tools/structured.py
+        symbols: [StructuredTool, _filter_schema_args]
+      - path: libs/core/langchain_core/tools/simple.py
+        symbols: [Tool]
+  - feature: retriever-tool
+    feature_group: D-工具与函数调用
+    title: 检索器与渲染
+    page_file: d04-retriever-tool.md
+    refs:
+      - path: libs/core/langchain_core/retrievers.py
+        symbols: [BaseRetriever, RetrieverInput]
+      - path: libs/core/langchain_core/tools/render.py
+        symbols: [render_text_description]
+  - feature: callback-manager
+    feature_group: E-回调与追踪
+    title: 回调管理器与运行管理器
+    page_file: e01-callback-manager.md
+    refs:
+      - path: libs/core/langchain_core/callbacks/manager.py
+        symbols: [CallbackManager, BaseRunManager, RunManager, AsyncCallbackManager]
+      - path: libs/core/langchain_core/callbacks/manager.py
+        symbols: [CallbackManagerForLLMRun, CallbackManagerForToolRun, ParentRunManager]
+  - feature: callback-handlers
+    feature_group: E-回调与追踪
+    title: 内置处理器与流式输出
+    page_file: e02-callback-handlers.md
+    refs:
+      - path: libs/core/langchain_core/callbacks/streaming_stdout.py
+        symbols: [StreamingStdOutCallbackHandler]
+      - path: libs/core/langchain_core/callbacks/usage.py
+        symbols: [UsageMetadataCallbackHandler]
+      - path: libs/core/langchain_core/callbacks/file.py
+        symbols: [FileCallbackHandler]
+  - feature: tracers
+    feature_group: E-回调与追踪
+    title: 追踪器与事件流
+    page_file: e03-tracers.md
+    refs:
+      - path: libs/core/langchain_core/tracers/base.py
+        symbols: [BaseTracer, AsyncBaseTracer]
+      - path: libs/core/langchain_core/tracers/event_stream.py
+        symbols: [RunInfo, _AstreamEventsCallbackHandler]
+      - path: libs/core/langchain_core/tracers/context.py
+        symbols: [tracing_v2_enabled]
+  - feature: splitter-base
+    feature_group: F-文档分块
+    title: 分块器基类与长度度量
+    page_file: f01-splitter-base.md
+    refs:
+      - path: libs/text-splitters/langchain_text_splitters/base.py
+        symbols: [TextSplitter, TokenTextSplitter, Tokenizer, Language]
+      - path: libs/core/langchain_core/documents/base.py
+        symbols: [Document, Blob, BaseMedia]
+  - feature: character-splitter
+    feature_group: F-文档分块
+    title: 字符与递归字符分块
+    page_file: f02-character-splitter.md
+    refs:
+      - path: libs/text-splitters/langchain_text_splitters/character.py
+        symbols: [CharacterTextSplitter, RecursiveCharacterTextSplitter]
+      - path: libs/text-splitters/langchain_text_splitters/base.py
+        symbols: [TextSplitter]
+  - feature: markup-splitter
+    feature_group: F-文档分块
+    title: 标记语言与结构化文档分块
+    page_file: f03-markup-splitter.md
+    refs:
+      - path: libs/text-splitters/langchain_text_splitters/markdown.py
+        symbols: [MarkdownHeaderTextSplitter, MarkdownTextSplitter]
+      - path: libs/text-splitters/langchain_text_splitters/html.py
+        symbols: [HTMLHeaderTextSplitter, HTMLSectionSplitter]
+      - path: libs/text-splitters/langchain_text_splitters/json.py
+        symbols: [RecursiveJsonSplitter]
+  - feature: semantic-splitter
+    feature_group: F-文档分块
+    title: 语义与句法分块
+    page_file: f04-semantic-splitter.md
+    refs:
+      - path: libs/text-splitters/langchain_text_splitters/sentence_transformers.py
+        symbols: [SentenceTransformersTokenTextSplitter]
+      - path: libs/text-splitters/langchain_text_splitters/nltk.py
+        symbols: [NLTKTextSplitter]
+      - path: libs/text-splitters/langchain_text_splitters/spacy.py
+        symbols: [SpacyTextSplitter]
+  - feature: indexing-api
+    feature_group: G-索引与向量存储
+    title: 文档索引与去重清理
+    page_file: g01-indexing-api.md
+    refs:
+      - path: libs/core/langchain_core/indexing/api.py
+        symbols: [index, IndexingResult, IndexingException]
+      - path: libs/core/langchain_core/indexing/api.py
+        symbols: [_HashedDocument]
+  - feature: record-manager
+    feature_group: G-索引与向量存储
+    title: 记录管理器
+    page_file: g02-record-manager.md
+    refs:
+      - path: libs/core/langchain_core/indexing/base.py
+        symbols: [RecordManager, InMemoryRecordManager, _Record]
+      - path: libs/core/langchain_core/indexing/base.py
+        symbols: [UpsertResponse, DeleteResponse, DocumentIndex]
+  - feature: vectorstore-contract
+    feature_group: G-索引与向量存储
+    title: 向量存储契约与检索器
+    page_file: g03-vectorstore-contract.md
+    refs:
+      - path: libs/core/langchain_core/vectorstores/base.py
+        symbols: [VectorStore, VectorStoreRetriever]
+      - path: libs/core/langchain_core/vectorstores/utils.py
+        symbols: [maximal_marginal_relevance]
+  - feature: in-memory-stores
+    feature_group: G-索引与向量存储
+    title: 内存向量存储与检索实现
+    page_file: g04-in-memory-stores.md
+    refs:
+      - path: libs/core/langchain_core/vectorstores/in_memory.py
+        symbols: [InMemoryVectorStore]
+      - path: libs/core/langchain_core/indexing/in_memory.py
+        symbols: [InMemoryDocumentIndex]
+  - feature: document-transformers
+    feature_group: G-索引与向量存储
+    title: 文档压缩与嵌入
+    page_file: g05-document-transformers.md
+    refs:
+      - path: libs/core/langchain_core/documents/compressor.py
+        symbols: [BaseDocumentCompressor]
+      - path: libs/core/langchain_core/embeddings/embeddings.py
+        symbols: [Embeddings]
+      - path: libs/core/langchain_core/embeddings/fake.py
+        symbols: [DeterministicFakeEmbedding]
+  - feature: memory-and-loaders
+    feature_group: G-索引与向量存储
+    title: 会话内存与文档加载
+    page_file: g06-memory-and-loaders.md
+    refs:
+      - path: libs/core/langchain_core/document_loaders/base.py
+        symbols: [BaseLoader, BaseBlobParser]
+      - path: libs/core/langchain_core/document_loaders/blob_loaders.py
+        symbols: [BlobLoader, yield_blobs]
+      - path: libs/core/langchain_core/runnables/history.py
+        symbols: [BaseChatMessageHistory]
+  - feature: chat-model-contract
+    feature_group: H-模型层
+    title: 聊天模型契约
+    page_file: h01-chat-model-contract.md
+    refs:
+      - path: libs/core/langchain_core/language_models/chat_models.py
+        symbols: [BaseChatModel, SimpleChatModel, _ChatModelBinding]
+      - path: libs/core/langchain_core/language_models/llms.py
+        symbols: [BaseLLM, LLM]
+  - feature: stream-projection
+    feature_group: H-模型层
+    title: 流式投影与增量合成
+    page_file: h02-stream-projection.md
+    refs:
+      - path: libs/core/langchain_core/language_models/chat_model_stream.py
+        symbols: [ChatModelStream, AsyncChatModelStream, SyncTextProjection]
+      - path: libs/core/langchain_core/messages/base.py
+        symbols: [BaseMessageChunk]
+  - feature: functions-and-tools-binding
+    feature_group: H-模型层
+    title: 函数调用格式与工具绑定
+    page_file: h03-functions-and-tools-binding.md
+    refs:
+      - path: libs/core/langchain_core/utils/function_calling.py
+        symbols: [convert_to_openai_tool, convert_to_openai_function, tool_example_to_messages]
+      - path: libs/core/langchain_core/output_parsers/openai_tools.py
+        symbols: [JsonOutputToolsParser, PydanticToolsParser]
+  - feature: model-profile
+    feature_group: H-模型层
+    title: 模型档案与能力声明
+    page_file: h04-model-profile.md
+    refs:
+      - path: libs/core/langchain_core/language_models/model_profile.py
+        symbols: [ModelProfile, ModelProfileRegistry]
+      - path: libs/core/langchain_core/language_models/_compat_bridge.py
+        symbols: [finalize_tool_call_chunk, _accumulate_usage]
+  - feature: serialization
+    feature_group: I-序列化与安全
+    title: 可序列化基类与反序列化
+    page_file: i01-serialization.md
+    refs:
+      - path: libs/core/langchain_core/load/serializable.py
+        symbols: [Serializable, BaseSerialized, SerializedConstructor, SerializedSecret]
+      - path: libs/core/langchain_core/load/load.py
+        symbols: [Reviver]
+      - path: libs/core/langchain_core/load/mapping.py
+        symbols: [SERIALIZABLE_MAPPING]
+  - feature: ssrf-policy
+    feature_group: I-序列化与安全
+    title: 出站请求的 SSRF 防护
+    page_file: i02-ssrf-policy.md
+    refs:
+      - path: libs/core/langchain_core/_security/_policy.py
+        symbols: [SSRFPolicy]
+      - path: libs/core/langchain_core/_security/_ssrf_protection.py
+        symbols: [validate_safe_url, is_safe_url]
+      - path: libs/core/langchain_core/_security/_transport.py
+        symbols: [SSRFSafeTransport, SSRFSafeSyncTransport]
+---

@@ -207,6 +207,29 @@ class TestLintFailures(unittest.TestCase):
             errors = lint_page(page)
             self.assertTrue(any("page_type 非法" in e for e in errors), errors)
 
+    def test_unknown_frontmatter_key_rejected(self):
+        """多一个键通常意味着抄错了字段名，门禁必须拦住。
+
+        真实事故：`page_file:`（把 manifest 的键抄进页面）与 `page_page:`
+        （手误）都被结构门禁放过，靠人工核对才发现。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            page = _write(
+                d, "a04-buffer-pool.md",
+                GOOD_PAGE.replace("schema_version: 1", "schema_version: 1\npage_file: a04-buffer-pool.md"),
+            )
+            errors = lint_page(page)
+            self.assertTrue(any("未定义字段: page_file" in e for e in errors), errors)
+
+    def test_title_is_an_allowed_optional_key(self):
+        """`title` 虽不是必填，但全库在用它，不能被判成未知键。"""
+        with tempfile.TemporaryDirectory() as d:
+            page = _write(
+                d, "a04-buffer-pool.md",
+                GOOD_PAGE.replace("schema_version: 1", "schema_version: 1\ntitle: 缓冲池主体"),
+            )
+            self.assertEqual(lint_page(page), [])
+
     def test_compare_page_outside_compare_dir(self):
         with tempfile.TemporaryDirectory() as d:
             page = _write(d, "_compare-qdrant-vs-milvus.md", GOOD_PAGE.replace("page_type: feature", "page_type: compare"))
